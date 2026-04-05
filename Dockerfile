@@ -1,21 +1,31 @@
 # syntax=docker/dockerfile:1
+# 前端只在 BUILDPLATFORM 上构建一次，避免多架构并行 npm ci 拖垮网络/超时；Go 在宿主编译器上按 TARGET* 交叉编译。
 
-FROM node:22-bookworm-slim AS web
+FROM --platform=$BUILDPLATFORM node:22-bookworm-slim AS web
 WORKDIR /build/web
 COPY web/package.json web/package-lock.json ./
+RUN npm config set fetch-retries 5 && npm config set fetch-retry-mintimeout 20000 && npm config set fetch-retry-maxtimeout 120000
 RUN npm ci
 COPY web/ ./
 RUN npm run build:ci
 
-FROM golang:1.25-bookworm AS builder
+FROM --platform=$BUILDPLATFORM golang:1.25-bookworm AS builder
+ARG TARGETOS
+ARG TARGETARCH
+ARG TARGETVARIANT
 WORKDIR /src/main
 COPY main/go.mod main/go.sum ./
 RUN go mod download
 COPY main/ ./
 COPY --from=web /build/main/web ./web
-RUN CGO_ENABLED=0 GOOS=linux go build -buildvcs=false -trimpath -ldflags="-s -w" -o /dnsplane .
+RUN set -eux; \
+  export CGO_ENABLED=0 GOOS="${TARGETOS}" GOARCH="${TARGETARCH}"; \
+  if [ "${TARGETARCH}" = "arm" ] && [ -n "${TARGETVARIANT:-}" ]; then \
+    export GOARM="${TARGETVARIANT#v}"; \
+  fi; \
+  go build -buildvcs=false -trimpath -ldflags="-s -w" -o /dnsplane .
 
-FROM gcr.io/distroless/static-debian12:nonroot
+FROM --platform=$TARGETPLATFORM gcr.io/distroless/static-debian12:nonroot
 WORKDIR /app
 COPY --from=builder /dnsplane /app/dnsplane
 USER nonroot:nonroot
