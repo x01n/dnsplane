@@ -1,0 +1,34 @@
+# Go
+main/*.exe
+main/dnsplane
+main/__debug_bin
+*.test
+
+# Runtime / secrets / 本地数据（勿提交）
+main/data/*.pem
+main/data/*.db
+main/logs/
+*.log
+
+# Frontend
+web/node_modules/
+web/.next/
+web/out/
+web/.turbo/
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Env
+.env
+.env.*
+main/config.json
+main/main.zip
+main/logs/
+main/data/
+main/docs/
+main/web/
+main/main
