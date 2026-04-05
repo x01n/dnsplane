@@ -13,7 +13,7 @@ COPY main/go.mod main/go.sum ./
 RUN go mod download
 COPY main/ ./
 COPY --from=web /build/main/web ./web
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /dnsplane .
+RUN CGO_ENABLED=0 GOOS=linux go build -buildvcs=false -trimpath -ldflags="-s -w" -o /dnsplane .
 
 FROM gcr.io/distroless/static-debian12:nonroot
 WORKDIR /app
