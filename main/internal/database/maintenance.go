@@ -129,7 +129,6 @@ func StartMaintenance(cfg MaintenanceConfig) {
 	}
 	maintService.wg.Add(1)
 	go maintService.run()
-	logger.Info("[Maintenance] 数据库维护服务已启动 (清理间隔=1h, VACUUM间隔=%dh)", cfg.VacuumIntervalH)
 }
 
 // cleanInvalidTasks 启动时清理无效的监控任务（DomainID=0 或 RecordID为空）

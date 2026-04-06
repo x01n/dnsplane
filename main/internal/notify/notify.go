@@ -99,13 +99,24 @@ func (n *EmailNotifier) Send(ctx context.Context, title, content string) error {
 	}
 }
 
-/* sendPlain 无加密 SMTP 发送（带 30 秒连接超时，替代标准库 smtp.SendMail） */
+// smtpPhaseDeadline 单次连接上读 SMTP 横幅/握手等阶段的最长等待，避免恶意或故障对端拖死请求
+const smtpDialTimeout = 12 * time.Second
+const smtpPhaseDeadline = 15 * time.Second
+
+func setSMTPDeadline(c net.Conn) {
+	if c != nil {
+		_ = c.SetDeadline(time.Now().Add(smtpPhaseDeadline))
+	}
+}
+
+/* sendPlain 无加密 SMTP 发送（短连接/阶段超时，避免长时间阻塞） */
 func (n *EmailNotifier) sendPlain(addr string, auth smtp.Auth, to []string, msg string) error {
-	conn, err := net.DialTimeout("tcp", addr, 30*time.Second)
+	conn, err := net.DialTimeout("tcp", addr, smtpDialTimeout)
 	if err != nil {
 		return fmt.Errorf("SMTP连接失败: %w", err)
 	}
 	defer conn.Close()
+	setSMTPDeadline(conn)
 
 	client, err := smtp.NewClient(conn, n.config.Host)
 	if err != nil {
@@ -122,16 +133,18 @@ func (n *EmailNotifier) sendWithSSL(addr string, auth smtp.Auth, to []string, ms
 		ServerName:         n.config.Host,
 	}
 	/* 使用 net.DialTimeout + tls.Client 替代无超时的 tls.Dial */
-	rawConn, err := net.DialTimeout("tcp", addr, 30*time.Second)
+	rawConn, err := net.DialTimeout("tcp", addr, smtpDialTimeout)
 	if err != nil {
 		return fmt.Errorf("SSL连接失败: %w", err)
 	}
 	conn := tls.Client(rawConn, tlsConfig)
+	setSMTPDeadline(rawConn)
 	if err := conn.Handshake(); err != nil {
 		rawConn.Close()
 		return fmt.Errorf("SSL握手失败: %w", err)
 	}
 	defer conn.Close()
+	setSMTPDeadline(conn)
 
 	client, err := smtp.NewClient(conn, n.config.Host)
 	if err != nil {
@@ -143,11 +156,12 @@ func (n *EmailNotifier) sendWithSSL(addr string, auth smtp.Auth, to []string, ms
 }
 
 func (n *EmailNotifier) sendWithSTARTTLS(addr string, auth smtp.Auth, to []string, msg string) error {
-	conn, err := net.DialTimeout("tcp", addr, 30*time.Second)
+	conn, err := net.DialTimeout("tcp", addr, smtpDialTimeout)
 	if err != nil {
 		return fmt.Errorf("STARTTLS连接失败: %w", err)
 	}
 	defer conn.Close()
+	setSMTPDeadline(conn)
 
 	client, err := smtp.NewClient(conn, n.config.Host)
 	if err != nil {
@@ -162,6 +176,7 @@ func (n *EmailNotifier) sendWithSTARTTLS(addr string, auth smtp.Auth, to []strin
 	if err := client.StartTLS(tlsConfig); err != nil {
 		return fmt.Errorf("STARTTLS失败: %w", err)
 	}
+	setSMTPDeadline(conn)
 
 	return n.sendViaClient(client, auth, to, msg)
 }

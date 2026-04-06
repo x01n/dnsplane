@@ -21,6 +21,20 @@
   animation-delay: 4s;
 }
 
+@keyframes auth-route-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.animate-auth-route {
+  animation: auth-route-in 0.28s ease-out both;
+}
+
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {

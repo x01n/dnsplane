@@ -6,11 +6,14 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"main/internal/api/middleware"
+	"main/internal/cache"
 	"main/internal/database"
+	"main/internal/dbcache"
 	"main/internal/logger"
 	"main/internal/models"
 	"main/internal/notify"
 	"main/internal/utils"
+	"main/internal/verify"
 	"net/http"
 	"strconv"
 	"strings"
@@ -57,11 +60,25 @@ func GetAuthConfig(c *gin.Context) {
 		}
 	}
 
+	registerEnabled := GetSysConfigValue("register_enabled") == "true"
+	passwordRegister := GetSysConfigValue("auth_password_register") == "true" || GetSysConfigValue("auth_password_register") == "1"
+	magicLinkLogin := GetSysConfigValue("auth_magic_link_login") == "true" || GetSysConfigValue("auth_magic_link_login") == "1"
+	turnstileSite := strings.TrimSpace(GetSysConfigValue("turnstile_site_key"))
+
+	data := gin.H{
+		"login_captcha":             needCaptcha,
+		"captcha_enabled":           needCaptcha,
+		"register_enabled":          registerEnabled,
+		"password_register_enabled": passwordRegister,
+		"magic_link_login_enabled":  magicLinkLogin,
+	}
+	if turnstileSite != "" {
+		data["turnstile_site_key"] = turnstileSite
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"code": 0,
-		"data": gin.H{
-			"login_captcha": needCaptcha,
-		},
+		"data": data,
 	})
 }
 
@@ -225,6 +242,7 @@ func GetUserInfo(c *gin.Context) {
 	middleware.SuccessResponse(c, gin.H{
 		"id":        user.ID,
 		"username":  user.Username,
+		"email":     user.Email,
 		"level":     user.Level,
 		"is_api":    user.IsAPI,
 		"totp_open": user.TOTPOpen,
@@ -522,6 +540,17 @@ func getSiteURL() string {
 	return "http://localhost:8080"
 }
 
+// enqueueNotifyMail 异步发信，HTTP 立即返回；失败仅记日志（与公开接口模糊成功口径一致）
+func enqueueNotifyMail(task string, cfg notify.EmailConfig, subject, body string) {
+	ec := cfg
+	utils.SafeGoWithName(task, func() {
+		n := notify.NewEmailNotifier(ec)
+		if err := n.Send(context.Background(), subject, body); err != nil {
+			logger.Error("%s: %v", task, err)
+		}
+	})
+}
+
 // ForgotPassword 发送密码重置邮件（公开API）
 func ForgotPassword(c *gin.Context) {
 	var req struct {
@@ -531,48 +560,39 @@ func ForgotPassword(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"code": -1, "msg": "请输入有效的邮箱地址"})
 		return
 	}
-
-	// 查找用户
-	var user models.User
-	if err := database.DB.Where("email = ?", req.Email).First(&user).Error; err != nil {
-		// 为了安全，即使用户不存在也返回成功
+	email := strings.TrimSpace(req.Email)
+	if !verify.AllowPublicEmailRequest(c.ClientIP(), email, "forgot_pw", 12, 5) {
 		c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "如果该邮箱已注册，您将收到重置邮件"})
 		return
 	}
 
-	// 检查邮件配置
-	emailConfig, err := getEmailConfig()
-	if err != nil || emailConfig == nil {
-		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "邮件服务未配置，请联系管理员"})
+	var user models.User
+	if err := database.DB.Where("email = ?", email).First(&user).Error; err != nil {
+		c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "如果该邮箱已注册，您将收到重置邮件"})
 		return
 	}
 
-	// 生成重置Token
+	emailConfig, err := getEmailConfig()
+	if err != nil || emailConfig == nil {
+		c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "如果该邮箱已注册，您将收到重置邮件"})
+		return
+	}
+
 	token := generateResetToken()
 	expireTime := time.Now().Add(30 * time.Minute)
-
-	// 保存Token
 	database.DB.Model(&user).Updates(map[string]interface{}{
 		"reset_token":  token,
 		"reset_type":   "password",
 		"reset_expire": expireTime,
 	})
 
-	// 发送邮件
 	siteURL := getSiteURL()
 	resetLink := notify.BuildResetLink(siteURL, "password", token)
 	subject, body := notify.RenderPasswordResetEmail(user.Username, resetLink, "30")
-
-	emailConfig.To = req.Email
-	notifier := notify.NewEmailNotifier(*emailConfig)
-	if err := notifier.Send(context.Background(), subject, body); err != nil {
-		logger.Error("发送密码重置邮件失败: %v", err)
-		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "邮件发送失败，请稍后重试"})
-		return
-	}
-
-	logger.Info("已发送密码重置邮件: %s", req.Email)
-	c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "重置邮件已发送，请查收"})
+	ec := *emailConfig
+	ec.To = email
+	c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "如果该邮箱已注册，您将收到重置邮件"})
+	enqueueNotifyMail("mail_forgot_password", ec, subject, body)
 }
 
 // ResetPassword 通过Token重置密码（公开API）
@@ -627,53 +647,44 @@ func ForgotTOTP(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"code": -1, "msg": "请输入有效的邮箱地址"})
 		return
 	}
-
-	// 查找用户
-	var user models.User
-	if err := database.DB.Where("email = ?", req.Email).First(&user).Error; err != nil {
+	email := strings.TrimSpace(req.Email)
+	if !verify.AllowPublicEmailRequest(c.ClientIP(), email, "forgot_totp", 12, 5) {
 		c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "如果该邮箱已注册，您将收到重置邮件"})
 		return
 	}
 
-	// 检查用户是否启用了TOTP
+	var user models.User
+	if err := database.DB.Where("email = ?", email).First(&user).Error; err != nil {
+		c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "如果该邮箱已注册，您将收到重置邮件"})
+		return
+	}
+
 	if !user.TOTPOpen {
 		c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "如果该邮箱已注册，您将收到重置邮件"})
 		return
 	}
 
-	// 检查邮件配置
 	emailConfig, err := getEmailConfig()
 	if err != nil || emailConfig == nil {
-		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "邮件服务未配置，请联系管理员"})
+		c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "如果该邮箱已注册，您将收到重置邮件"})
 		return
 	}
 
-	// 生成重置Token
 	token := generateResetToken()
 	expireTime := time.Now().Add(30 * time.Minute)
-
-	// 保存Token
 	database.DB.Model(&user).Updates(map[string]interface{}{
 		"reset_token":  token,
 		"reset_type":   "totp",
 		"reset_expire": expireTime,
 	})
 
-	// 发送邮件
 	siteURL := getSiteURL()
 	resetLink := notify.BuildResetLink(siteURL, "totp", token)
 	subject, body := notify.RenderTOTPResetEmail(user.Username, resetLink, "30")
-
-	emailConfig.To = req.Email
-	notifier := notify.NewEmailNotifier(*emailConfig)
-	if err := notifier.Send(context.Background(), subject, body); err != nil {
-		logger.Error("发送TOTP重置邮件失败: %v", err)
-		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "邮件发送失败，请稍后重试"})
-		return
-	}
-
-	logger.Info("已发送TOTP重置邮件: %s", req.Email)
-	c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "重置邮件已发送，请查收"})
+	ec := *emailConfig
+	ec.To = email
+	c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "如果该邮箱已注册，您将收到重置邮件"})
+	enqueueNotifyMail("mail_forgot_totp", ec, subject, body)
 }
 
 // ResetTOTP 通过Token重置TOTP（公开API）
@@ -798,4 +809,409 @@ func AdminResetTOTP(c *gin.Context) {
 	adminUsername := c.GetString("username")
 	logger.Info("管理员%s重置了用户%s的TOTP", adminUsername, user.Username)
 	c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "已重置用户的二步验证"})
+}
+
+// authRegisterPolicy 与 GetAuthConfig 一致：是否开放注册、是否开放密码自助注册
+func authRegisterPolicy() (registerEnabled, passwordRegister bool) {
+	registerEnabled = GetSysConfigValue("register_enabled") == "true"
+	passwordRegister = GetSysConfigValue("auth_password_register") == "true" || GetSysConfigValue("auth_password_register") == "1"
+	return
+}
+
+const msgEmailNotInWhitelist = "邮箱不在白名单"
+
+// registerEmailPassesWhitelist 与系统设置「邮箱域名白名单」一致：未启用时恒为 true；启用时邮箱须匹配至少一条规则（整邮相等，或域名/子域与规则匹配，规则可带 @ 前缀）。
+func registerEmailPassesWhitelist(emailNorm string) bool {
+	if GetSysConfigValue("auth_email_whitelist_enabled") != "true" {
+		return true
+	}
+	emailNorm = strings.TrimSpace(strings.ToLower(emailNorm))
+	if emailNorm == "" {
+		return false
+	}
+	at := strings.LastIndex(emailNorm, "@")
+	if at < 0 || at == len(emailNorm)-1 {
+		return false
+	}
+	domain := emailNorm[at+1:]
+	raw := strings.TrimSpace(GetSysConfigValue("auth_email_whitelist"))
+	if raw == "" {
+		return false
+	}
+	for _, line := range strings.Split(raw, "\n") {
+		rule := strings.TrimSpace(strings.TrimRight(line, "\r"))
+		if rule == "" {
+			continue
+		}
+		rule = strings.ToLower(rule)
+		if strings.Contains(rule, "@") {
+			if emailNorm == rule {
+				return true
+			}
+			continue
+		}
+		if strings.HasPrefix(rule, "@") {
+			rule = rule[1:]
+		}
+		if rule == "" {
+			continue
+		}
+		if domain == rule || strings.HasSuffix(domain, "."+rule) {
+			return true
+		}
+	}
+	return false
+}
+
+func requireSystemInstalled(c *gin.Context) bool {
+	var count int64
+	database.DB.Model(&models.User{}).Count(&count)
+	if count == 0 {
+		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "系统未完成安装"})
+		return false
+	}
+	return true
+}
+
+// msgMagicLinkIfEligible 无密码登录请求的模糊成功提示（用户不存在 / 未开邮件等统一口径）
+const msgMagicLinkIfEligible = "若该邮箱已注册，您将收到登录链接"
+
+// RequestMagicLink POST /api/auth/magic-link 发送一次性登录链接（已启用 TOTP 的账号在打开链接后需再验动态口令）
+func RequestMagicLink(c *gin.Context) {
+	var req struct {
+		Email string `json:"email" binding:"required,email"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": -1, "msg": "请输入有效的邮箱地址"})
+		return
+	}
+	if !requireSystemInstalled(c) {
+		return
+	}
+	magicOn := GetSysConfigValue("auth_magic_link_login") == "true" || GetSysConfigValue("auth_magic_link_login") == "1"
+	if !magicOn {
+		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "未启用无密码登录"})
+		return
+	}
+	emailTrim := strings.TrimSpace(req.Email)
+	if !verify.AllowPublicEmailRequest(c.ClientIP(), emailTrim, "magic_link", 15, 5) {
+		c.JSON(http.StatusOK, gin.H{"code": 0, "msg": msgMagicLinkIfEligible})
+		return
+	}
+	var user models.User
+	if err := database.DB.Where("email = ?", emailTrim).First(&user).Error; err != nil {
+		c.JSON(http.StatusOK, gin.H{"code": 0, "msg": msgMagicLinkIfEligible})
+		return
+	}
+	if user.Status != 1 {
+		c.JSON(http.StatusOK, gin.H{"code": 0, "msg": msgMagicLinkIfEligible})
+		return
+	}
+	emailConfig, err := getEmailConfig()
+	if err != nil || emailConfig == nil {
+		c.JSON(http.StatusOK, gin.H{"code": 0, "msg": msgMagicLinkIfEligible})
+		return
+	}
+	token := generateResetToken()
+	if err := cache.C.SetJSON(quickLoginPrefix+token, &QuickLoginToken{
+		Token:    token,
+		UserID:   strconv.FormatUint(uint64(user.ID), 10),
+		DomainID: "",
+	}, 15*time.Minute); err != nil {
+		logger.Error("缓存魔法登录令牌失败: %v", err)
+		c.JSON(http.StatusOK, gin.H{"code": 0, "msg": msgMagicLinkIfEligible})
+		return
+	}
+	siteURL := getSiteURL()
+	magicURL := notify.BuildMagicLoginLink(siteURL, token)
+	subject, body := notify.RenderMagicLoginEmail(user.Username, magicURL, "15")
+	ec := *emailConfig
+	ec.To = user.Email
+	c.JSON(http.StatusOK, gin.H{"code": 0, "msg": msgMagicLinkIfEligible})
+	enqueueNotifyMail("mail_magic_link", ec, subject, body)
+}
+
+// MagicLinkVerifyTotp POST /api/auth/magic-link/totp 提交魔法登录第二步动态口令（与 QuickLogin 拆开的 TOTP 校验）
+func MagicLinkVerifyTotp(c *gin.Context) {
+	var req struct {
+		PreauthToken string `json:"preauth_token" binding:"required"`
+		TOTPCode     string `json:"totp_code" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": -1, "msg": "参数错误"})
+		return
+	}
+	if err := verify.CheckIPLimit(c.ClientIP(), 60); err != nil {
+		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": err.Error()})
+		return
+	}
+	key := magicTotpPreauthPrefix + strings.TrimSpace(req.PreauthToken)
+	var pre MagicTotpPreauth
+	if !cache.C.GetJSON(key, &pre) {
+		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "会话已失效，请重新点击邮件中的登录链接"})
+		return
+	}
+	var user models.User
+	if err := database.DB.First(&user, pre.UserID).Error; err != nil {
+		cache.C.Delete(key)
+		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "用户不存在"})
+		return
+	}
+	if user.Status != 1 {
+		cache.C.Delete(key)
+		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "账户已被禁用"})
+		return
+	}
+	if !user.TOTPOpen || user.TOTPSecret == "" {
+		cache.C.Delete(key)
+		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "当前账号无需二步验证，请重新使用登录链接"})
+		return
+	}
+	if !utils.VerifyTOTPCode(user.TOTPSecret, req.TOTPCode) {
+		logger.Info("魔法登录 TOTP 校验失败: uid=%s ip=%s", pre.UserID, c.ClientIP())
+		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "动态口令错误"})
+		return
+	}
+	cache.C.Delete(key)
+
+	tokenPair, err := middleware.GenerateTokenPair(strconv.FormatUint(uint64(user.ID), 10), user.Username, user.Level)
+	if err != nil {
+		logger.Error("魔法登录 TOTP 通过后签发 Token 失败: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"code": -1, "msg": "登录失败"})
+		return
+	}
+	if err := middleware.SetAuthCookies(c, tokenPair); err != nil {
+		logger.Error("魔法登录 TOTP 通过后设置 Cookie 失败: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"code": -1, "msg": "登录失败"})
+		return
+	}
+	if rtClaims, _ := middleware.ParseToken(tokenPair.RefreshToken); rtClaims != nil {
+		middleware.StoreRefreshJTI(strconv.FormatUint(uint64(user.ID), 10), rtClaims.ID)
+	}
+	now := time.Now()
+	database.DB.Model(&user).Update("last_time", &now)
+
+	redirectTo := "/dashboard/"
+	if pre.DomainID != "" && pre.DomainID != "0" {
+		redirectTo = "/dashboard/domains/" + pre.DomainID
+	}
+	logger.Info("魔法登录完成(含TOTP): user=%s ip=%s", user.Username, c.ClientIP())
+	c.JSON(http.StatusOK, gin.H{
+		"code": 0,
+		"msg":  "登录成功",
+		"data": gin.H{
+			"token":         tokenPair.AccessToken,
+			"refresh_token": tokenPair.RefreshToken,
+			"expires_in":    tokenPair.ExpiresIn,
+			"redirect":      redirectTo,
+			"user": gin.H{
+				"id":       user.ID,
+				"username": user.Username,
+				"level":    user.Level,
+			},
+		},
+	})
+}
+
+// SendAuthCode POST /api/auth/send-code 公开：仅 scene=register 时发送邮箱验证码（绑定邮箱请用已登录接口）。
+func SendAuthCode(c *gin.Context) {
+	var req struct {
+		Email string `json:"email" binding:"required,email"`
+		Scene string `json:"scene"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": -1, "msg": "请输入有效的邮箱地址"})
+		return
+	}
+	scene := strings.ToLower(strings.TrimSpace(req.Scene))
+	if scene == "" {
+		scene = verify.SceneRegister
+	}
+	if scene != verify.SceneRegister {
+		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "绑定邮箱验证码需登录后在个人中心发送"})
+		return
+	}
+	if !requireSystemInstalled(c) {
+		return
+	}
+	regOn, pwdReg := authRegisterPolicy()
+	if !regOn {
+		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "管理员已关闭注册"})
+		return
+	}
+	if !pwdReg {
+		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "管理员未开放密码自助注册"})
+		return
+	}
+	emailNorm := strings.ToLower(strings.TrimSpace(req.Email))
+	if !registerEmailPassesWhitelist(emailNorm) {
+		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": msgEmailNotInWhitelist})
+		return
+	}
+	if !verify.AllowPublicEmailRequest(c.ClientIP(), emailNorm, "reg_code", 24, 8) {
+		c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "若符合注册条件，验证码将发送至邮箱"})
+		return
+	}
+	var taken int64
+	database.DB.Model(&models.User{}).Where("LOWER(TRIM(email)) = ? AND email != ''", emailNorm).Count(&taken)
+	if taken > 0 {
+		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "该邮箱已被注册"})
+		return
+	}
+	emailConfig, err := getEmailConfig()
+	if err != nil || emailConfig == nil {
+		c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "若邮件服务已配置，验证码将发送至邮箱"})
+		return
+	}
+	code, err := verify.Generate(emailNorm, verify.SceneRegister)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": err.Error()})
+		return
+	}
+	subject, body := notify.RenderVerificationCodeEmail(code, verify.SceneRegister, "5")
+	ec := *emailConfig
+	ec.To = strings.TrimSpace(req.Email)
+	c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "验证码已发送"})
+	enqueueNotifyMail("mail_reg_code", ec, subject, body)
+}
+
+// Register POST /api/auth/register 邮箱验证码 + 密码自助注册
+func Register(c *gin.Context) {
+	var req struct {
+		Username string `json:"username" binding:"required"`
+		Password string `json:"password" binding:"required,min=6"`
+		Email    string `json:"email" binding:"required,email"`
+		Code     string `json:"code" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": -1, "msg": "参数错误"})
+		return
+	}
+	if !requireSystemInstalled(c) {
+		return
+	}
+	regOn, pwdReg := authRegisterPolicy()
+	if !regOn {
+		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "管理员已关闭注册"})
+		return
+	}
+	if !pwdReg {
+		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "管理员未开放密码自助注册"})
+		return
+	}
+	username := strings.TrimSpace(req.Username)
+	if len(username) < 2 || len(username) > 64 {
+		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "用户名长度为 2～64 个字符"})
+		return
+	}
+	emailNorm := strings.ToLower(strings.TrimSpace(req.Email))
+	if !registerEmailPassesWhitelist(emailNorm) {
+		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": msgEmailNotInWhitelist})
+		return
+	}
+	if err := verify.Verify(emailNorm, verify.SceneRegister, req.Code); err != nil {
+		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": err.Error()})
+		return
+	}
+	var cnt int64
+	database.DB.Model(&models.User{}).Where("username = ?", username).Count(&cnt)
+	if cnt > 0 {
+		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "用户名已存在"})
+		return
+	}
+	database.DB.Model(&models.User{}).Where("LOWER(TRIM(email)) = ? AND email != ''", emailNorm).Count(&cnt)
+	if cnt > 0 {
+		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "该邮箱已被注册"})
+		return
+	}
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": -1, "msg": "密码加密失败"})
+		return
+	}
+	user := models.User{
+		Username: username,
+		Password: string(hashedPassword),
+		Email:    strings.TrimSpace(req.Email),
+		Level:    0,
+		Status:   1,
+		RegTime:  time.Now(),
+	}
+	if err := database.DB.Create(&user).Error; err != nil {
+		logger.Error("自助注册创建用户失败: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"code": -1, "msg": "注册失败"})
+		return
+	}
+	dbcache.BustUserList()
+	logger.Info("用户自助注册成功: %s", username)
+	c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "注册成功"})
+}
+
+// SendBindEmailCode POST /api/user/bind-email/send-code 已登录：向新邮箱发送绑定验证码
+func SendBindEmailCode(c *gin.Context) {
+	var req struct {
+		Email string `json:"email" binding:"required,email"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": -1, "msg": "请输入有效的邮箱地址"})
+		return
+	}
+	userID := middleware.AuthUserID(c)
+	emailNorm := strings.ToLower(strings.TrimSpace(req.Email))
+	var other models.User
+	if err := database.DB.Where("LOWER(TRIM(email)) = ? AND email != '' AND id != ?", emailNorm, userID).First(&other).Error; err == nil {
+		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "该邮箱已被其他账号使用"})
+		return
+	}
+	if !verify.AllowPublicEmailRequest(c.ClientIP(), emailNorm, "bind_mail", 30, 12) {
+		c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "若邮件服务已配置，您将收到验证码"})
+		return
+	}
+	emailConfig, err := getEmailConfig()
+	if err != nil || emailConfig == nil {
+		c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "若邮件服务已配置，您将收到验证码"})
+		return
+	}
+	code, err := verify.Generate(emailNorm, verify.SceneBindMail)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": err.Error()})
+		return
+	}
+	subject, body := notify.RenderVerificationCodeEmail(code, verify.SceneBindMail, "5")
+	ec := *emailConfig
+	ec.To = strings.TrimSpace(req.Email)
+	c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "验证码已发送"})
+	enqueueNotifyMail("mail_bind_email", ec, subject, body)
+}
+
+// BindEmail POST /api/user/bind-email 已登录：校验验证码并更新邮箱
+func BindEmail(c *gin.Context) {
+	var req struct {
+		Email string `json:"email" binding:"required,email"`
+		Code  string `json:"code" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": -1, "msg": "参数错误"})
+		return
+	}
+	userID := middleware.AuthUserID(c)
+	emailNorm := strings.ToLower(strings.TrimSpace(req.Email))
+	if err := verify.Verify(emailNorm, verify.SceneBindMail, req.Code); err != nil {
+		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": err.Error()})
+		return
+	}
+	var other models.User
+	if err := database.DB.Where("LOWER(TRIM(email)) = ? AND email != '' AND id != ?", emailNorm, userID).First(&other).Error; err == nil {
+		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "该邮箱已被其他账号使用"})
+		return
+	}
+	var user models.User
+	if err := database.DB.First(&user, userID).Error; err != nil {
+		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "用户不存在"})
+		return
+	}
+	database.DB.Model(&user).Update("email", req.Email)
+	dbcache.BustUserList()
+	logger.Info("用户绑定邮箱成功: uid=%d", userID)
+	c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "邮箱绑定成功"})
 }

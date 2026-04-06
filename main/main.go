@@ -80,25 +80,18 @@ func main() {
 	defer cache.Close()
 
 	if err := captcha.Init(); err != nil {
-		logger.Warn("行为验证码资源初始化失败（/auth/captcha/behavioral 将不可用）: %v", err)
+		logger.Warn("行为验证码资源初始化失败: %v", err)
 	}
 
 	logstore.Init()
-
-	// 注册数据库查询回调
 	database.RegisterDBCallbacks()
 
 	if cfg.Server.Mode == "release" {
 		gin.SetMode(gin.ReleaseMode)
 	}
-
-	logger.Info("初始化监控系统")
 	mon := monitor.New()
 	mon.Start()
 	defer mon.Stop()
-
-	// 启动后台任务管理器
-	logger.Info("初始化后台任务管理器")
 	service.SetCertRenewProcessStarter(handler.TriggerCertOrderProcessing)
 	taskCtx, taskCancel := context.WithCancel(context.Background())
 	taskRunner := service.NewTaskRunner()
@@ -107,12 +100,8 @@ func main() {
 		taskCancel()
 		taskRunner.Stop()
 	}()
-
-	// 启动数据库维护服务（周期清理 + VACUUM压缩 + 索引优化，配置从系统设置读取）
 	database.StartMaintenance(database.LoadMaintenanceConfig())
 	defer database.StopMaintenance()
-
-	// 启动请求日志清理服务（兼容旧配置）
 	service.StartLogCleanup()
 	defer service.StopLogCleanup()
 
@@ -124,7 +113,7 @@ func main() {
 	srv := &http.Server{
 		Addr:              addr,
 		Handler:           router,
-		ReadHeaderTimeout: 30 * time.Second, // 防慢连接占满文件描述符
+		ReadHeaderTimeout: 30 * time.Second, 
 		IdleTimeout:       120 * time.Second,
 	}
 
@@ -133,8 +122,6 @@ func main() {
 			logger.Error("HTTP服务启动失败: %v", err)
 		}
 	}()
-
-	// Wait for interrupt signal
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit

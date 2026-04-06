@@ -1,0 +1,169 @@
+/* 场景与角色 — 源自 animatedlogin-main */
+
+.charactersScene {
+  position: relative;
+  width: 480px;
+  height: 360px;
+}
+
+.character {
+  position: absolute;
+  bottom: 0;
+  transition: all 0.7s ease-in-out;
+  transform-origin: bottom center;
+}
+
+.charPurple {
+  left: 60px;
+  width: 170px;
+  height: 370px;
+  background: #6c3ff5;
+  border-radius: 10px 10px 0 0;
+  z-index: 1;
+}
+
+.charBlack {
+  left: 220px;
+  width: 115px;
+  height: 290px;
+  background: #2d2d2d;
+  border-radius: 8px 8px 0 0;
+  z-index: 2;
+}
+
+.charOrange {
+  left: 0;
+  width: 230px;
+  height: 190px;
+  background: #ff9b6b;
+  border-radius: 115px 115px 0 0;
+  z-index: 3;
+}
+
+.charYellow {
+  left: 290px;
+  width: 135px;
+  height: 215px;
+  background: #e8d754;
+  border-radius: 68px 68px 0 0;
+  z-index: 4;
+}
+
+.eyes {
+  position: absolute;
+  display: flex;
+  transition: all 0.7s ease-in-out;
+}
+
+.eyeball {
+  border-radius: 50%;
+  background: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: height 0.15s ease;
+  overflow: hidden;
+}
+
+.pupil {
+  border-radius: 50%;
+  background: #2d2d2d;
+  transition: transform 0.1s ease-out;
+}
+
+.barePupil {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #2d2d2d;
+  transition: transform 0.7s ease-in-out;
+}
+
+.yellowMouth {
+  position: absolute;
+  width: 50px;
+  height: 4px;
+  background: #2d2d2d;
+  border-radius: 2px;
+  transition: all 0.7s ease-in-out;
+}
+
+.orangeMouth {
+  position: absolute;
+  left: 90px;
+  top: 120px;
+  width: 28px;
+  height: 14px;
+  border: 3px solid #2d2d2d;
+  border-top: none;
+  border-radius: 0 0 14px 14px;
+  opacity: 0;
+  transition: all 0.7s ease-in-out;
+}
+
+.orangeMouthVisible {
+  opacity: 1;
+}
+
+@keyframes shakeHead {
+  0%,
+  100% {
+    translate: 0 0;
+  }
+  10% {
+    translate: -9px 0;
+  }
+  20% {
+    translate: 7px 0;
+  }
+  30% {
+    translate: -6px 0;
+  }
+  40% {
+    translate: 5px 0;
+  }
+  50% {
+    translate: -4px 0;
+  }
+  60% {
+    translate: 3px 0;
+  }
+  70% {
+    translate: -2px 0;
+  }
+  80% {
+    translate: 1px 0;
+  }
+  90% {
+    translate: -0.5px 0;
+  }
+}
+
+.shakeHead {
+  animation: shakeHead 0.8s cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .character,
+  .eyes,
+  .eyeball,
+  .pupil,
+  .barePupil,
+  .yellowMouth,
+  .orangeMouth {
+    transition-duration: 0.01ms !important;
+  }
+
+  .shakeHead {
+    animation: none;
+  }
+}
+
+.charactersWrapper {
+  position: relative;
+  z-index: 10;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  height: 420px;
+}

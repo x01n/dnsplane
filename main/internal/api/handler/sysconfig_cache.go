@@ -24,7 +24,7 @@ func InvalidateSysConfigCache(keys ...string) {
 // InvalidateAllAuthConfigCache 清除所有 auth 相关配置缓存
 func InvalidateAllAuthConfigCache() {
 	knownKeys := []string{
-		"auth_password_login", "auth_password_register", "auth_email_verify",
+		"auth_password_login", "auth_password_register", "auth_magic_link_login", "auth_email_verify",
 		"auth_email_whitelist_enabled", "auth_email_whitelist",
 		"register_enabled", "site_url",
 		"turnstile_site_key", "turnstile_secret_key",

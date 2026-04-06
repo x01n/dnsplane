@@ -29,6 +29,7 @@ export function consumeOAuthTokensFromUrl(searchParams: URLSearchParams): {
 
 export const OAUTH_CALLBACK_ERRORS: Record<string, string> = {
   register_disabled: '未开放新用户注册',
+  email_not_whitelisted: '邮箱不在白名单',
   account_disabled: '账户已被禁用',
   already_bound_other: '该第三方账号已被其他用户绑定',
   user_not_found: '本地账号不存在，请重试或联系管理员',

@@ -1,5 +1,8 @@
 const API_BASE = '/api'
 
+/** 找回密码 / 魔法链接 / 注册验证码等 POST 的客户端等待上限（毫秒）；后端已异步发信 */
+export const publicMailPostTimeoutMs = 12_000
+
 export interface ApiResponse<T = unknown> {
   code: number
   msg?: string
@@ -174,8 +177,18 @@ class ApiClient {
     return this.request<T>('GET', url + queryString)
   }
 
-  async post<T>(url: string, data?: unknown) {
-    return this.request<T>('POST', url, data)
+  /** 可选 timeoutMs：公开发信类接口短超时，避免等待过久（与后端异步发信配合） */
+  async post<T>(
+    url: string,
+    data?: unknown,
+    options?: RequestInit & { timeoutMs?: number }
+  ) {
+    const { timeoutMs, ...rest } = options || {}
+    const init: RequestInit = { ...rest }
+    if (typeof timeoutMs === 'number' && timeoutMs > 0 && !init.signal) {
+      init.signal = AbortSignal.timeout(timeoutMs)
+    }
+    return this.request<T>('POST', url, data, init)
   }
 
   async put<T>(url: string, data?: unknown) {
@@ -197,18 +210,88 @@ export function encryptedPost<T = unknown>(
   return api.post<T>(path, data)
 }
 
+/** GET /auth/config 与 handler.GetAuthConfig 对齐 */
+export interface AuthPublicConfig {
+  /** 与 login_captcha 同义，便于前端兼容 */
+  captcha_enabled?: boolean
+  login_captcha?: boolean
+  register_enabled?: boolean
+  /** 是否允许邮箱+密码自助注册（需服务端实现对应接口） */
+  password_register_enabled?: boolean
+  /** 无密码邮箱魔法链接登录（服务端 auth_magic_link_login） */
+  magic_link_login_enabled?: boolean
+  totp_enabled?: boolean
+  captcha_type?: string
+  captcha_site_key?: string
+  turnstile_site_key?: string
+  turnstile_standalone_required?: boolean
+}
+
 // Auth APIs
 export const authApi = {
-  login: (data: { username: string; password: string; captcha_id?: string; captcha?: string; totp_code?: string }) =>
-    api.post<{ token: string; refresh_token: string; expires_in?: number; user: User }>('/login', data),
+  /**
+   * 登录 JSON 与 handler.LoginRequest 一致：captcha_id、captcha_code、totp_code
+   * 前端可传 captcha 作为 captcha_code 的别名。
+   */
+  login: (data: {
+    username: string
+    password: string
+    captcha_id?: string
+    /** 图形验证码内容，将序列化为 captcha_code */
+    captcha?: string
+    captcha_code?: string
+    totp_code?: string
+  }) => {
+    const body: Record<string, string> = {
+      username: data.username,
+      password: data.password,
+    }
+    if (data.captcha_id) body.captcha_id = data.captcha_id
+    const code = data.captcha_code ?? data.captcha
+    if (code !== undefined && code !== '') body.captcha_code = code
+    if (data.totp_code) body.totp_code = data.totp_code
+    return api.post<{ token: string; refresh_token: string; expires_in?: number; user: User }>(
+      '/login',
+      body,
+    )
+  },
   logout: () => api.post('/logout'),
   getCaptcha: () => api.get<{ captcha_id: string; captcha_image: string }>('/auth/captcha'),
-  getConfig: () => api.get<{ captcha_enabled: boolean; totp_enabled: boolean }>('/auth/config'),
+  getConfig: () => api.get<AuthPublicConfig>('/auth/config'),
   getUserInfo: () => api.get<User>('/user/info'),
   changePassword: (data: { old_password: string; new_password: string }) =>
     api.post('/user/password', data),
   getInstallStatus: () => api.get<{ installed: boolean }>('/install/status'),
   install: (data: { username: string; password: string }) => api.post('/install', data),
+  /** 仅 body.email，与 handler.ForgotPassword 一致 */
+  forgotPassword: (data: { email: string }) =>
+    api.post('/auth/forgot-password', data, { timeoutMs: publicMailPostTimeoutMs }),
+  /** 仅 body.email，与 handler.ForgotTOTP 一致 */
+  forgotTotp: (data: { email: string }) =>
+    api.post('/auth/forgot-totp', data, { timeoutMs: publicMailPostTimeoutMs }),
+  /**
+   * 邮箱验证码：register → POST /auth/send-code；bindmail → POST /user/bind-email/send-code（需登录）
+   */
+  sendCode: (email: string, scene: string) =>
+    scene === 'bindmail'
+      ? api.post('/user/bind-email/send-code', { email }, { timeoutMs: publicMailPostTimeoutMs })
+      : api.post('/auth/send-code', { email, scene }, { timeoutMs: publicMailPostTimeoutMs }),
+  /** 绑定邮箱（POST /user/bind-email，需登录） */
+  bindEmail: (email: string, code: string) =>
+    api.post('/user/bind-email', { email, code }),
+  register: (data: { username: string; password: string; email: string; code: string }) =>
+    api.post('/auth/register', data),
+  requestMagicLink: (email: string) =>
+    api.post('/auth/magic-link', { email }, { timeoutMs: publicMailPostTimeoutMs }),
+  /** 魔法链接第二步：preauth 来自邮件链接经 /api/quicklogin 跳转后的 query */
+  verifyMagicLinkTotp: (preauth_token: string, totp_code: string) =>
+    api.post<{
+      token: string
+      refresh_token: string
+      expires_in?: number
+      redirect?: string
+      user: User
+    }>('/auth/magic-link/totp', { preauth_token, totp_code }),
 }
 
 // Account APIs

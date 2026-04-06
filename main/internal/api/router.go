@@ -38,12 +38,18 @@ func SetupRouter(staticFS embed.FS) *gin.Engine {
 		api.GET("/auth/oauth/:provider/login", handler.OAuthLogin)
 		api.GET("/auth/oauth/:provider/callback", handler.OAuthCallback)
 		api.POST("/auth/refresh", handler.RefreshToken)
+		api.POST("/auth/send-code", handler.SendAuthCode)
+		api.POST("/auth/register", handler.Register)
+		api.POST("/auth/magic-link", handler.RequestMagicLink)
+		api.POST("/auth/magic-link/totp", handler.MagicLinkVerifyTotp)
 
 		auth := api.Group("")
 		auth.Use(middleware.Auth())
 		{
 			auth.GET("/user/info", handler.GetUserInfo)
 			auth.POST("/user/password", handler.ChangePassword)
+			auth.POST("/user/bind-email/send-code", handler.SendBindEmailCode)
+			auth.POST("/user/bind-email", handler.BindEmail)
 			auth.POST("/logout", handler.Logout)
 
 			auth.GET("/accounts", handler.GetAccounts)

@@ -2,6 +2,7 @@ package notify
 
 import (
 	"fmt"
+	"net/url"
 	"strings"
 )
 
@@ -192,9 +193,44 @@ func RenderAdminResetEmail(username, resetType, resetLink, expireMinutes string)
 func BuildResetLink(baseURL, resetType, token string) string {
 	baseURL = strings.TrimSuffix(baseURL, "/")
 	if resetType == "totp" {
-		return fmt.Sprintf("%s/reset-totp?token=%s", baseURL, token)
+		return fmt.Sprintf("%s/reset-totp?token=%s", baseURL, url.QueryEscape(token))
 	}
-	return fmt.Sprintf("%s/reset-password?token=%s", baseURL, token)
+	return fmt.Sprintf("%s/reset-password?token=%s", baseURL, url.QueryEscape(token))
+}
+
+// BuildMagicLoginLink 构建无密码（邮箱魔法链接）登录 URL，与前端 /magic-login/ 一致
+func BuildMagicLoginLink(baseURL, token string) string {
+	baseURL = strings.TrimSuffix(baseURL, "/")
+	return fmt.Sprintf("%s/magic-login/?token=%s", baseURL, url.QueryEscape(token))
+}
+
+// RenderMagicLoginEmail 渲染魔法链接登录邮件
+func RenderMagicLoginEmail(username, magicLink, expireMinutes string) (subject, body string) {
+	subject = "DNSPlane - 无密码登录"
+	body = fmt.Sprintf(`<!DOCTYPE html>
+<html><head><meta charset="utf-8"><style>
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;margin:0;padding:0;background:#f5f5f5;}
+.container{max-width:480px;margin:40px auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,.08);}
+.header{background:linear-gradient(135deg,#6366f1,#8b5cf6);padding:28px;text-align:center;color:#fff;}
+.content{padding:28px;}
+.btn{display:inline-block;margin:16px 0;padding:12px 24px;background:#6366f1;color:#fff!important;text-decoration:none;border-radius:8px;font-weight:600;}
+.tip{color:#666;font-size:13px;line-height:1.6;}
+.footer{text-align:center;padding:16px;color:#999;font-size:12px;}
+</style></head><body>
+<div class="container">
+<div class="header"><strong>无密码登录</strong></div>
+<div class="content">
+<p>您好，<strong>%s</strong>，</p>
+<p>请点击下方按钮在 %s 分钟内完成登录（链接仅可使用一次）：</p>
+<p style="text-align:center"><a class="btn" href="%s" target="_blank" rel="noopener">登录 DNSPlane</a></p>
+<p class="tip">若按钮无效，请复制链接到浏览器打开：<br/><span style="word-break:break-all;font-size:12px;color:#444">%s</span></p>
+<p class="tip">若账号已开启二步验证，点击链接后请按页面提示输入 6 位动态口令完成登录。</p>
+<p class="tip">如非本人操作，请忽略此邮件。</p>
+</div>
+<div class="footer">此邮件由系统自动发送，请勿直接回复</div>
+</div>
+</body></html>`, username, expireMinutes, magicLink, magicLink)
+	return subject, body
 }
 
 // RenderCertExpiryEmail 渲染证书到期提醒邮件

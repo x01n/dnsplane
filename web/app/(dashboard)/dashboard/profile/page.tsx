@@ -64,7 +64,6 @@ export default function ProfilePage() {
   const [showEmailDialog, setShowEmailDialog] = useState(false)
   const [emailForm, setEmailForm] = useState({ email: '', code: '' })
   const [emailCountdown, setEmailCountdown] = useState(0)
-  const [emailSending, setEmailSending] = useState(false)
   const emailTimerRef = useRef<NodeJS.Timeout | null>(null)
 
   const [showResetApiKeyDialog, setShowResetApiKeyDialog] = useState(false)
@@ -279,21 +278,43 @@ export default function ProfilePage() {
   }
 
   // ===== Email Binding =====
-  const handleSendEmailCode = async () => {
+  const clearEmailBindTimer = () => {
+    if (emailTimerRef.current) {
+      clearInterval(emailTimerRef.current)
+      emailTimerRef.current = null
+    }
+  }
+
+  const handleSendEmailCode = () => {
     if (!emailForm.email) { toast.error('请输入邮箱'); return }
     if (!isValidUserEmail(emailForm.email)) { toast.error('请输入有效的邮箱地址'); return }
-    setEmailSending(true)
-    try {
-      const res = await authApi.sendCode(emailForm.email, 'bindmail')
-      if (res.code === 0) {
-        toast.success('验证码已发送')
-        setEmailCountdown(60)
-        emailTimerRef.current = setInterval(() => {
-          setEmailCountdown(prev => { if (prev <= 1) { clearInterval(emailTimerRef.current!); return 0 }; return prev - 1 })
-        }, 1000)
-      } else toast.error(res.msg || '发送失败')
-    } catch { toast.error('发送失败') }
-    finally { setEmailSending(false) }
+    clearEmailBindTimer()
+    setEmailCountdown(60)
+    emailTimerRef.current = setInterval(() => {
+      setEmailCountdown((prev) => {
+        if (prev <= 1) {
+          clearEmailBindTimer()
+          return 0
+        }
+        return prev - 1
+      })
+    }, 1000)
+    toast.info('已提交发送请求')
+    void authApi
+      .sendCode(emailForm.email, 'bindmail')
+      .then((res) => {
+        if (res.code !== 0) {
+          clearEmailBindTimer()
+          setEmailCountdown(0)
+          toast.error(res.msg || '发送失败')
+        }
+      })
+      .catch((e) => {
+        if (e instanceof Error && e.name === 'AbortError') return
+        clearEmailBindTimer()
+        setEmailCountdown(0)
+        toast.error('发送失败')
+      })
   }
 
   const handleBindEmail = async () => {
@@ -719,8 +740,8 @@ export default function ProfilePage() {
               <div className="flex gap-2">
                 <Input type="email" placeholder="输入邮箱地址" value={emailForm.email} onChange={(e) => setEmailForm({ ...emailForm, email: e.target.value })} className="flex-1" />
                 <Button type="button" variant="outline" size="sm" className="shrink-0 h-9 px-3 text-xs"
-                  onClick={handleSendEmailCode} disabled={emailSending || emailCountdown > 0}>
-                  {emailSending ? <Loader2 className="h-3 w-3 animate-spin" /> : emailCountdown > 0 ? `${emailCountdown}s` : '发送验证码'}
+                  onClick={handleSendEmailCode} disabled={emailCountdown > 0}>
+                  {emailCountdown > 0 ? `${emailCountdown}s` : '发送验证码'}
                 </Button>
               </div>
             </div>

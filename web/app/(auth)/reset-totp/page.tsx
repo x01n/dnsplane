@@ -4,35 +4,53 @@ import { useState, Suspense } from 'react'
 import { useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { toast } from 'sonner'
-import { Globe, ShieldOff, ArrowLeft, Loader2, CheckCircle, XCircle, AlertTriangle } from 'lucide-react'
+import { ShieldOff, ArrowLeft, Loader2, CheckCircle, XCircle, AlertTriangle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { encryptedPost } from '@/lib/api'
+import { AuthAnimatedLayout } from '@/components/auth/auth-animated-layout'
 
-function ResetTOTPForm() {
+function ResetTOTPContent() {
   const searchParams = useSearchParams()
   const token = searchParams.get('token')
 
   const [loading, setLoading] = useState(false)
   const [success, setSuccess] = useState(false)
+  const [characterErrorNonce, setCharacterErrorNonce] = useState(0)
+
+  const bumpError = () => setCharacterErrorNonce((n) => n + 1)
+
+  const idleCharacters = {
+    username: '',
+    password: '',
+    usernameFocused: false,
+    passwordFocused: false,
+    showPassword: false,
+    errorNonce: characterErrorNonce,
+  }
 
   const handleSubmit = async () => {
     if (!token) {
       toast.error('无效的重置链接')
+      bumpError()
       return
     }
 
     setLoading(true)
     try {
-      const res = await encryptedPost<{ code: number; msg?: string }>('/auth/reset-totp', { token })
+      const res = await encryptedPost<{ code: number; msg?: string }>(
+        '/auth/reset-totp',
+        { token },
+      )
       if (res.code === 0) {
         setSuccess(true)
         toast.success('二步验证已关闭')
       } else {
         toast.error(res.msg || '重置失败')
+        bumpError()
       }
     } catch {
       toast.error('重置失败，请稍后重试')
+      bumpError()
     } finally {
       setLoading(false)
     }
@@ -40,115 +58,134 @@ function ResetTOTPForm() {
 
   if (!token) {
     return (
-      <div className="text-center space-y-4">
-        <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-red-100">
-          <XCircle className="h-8 w-8 text-red-600" />
-        </div>
-        <div className="space-y-2">
-          <h3 className="font-medium">无效的重置链接</h3>
-          <p className="text-sm text-muted-foreground">
+      <AuthAnimatedLayout
+        title="链接无效"
+        description="无法完成二步验证重置"
+        leftFooter={
+          <span className="flex items-center gap-1.5">
+            <ShieldOff className="h-3.5 w-3.5 opacity-70" aria-hidden />
+            安全 DNS 管理
+          </span>
+        }
+        {...idleCharacters}
+      >
+        <div className="space-y-4 text-center">
+          <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-red-100">
+            <XCircle className="h-8 w-8 text-red-600" />
+          </div>
+          <p className="text-sm text-neutral-600">
             此链接无效或已过期，请重新申请二步验证重置。
           </p>
+          <Link href="/login">
+            <Button className="w-full">返回登录</Button>
+          </Link>
         </div>
-        <Link href="/login">
-          <Button className="w-full">返回登录</Button>
-        </Link>
-      </div>
+      </AuthAnimatedLayout>
     )
   }
 
   if (success) {
     return (
-      <div className="text-center space-y-4">
-        <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-green-100">
-          <CheckCircle className="h-8 w-8 text-green-600" />
-        </div>
-        <div className="space-y-2">
-          <h3 className="font-medium">二步验证已关闭</h3>
-          <p className="text-sm text-muted-foreground">
+      <AuthAnimatedLayout
+        title="二步验证已关闭"
+        description="现在可以使用密码登录"
+        leftFooter={
+          <span className="flex items-center gap-1.5">
+            <ShieldOff className="h-3.5 w-3.5 opacity-70" aria-hidden />
+            安全 DNS 管理
+          </span>
+        }
+        {...idleCharacters}
+      >
+        <div className="space-y-4 text-center">
+          <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-green-100">
+            <CheckCircle className="h-8 w-8 text-green-600" />
+          </div>
+          <p className="text-sm text-neutral-600">
             您账户的二步验证已成功关闭，现在可以使用密码登录。
           </p>
-          <p className="text-sm text-muted-foreground">
+          <p className="text-xs text-neutral-500">
             建议您登录后重新设置二步验证以保护账户安全。
           </p>
+          <Link href="/login">
+            <Button className="w-full">去登录</Button>
+          </Link>
         </div>
-        <Link href="/login">
-          <Button className="w-full">去登录</Button>
-        </Link>
-      </div>
+      </AuthAnimatedLayout>
     )
   }
 
   return (
-    <div className="space-y-4">
-      <div className="rounded-lg border border-amber-200 bg-amber-50 p-4">
-        <div className="flex gap-3">
-          <AlertTriangle className="h-5 w-5 text-amber-600 flex-shrink-0 mt-0.5" />
-          <div className="space-y-1">
-            <h4 className="font-medium text-amber-800">安全警告</h4>
-            <p className="text-sm text-amber-700">
-              此操作将关闭您账户的二步验证(TOTP)功能。关闭后，您只需输入密码即可登录。
-            </p>
-            <p className="text-sm text-amber-700">
-              如果您没有发起此请求，请立即修改密码并联系管理员。
-            </p>
+    <AuthAnimatedLayout
+      title="重置二步验证"
+      description="关闭账户的二步验证功能"
+      leftFooter={
+        <span className="flex items-center gap-1.5">
+          <ShieldOff className="h-3.5 w-3.5 opacity-70" aria-hidden />
+          安全 DNS 管理
+        </span>
+      }
+      {...idleCharacters}
+    >
+      <div className="space-y-4">
+        <div className="rounded-lg border border-amber-200 bg-amber-50 p-4">
+          <div className="flex gap-3">
+            <AlertTriangle className="mt-0.5 h-5 w-5 flex-shrink-0 text-amber-600" />
+            <div className="space-y-1">
+              <h4 className="font-medium text-amber-800">安全警告</h4>
+              <p className="text-sm text-amber-700">
+                此操作将关闭您账户的二步验证(TOTP)功能。关闭后，您只需输入密码即可登录。
+              </p>
+              <p className="text-sm text-amber-700">
+                如果您没有发起此请求，请立即修改密码并联系管理员。
+              </p>
+            </div>
           </div>
         </div>
-      </div>
 
-      <Button
-        onClick={handleSubmit}
-        className="w-full bg-amber-600 hover:bg-amber-700"
-        disabled={loading}
-      >
-        {loading ? (
-          <>
-            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            处理中...
-          </>
-        ) : (
-          <>
-            <ShieldOff className="mr-2 h-4 w-4" />
-            确认关闭二步验证
-          </>
-        )}
-      </Button>
+        <button
+          type="button"
+          onClick={handleSubmit}
+          disabled={loading}
+          className="flex h-[50px] w-full items-center justify-center gap-2 rounded-[25px] bg-amber-600 text-[15px] font-semibold text-white transition-colors hover:bg-amber-700 disabled:opacity-70"
+        >
+          {loading ? (
+            <>
+              <Loader2 className="h-4 w-4 animate-spin" />
+              处理中...
+            </>
+          ) : (
+            <>
+              <ShieldOff className="h-4 w-4" />
+              确认关闭二步验证
+            </>
+          )}
+        </button>
 
-      <div className="text-center">
-        <Link href="/login" className="text-sm text-muted-foreground hover:text-primary">
-          <ArrowLeft className="inline mr-1 h-3 w-3" />
-          返回登录
-        </Link>
+        <div className="text-center">
+          <Link
+            href="/login"
+            className="inline-flex items-center text-sm text-neutral-500 hover:text-[#5b21b6]"
+          >
+            <ArrowLeft className="mr-1 h-3 w-3" />
+            返回登录
+          </Link>
+        </div>
       </div>
-    </div>
+    </AuthAnimatedLayout>
   )
 }
 
 export default function ResetTOTPPage() {
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 p-4 relative overflow-hidden">
-      {/* 背景装饰 */}
-      <div className="absolute inset-0 overflow-hidden">
-        <div className="absolute -top-40 -right-40 w-80 h-80 bg-purple-500 rounded-full mix-blend-multiply filter blur-3xl opacity-20 animate-blob"></div>
-        <div className="absolute -bottom-40 -left-40 w-80 h-80 bg-cyan-500 rounded-full mix-blend-multiply filter blur-3xl opacity-20 animate-blob animation-delay-2000"></div>
-      </div>
-
-      <Card className="w-full max-w-md relative backdrop-blur-sm bg-white/95 dark:bg-slate-900/95 shadow-2xl border-0">
-        <CardHeader className="text-center">
-          <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-amber-500 shadow-lg shadow-amber-500/30">
-            <Globe className="h-6 w-6 text-white" />
-          </div>
-          <CardTitle className="text-2xl">重置二步验证</CardTitle>
-          <CardDescription>
-            关闭账户的二步验证功能
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <Suspense fallback={<div className="flex justify-center"><Loader2 className="h-6 w-6 animate-spin" /></div>}>
-            <ResetTOTPForm />
-          </Suspense>
-        </CardContent>
-      </Card>
-    </div>
+    <Suspense
+      fallback={
+        <div className="flex min-h-screen items-center justify-center bg-[#1a1a2e]">
+          <Loader2 className="h-8 w-8 animate-spin text-white/70" />
+        </div>
+      }
+    >
+      <ResetTOTPContent />
+    </Suspense>
   )
 }

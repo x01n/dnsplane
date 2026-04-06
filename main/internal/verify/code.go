@@ -11,9 +11,9 @@ import (
 // 验证码字符集（排除易混淆字符 0O1IL）
 const charset = "23456789ABCDEFGHJKMNPQRSTUVWXYZ"
 const codeLength = 8
-const codeTTL = 5 * time.Minute   // 验证码有效期
+const codeTTL = 5 * time.Minute       // 验证码有效期
 const sendInterval = 60 * time.Second // 同一邮箱发送间隔
-const maxAttempts = 5               // 最大错误尝试次数
+const maxAttempts = 5                 // 最大错误尝试次数
 
 // 场景枚举
 const (
@@ -123,4 +123,19 @@ func CheckIPLimit(ip string, maxPerHour int64) error {
 		return fmt.Errorf("请求过于频繁，请稍后重试")
 	}
 	return nil
+}
+
+// AllowPublicEmailRequest 公开「可能发邮件」接口的复合计数（IP + 邮箱），用于防刷与枚举。
+// 在调用方**最开始**调用；若返回 false，应直接返回与成功相同的模糊 JSON，且不做库查询、不写 token、不发信。
+// kind 区分业务，避免不同接口共用同一计数器。
+func AllowPublicEmailRequest(ip, email, kind string, maxIPPerHour, maxEmailPerHour int64) bool {
+	email = strings.ToLower(strings.TrimSpace(email))
+	kIP := fmt.Sprintf("rl:pubmail:%s:ip:%s", kind, ip)
+	kEm := fmt.Sprintf("rl:pubmail:%s:em:%s", kind, email)
+	nIP, errIP := cache.C.Incr(kIP, 1*time.Hour)
+	nEm, errEm := cache.C.Incr(kEm, 1*time.Hour)
+	if errIP != nil || errEm != nil {
+		return true
+	}
+	return nIP <= maxIPPerHour && nEm <= maxEmailPerHour
 }

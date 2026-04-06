@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -191,6 +192,12 @@ func handleOAuthLogin(c *gin.Context, providerName string, userInfo *oauth.UserI
 	database.WithContext(c).Model(&models.SysConfig{}).Where("`key` = ?", "register_enabled").Pluck("value", &registerEnabled)
 	if registerEnabled != "true" {
 		c.Redirect(http.StatusTemporaryRedirect, siteURL+"/login/?error=register_disabled")
+		return
+	}
+
+	emailNorm := strings.ToLower(strings.TrimSpace(userInfo.Email))
+	if !registerEmailPassesWhitelist(emailNorm) {
+		c.Redirect(http.StatusTemporaryRedirect, siteURL+"/login/?error=email_not_whitelisted")
 		return
 	}
 

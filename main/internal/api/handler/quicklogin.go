@@ -3,7 +3,9 @@ package handler
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -19,6 +21,15 @@ import (
 
 /* quicklogin token 缓存前缀，存储在 cache 层，自动 TTL 过期 */
 const quickLoginPrefix = "ql:"
+
+/* magicTotpPreauthPrefix 邮件链接已验证，待补 TOTP 的中间态（不签发 JWT） */
+const magicTotpPreauthPrefix = "mtp:"
+
+// MagicTotpPreauth 魔法登录第二步：已通过一次性链接校验，待提交 TOTP
+type MagicTotpPreauth struct {
+	UserID   string `json:"user_id"`
+	DomainID string `json:"domain_id"`
+}
 
 /*
  * QuickLoginToken 快速登录令牌结构
@@ -143,6 +154,23 @@ func QuickLogin(c *gin.Context) {
 		return
 	}
 
+	/* 已启用 TOTP：不签发会话，写入中间态并跳转前端补验动态口令 */
+	if user.TOTPOpen && user.TOTPSecret != "" {
+		preToken := generateToken()
+		if err := cache.C.SetJSON(magicTotpPreauthPrefix+preToken, &MagicTotpPreauth{
+			UserID:   strconv.FormatUint(uint64(user.ID), 10),
+			DomainID: loginToken.DomainID,
+		}, 10*time.Minute); err != nil {
+			logger.Error("缓存魔法登录 TOTP 中间态失败: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"code": -1, "msg": "登录失败"})
+			return
+		}
+		base := strings.TrimSuffix(getSiteURL(), "/")
+		next := fmt.Sprintf("%s/magic-login/totp/?preauth=%s", base, url.QueryEscape(preToken))
+		c.Redirect(http.StatusFound, next)
+		return
+	}
+
 	/* 生成 JWT token pair 并设置 HttpOnly cookie，实现真正的登录 */
 	tokenPair, err := middleware.GenerateTokenPair(strconv.FormatUint(uint64(user.ID), 10), user.Username, user.Level)
 	if err != nil {
@@ -168,5 +196,9 @@ func QuickLogin(c *gin.Context) {
 
 	logger.Info("快速登录成功: user=%s domain=%s ip=%s", user.Username, loginToken.DomainID, c.ClientIP())
 
-	c.Redirect(http.StatusFound, "/dashboard/domains/"+loginToken.DomainID)
+	redirectTo := "/dashboard/"
+	if loginToken.DomainID != "" && loginToken.DomainID != "0" {
+		redirectTo = "/dashboard/domains/" + loginToken.DomainID
+	}
+	c.Redirect(http.StatusFound, redirectTo)
 }
