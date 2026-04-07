@@ -409,8 +409,16 @@ func SyncDomains(c *gin.Context) {
 		return
 	}
 
-	// 直接从解密数据中手动提取（避免 struct 绑定对复杂嵌套类型的兼容问题）
-	rawData := middleware.GetDecryptedData(c)
+	// 与 BindDecryptedData 一致：加密链路用 decrypted_data；否则直接解析 JSON body（明文 API 客户端）
+	var rawData map[string]interface{}
+	if d := middleware.GetDecryptedData(c); d != nil {
+		rawData = d
+	} else {
+		if err := c.ShouldBindJSON(&rawData); err != nil {
+			middleware.ErrorResponse(c, "参数解析失败")
+			return
+		}
+	}
 	if rawData == nil {
 		middleware.ErrorResponse(c, "参数解析失败")
 		return
@@ -420,7 +428,11 @@ func SyncDomains(c *gin.Context) {
 	if v, ok := rawData["aid"].(string); ok {
 		accountID = v
 	} else if v, ok := rawData["aid"].(float64); ok {
-		accountID = fmt.Sprintf("%v", v)
+		accountID = fmt.Sprintf("%.0f", v)
+	} else if v, ok := rawData["account_id"].(string); ok {
+		accountID = v
+	} else if v, ok := rawData["account_id"].(float64); ok {
+		accountID = fmt.Sprintf("%.0f", v)
 	}
 	if accountID == "" {
 		middleware.ErrorResponse(c, "参数错误")
