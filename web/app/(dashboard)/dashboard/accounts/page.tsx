@@ -101,7 +101,7 @@ export default function AccountsPage() {
     setSubmitting(true)
     try {
       // 后端期望 config 是对象，不是字符串
-      const res = await api.put(`/accounts/${selectedAccount!.id}`, {
+      const res = await api.post(`/accounts/${selectedAccount!.id}`, {
         type: formData.type,
         name: formData.name,
         config: formData.config,

@@ -115,7 +115,7 @@ export default function CertAccountsPage() {
     setSubmitting(true)
     try {
       // 后端期望 config 是对象，不是字符串
-      const res = await api.put(`/cert/accounts/${selectedAccount!.id}`, {
+      const res = await api.post(`/cert/accounts/${selectedAccount!.id}`, {
         type: formData.type,
         name: formData.name,
         config: formData.config,

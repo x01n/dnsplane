@@ -277,7 +277,7 @@ func CreateMonitorTask(c *gin.Context) {
 }
 
 type UpdateMonitorTaskRequest struct {
-	ID            uint   `json:"id" binding:"required"`
+	ID            uint   `json:"id"`
 	DomainID      uint   `json:"domain_id"`
 	RR            string `json:"rr"`
 	RecordID      string `json:"record_id"`
@@ -312,6 +312,12 @@ func UpdateMonitorTask(c *gin.Context) {
 		return
 	}
 
+	if req.ID == 0 {
+		if p := c.Param("id"); p != "" {
+			u, _ := strconv.ParseUint(p, 10, 32)
+			req.ID = uint(u)
+		}
+	}
 	if req.ID == 0 {
 		middleware.ErrorResponse(c, "缺少任务ID")
 		return
@@ -385,7 +391,7 @@ func UpdateMonitorTask(c *gin.Context) {
 }
 
 type DeleteMonitorTaskRequest struct {
-	ID uint `json:"id" binding:"required"`
+	ID uint `json:"id"`
 }
 
 func DeleteMonitorTask(c *gin.Context) {
@@ -395,6 +401,12 @@ func DeleteMonitorTask(c *gin.Context) {
 		return
 	}
 
+	if req.ID == 0 {
+		if p := c.Param("id"); p != "" {
+			u, _ := strconv.ParseUint(p, 10, 32)
+			req.ID = uint(u)
+		}
+	}
 	if req.ID == 0 {
 		middleware.ErrorResponse(c, "缺少任务ID")
 		return
@@ -416,8 +428,8 @@ func DeleteMonitorTask(c *gin.Context) {
 }
 
 type ToggleMonitorTaskRequest struct {
-	ID     uint `json:"id" binding:"required"`
-	Active bool `json:"active"`
+	ID     uint `json:"id" form:"id"`
+	Active bool `json:"active" form:"active"`
 }
 
 func ToggleMonitorTask(c *gin.Context) {
@@ -427,6 +439,12 @@ func ToggleMonitorTask(c *gin.Context) {
 		return
 	}
 
+	if req.ID == 0 {
+		if p := c.Param("id"); p != "" {
+			u, _ := strconv.ParseUint(p, 10, 32)
+			req.ID = uint(u)
+		}
+	}
 	if req.ID == 0 {
 		middleware.ErrorResponse(c, "缺少任务ID")
 		return
@@ -447,8 +465,8 @@ func ToggleMonitorTask(c *gin.Context) {
 }
 
 type SwitchMonitorTaskRequest struct {
-	ID       uint  `json:"id" binding:"required"`
-	ToBackup *bool `json:"to_backup"` // 指针类型区分"未传"和"传了false"
+	ID       uint  `json:"id" form:"id"`
+	ToBackup *bool `json:"to_backup" form:"to_backup"` // 指针类型区分"未传"和"传了false"
 }
 
 func SwitchMonitorTask(c *gin.Context) {
@@ -458,6 +476,12 @@ func SwitchMonitorTask(c *gin.Context) {
 		return
 	}
 
+	if req.ID == 0 {
+		if p := c.Param("id"); p != "" {
+			u, _ := strconv.ParseUint(p, 10, 32)
+			req.ID = uint(u)
+		}
+	}
 	if req.ID == 0 {
 		middleware.ErrorResponse(c, "缺少任务ID")
 		return
@@ -499,9 +523,9 @@ func SwitchMonitorTask(c *gin.Context) {
 }
 
 type GetMonitorLogsRequest struct {
-	ID       uint `json:"id" binding:"required"`
-	Page     int  `json:"page"`
-	PageSize int  `json:"page_size"`
+	ID       uint `json:"id" form:"id"`
+	Page     int  `json:"page" form:"page"`
+	PageSize int  `json:"page_size" form:"page_size"`
 }
 
 func GetMonitorLogs(c *gin.Context) {
@@ -511,6 +535,12 @@ func GetMonitorLogs(c *gin.Context) {
 		return
 	}
 
+	if req.ID == 0 {
+		if p := c.Param("id"); p != "" {
+			u, _ := strconv.ParseUint(p, 10, 32)
+			req.ID = uint(u)
+		}
+	}
 	if req.ID == 0 {
 		middleware.ErrorResponse(c, "缺少任务ID")
 		return
@@ -774,11 +804,17 @@ func GetMonitorStatus(c *gin.Context) {
 
 func GetMonitorHistory(c *gin.Context) {
 	var req struct {
-		TaskID uint   `json:"task_id"`
-		Period string `json:"period"` // "24h", "7d", "30d"
+		TaskID uint   `json:"task_id" form:"task_id"`
+		Period string `json:"period" form:"period"` // "1h", "24h", "7d", "30d"
 	}
 	middleware.BindDecryptedData(c, &req)
 
+	if req.TaskID == 0 {
+		if p := c.Param("id"); p != "" {
+			u, _ := strconv.ParseUint(p, 10, 32)
+			req.TaskID = uint(u)
+		}
+	}
 	if req.TaskID == 0 {
 		middleware.ErrorResponse(c, "缺少任务ID")
 		return
@@ -788,8 +824,15 @@ func GetMonitorHistory(c *gin.Context) {
 		return
 	}
 
+	if database.LogDB == nil {
+		middleware.SuccessResponse(c, []models.DMCheckLog{})
+		return
+	}
+
 	var since time.Time
 	switch req.Period {
+	case "1h":
+		since = time.Now().Add(-time.Hour)
 	case "7d":
 		since = time.Now().AddDate(0, 0, -7)
 	case "30d":
@@ -808,16 +851,32 @@ func GetMonitorHistory(c *gin.Context) {
 
 func GetMonitorUptime(c *gin.Context) {
 	var req struct {
-		TaskID uint `json:"task_id"`
+		TaskID uint `json:"task_id" form:"task_id"`
 	}
 	middleware.BindDecryptedData(c, &req)
 
+	if req.TaskID == 0 {
+		if p := c.Param("id"); p != "" {
+			u, _ := strconv.ParseUint(p, 10, 32)
+			req.TaskID = uint(u)
+		}
+	}
 	if req.TaskID == 0 {
 		middleware.ErrorResponse(c, "缺少任务ID")
 		return
 	}
 
 	if _, ok := requireMonitorTaskByID(c, req.TaskID); !ok {
+		return
+	}
+
+	if database.LogDB == nil {
+		empty := gin.H{
+			"24h": gin.H{"total": int64(0), "success": int64(0), "uptime": float64(0), "avg_duration": float64(0)},
+			"7d":  gin.H{"total": int64(0), "success": int64(0), "uptime": float64(0), "avg_duration": float64(0)},
+			"30d": gin.H{"total": int64(0), "success": int64(0), "uptime": float64(0), "avg_duration": float64(0)},
+		}
+		middleware.SuccessResponse(c, empty)
 		return
 	}
 
@@ -1176,16 +1235,27 @@ func IsIPValue(value string) bool {
 // GetResolveStatus 获取各解析实时状态
 func GetResolveStatus(c *gin.Context) {
 	var req struct {
-		TaskID uint `json:"task_id"`
+		TaskID uint `json:"task_id" form:"task_id"`
 	}
 	middleware.BindDecryptedData(c, &req)
 
+	if req.TaskID == 0 {
+		if p := c.Param("id"); p != "" {
+			u, _ := strconv.ParseUint(p, 10, 32)
+			req.TaskID = uint(u)
+		}
+	}
 	if req.TaskID == 0 {
 		middleware.ErrorResponse(c, "缺少任务ID")
 		return
 	}
 
 	if _, ok := requireMonitorTaskByID(c, req.TaskID); !ok {
+		return
+	}
+
+	if monitor.Service == nil {
+		middleware.SuccessResponse(c, []interface{}{})
 		return
 	}
 

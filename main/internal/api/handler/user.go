@@ -13,6 +13,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/bcrypt"
+	"gorm.io/gorm"
 )
 
 // userPublicRow 用户列表对外字段（不读 password 等大字段）
@@ -300,6 +301,57 @@ func ResetAPIKey(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "重新生成成功", "data": gin.H{"api_key": newKey}})
 }
 
+// applyOperationLogFilters 与前端日志页筛选一致；action 为前端下拉分类（如 account、domain）时按前缀匹配。
+func applyOperationLogFilters(db *gorm.DB, keyword, entity, actionFilter, userID, domain string) *gorm.DB {
+	q := db
+	if keyword != "" {
+		kw := "%" + keyword + "%"
+		q = q.Where("domain LIKE ? OR action LIKE ? OR data LIKE ? OR username LIKE ?",
+			kw, kw, kw, kw)
+	}
+	if entity != "" {
+		q = q.Where("entity = ?", entity)
+	}
+	if actionFilter != "" {
+		switch actionFilter {
+		case "login":
+			q = q.Where("action = ?", "login")
+		case "account":
+			q = q.Where("action LIKE ?", "accounts_%")
+		case "domain":
+			q = q.Where("action LIKE ? OR action IN ?", "domains_%", []string{"delete_domain", "update_domain"})
+		case "record":
+			q = q.Where("action LIKE ?", "domains_records_%")
+		case "monitor":
+			q = q.Where("action LIKE ?", "monitor_%")
+		case "cert":
+			q = q.Where("action LIKE ? AND action NOT LIKE ? AND action NOT LIKE ?",
+				"cert_%", "cert_deploy%", "cert_deploy-account%")
+		case "deploy":
+			q = q.Where("action LIKE ? OR action LIKE ? OR action IN ?",
+				"cert_deploy%", "cert_deploy-account%",
+				[]string{"process_deploy", "create_cert_deploy", "delete_cert_deploy", "batch_delete_deploy"})
+		case "user":
+			q = q.Where("action LIKE ? OR action LIKE ?", "users_%", "user_%")
+		case "system":
+			q = q.Where("action LIKE ? OR action IN ?", "system_%",
+				[]string{"update_system_config", "clear_cache", "clean_logs", "update_cron_config"})
+		case "totp":
+			q = q.Where("action LIKE ? OR action IN ?", "user_totp%",
+				[]string{"enable_totp", "disable_totp", "reset_totp"})
+		default:
+			q = q.Where("action = ?", actionFilter)
+		}
+	}
+	if userID != "" {
+		q = q.Where("uid = ?", userID)
+	}
+	if domain != "" {
+		q = q.Where("domain LIKE ?", "%"+domain+"%")
+	}
+	return q
+}
+
 func GetLogs(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
@@ -307,34 +359,60 @@ func GetLogs(c *gin.Context) {
 	entity := c.Query("entity")
 	action := c.Query("action")
 	userID := c.Query("user_id")
+	if userID == "" {
+		userID = c.Query("uid")
+	}
+	domain := c.Query("domain")
 
 	var logs []models.Log
 	var total int64
 
-	query := database.DB.Model(&models.Log{})
-
-	if keyword != "" {
-		query = query.Where("domain LIKE ? OR action LIKE ? OR data LIKE ? OR username LIKE ?",
-			"%"+keyword+"%", "%"+keyword+"%", "%"+keyword+"%", "%"+keyword+"%")
-	}
-	if entity != "" {
-		query = query.Where("entity = ?", entity)
-	}
-	if action != "" {
-		query = query.Where("action = ?", action)
-	}
-	if userID != "" {
-		query = query.Where("uid = ?", userID)
+	if database.LogDB == nil {
+		c.JSON(http.StatusOK, gin.H{"code": 0, "data": gin.H{
+			"total": 0, "list": []models.Log{}, "records": []models.Log{},
+			"stats": gin.H{"today_count": 0, "distinct_users": 0, "distinct_domains": 0},
+		}})
+		return
 	}
 
-	query.Count(&total)
-	query.Order("id DESC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&logs)
+	base := applyOperationLogFilters(database.LogDB.Model(&models.Log{}), keyword, entity, action, userID, domain)
+	base.Count(&total)
+	base.Order("id DESC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&logs)
+
+	now := time.Now()
+	dayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	dayEnd := dayStart.Add(24 * time.Hour)
+
+	var todayCount int64
+	applyOperationLogFilters(database.LogDB.Model(&models.Log{}), keyword, entity, action, userID, domain).
+		Where("created_at >= ? AND created_at < ?", dayStart, dayEnd).
+		Count(&todayCount)
+
+	var uids []uint
+	applyOperationLogFilters(database.LogDB.Model(&models.Log{}), keyword, entity, action, userID, domain).
+		Where("uid > 0").
+		Distinct("uid").
+		Pluck("uid", &uids)
+	distinctUsers := int64(len(uids))
+
+	var doms []string
+	applyOperationLogFilters(database.LogDB.Model(&models.Log{}), keyword, entity, action, userID, domain).
+		Where("domain != ?", "").
+		Distinct("domain").
+		Pluck("domain", &doms)
+	distinctDomains := int64(len(doms))
 
 	c.JSON(http.StatusOK, gin.H{
 		"code": 0,
 		"data": gin.H{
 			"total":   total,
+			"list":    logs,
 			"records": logs,
+			"stats": gin.H{
+				"today_count":       todayCount,
+				"distinct_users":    distinctUsers,
+				"distinct_domains": distinctDomains,
+			},
 		},
 	})
 }
@@ -343,8 +421,12 @@ func GetLogs(c *gin.Context) {
 func GetLogDetail(c *gin.Context) {
 	id, _ := strconv.ParseUint(c.Param("id"), 10, 32)
 
+	if database.LogDB == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"code": -1, "msg": "日志库未初始化"})
+		return
+	}
 	var log models.Log
-	if err := database.DB.First(&log, id).Error; err != nil {
+	if err := database.LogDB.First(&log, id).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"code": -1, "msg": "日志不存在"})
 		return
 	}

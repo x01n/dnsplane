@@ -31,7 +31,7 @@ type BatchRecordReq struct {
 }
 
 type BatchAddRecordsRequest struct {
-	DomainID string           `json:"domain_id" binding:"required"`
+	DomainID string           `json:"domain_id"`
 	Records  string           `json:"records"`
 	Type     string           `json:"type"`
 	Line     string           `json:"line"`
@@ -59,6 +59,9 @@ func BatchAddRecords(c *gin.Context) {
 		return
 	}
 
+	if req.DomainID == "" {
+		req.DomainID = c.Param("id")
+	}
 	if req.DomainID == "" {
 		middleware.ErrorResponse(c, "缺少域名ID")
 		return
@@ -171,7 +174,7 @@ func detectRecordType(value string) string {
 }
 
 type BatchEditRecordsRequest struct {
-	DomainID  string   `json:"domain_id" binding:"required"`
+	DomainID  string   `json:"domain_id"`
 	RecordIDs []string `json:"record_ids" binding:"required"`
 	TTL       *int     `json:"ttl"`
 	Line      *string  `json:"line"`
@@ -197,6 +200,9 @@ func BatchEditRecords(c *gin.Context) {
 		return
 	}
 
+	if req.DomainID == "" {
+		req.DomainID = c.Param("id")
+	}
 	if req.DomainID == "" {
 		middleware.ErrorResponse(c, "缺少域名ID")
 		return
@@ -264,7 +270,7 @@ func BatchEditRecords(c *gin.Context) {
 }
 
 type BatchActionRecordsRequest struct {
-	DomainID  string   `json:"domain_id" binding:"required"`
+	DomainID  string   `json:"domain_id"`
 	RecordIDs []string `json:"record_ids" binding:"required"`
 	Action    string   `json:"action" binding:"required"`
 }
@@ -289,6 +295,9 @@ func BatchActionRecords(c *gin.Context) {
 		return
 	}
 
+	if req.DomainID == "" {
+		req.DomainID = c.Param("id")
+	}
 	if req.DomainID == "" {
 		middleware.ErrorResponse(c, "缺少域名ID")
 		return
@@ -366,7 +375,7 @@ func getDNSProviderByDomain(domain *models.Domain) (dns.Provider, error) {
 }
 
 type QueryWhoisRequest struct {
-	DomainID string `json:"domain_id" binding:"required"`
+	DomainID string `json:"domain_id"`
 }
 
 /*
@@ -384,6 +393,9 @@ func QueryWhois(c *gin.Context) {
 		return
 	}
 
+	if req.DomainID == "" {
+		req.DomainID = c.Param("id")
+	}
 	if req.DomainID == "" {
 		middleware.ErrorResponse(c, "缺少域名ID")
 		return

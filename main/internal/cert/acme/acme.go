@@ -21,6 +21,8 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -32,14 +34,20 @@ const (
 	GoogleACMEURL      = "https://dv.acme-v02.api.pki.goog/directory"
 	GoogleStagingURL   = "https://dv.acme-v02.test-api.pki.goog/directory"
 	LiteSSLURL         = "https://acme.freessl.cn/v2/DV90"
+
+	/* ACME 429/503 自动重试次数（含首次请求） */
+	acmeRateLimitMaxAttempts = 12
 )
+
+// LE problem+json detail 中常见：retry after 2026-04-07 06:31:45 UTC
+var acmeDetailRetryUTC = regexp.MustCompile(`(?i)retry\s+after\s+([0-9]{4}-[0-9]{2}-[0-9]{2}\s+[0-9]{2}:[0-9]{2}:[0-9]{2})`)
 
 func init() {
 	cert.Register("letsencrypt", NewLetsEncryptProvider, cert.ProviderConfig{
 		Type: "letsencrypt",
 		Name: "Let's Encrypt",
 		Icon: "letsencrypt.png",
-		Note: "支持域名（DNS-01）与公网 IP（HTTP-01，需在 IP 上开放 80 端口响应校验路径）。",
+		Note: "域名可选 DNS-01（自动写解析）或 HTTP-01（需在域名解析到的服务器上开放 80 端口）；公网 IP 仅 HTTP-01。通配符仅 DNS-01。",
 		Config: []cert.ConfigField{
 			{Name: "邮箱地址", Key: "email", Type: "input", Required: true},
 		},
@@ -241,6 +249,42 @@ func (c *ACMEClient) log(msg string) {
 	}
 }
 
+func acmeClampRetry(d time.Duration) time.Duration {
+	const minW = 10 * time.Second
+	const maxW = 2 * time.Hour
+	if d < minW {
+		return minW
+	}
+	if d > maxW {
+		return maxW
+	}
+	return d
+}
+
+// acmeComputeRetryWait 解析 Retry-After 与 LE detail 中的 UTC 时间；否则阶梯退避，避免连续打满 CA。
+func acmeComputeRetryWait(h http.Header, body []byte, attempt int) time.Duration {
+	if ra := strings.TrimSpace(h.Get("Retry-After")); ra != "" {
+		if sec, err := strconv.Atoi(ra); err == nil && sec > 0 {
+			return acmeClampRetry(time.Duration(sec) * time.Second)
+		}
+		if t, err := http.ParseTime(ra); err == nil {
+			return acmeClampRetry(time.Until(t))
+		}
+	}
+	var prob struct {
+		Detail string `json:"detail"`
+	}
+	_ = json.Unmarshal(body, &prob)
+	if m := acmeDetailRetryUTC.FindStringSubmatch(prob.Detail); len(m) > 1 {
+		t, err := time.ParseInLocation("2006-01-02 15:04:05", strings.TrimSpace(m[1]), time.UTC)
+		if err == nil {
+			return acmeClampRetry(time.Until(t))
+		}
+	}
+	fallback := time.Duration(30+attempt*30) * time.Second
+	return acmeClampRetry(fallback)
+}
+
 func (c *ACMEClient) getDirectory(ctx context.Context) error {
 	if c.directory != nil {
 		return nil
@@ -288,12 +332,8 @@ func (c *ACMEClient) getNonce(ctx context.Context) (string, error) {
 }
 
 func (c *ACMEClient) signedRequest(ctx context.Context, url string, payload interface{}, useKID bool) ([]byte, http.Header, error) {
-	nonce, err := c.getNonce(ctx)
-	if err != nil {
-		return nil, nil, err
-	}
-
 	var payloadBytes []byte
+	var err error
 	if payload != nil {
 		payloadBytes, err = json.Marshal(payload)
 		if err != nil {
@@ -301,72 +341,95 @@ func (c *ACMEClient) signedRequest(ctx context.Context, url string, payload inte
 		}
 	}
 
-	/* 根据密钥类型动态设置签名算法 */
-	alg := "ES256"
-	if _, ok := c.accountKey.(*rsa.PrivateKey); ok {
-		alg = "RS256"
-	}
-	protected := map[string]interface{}{
-		"alg":   alg,
-		"nonce": nonce,
-		"url":   url,
-	}
-
-	if useKID && c.accountURL != "" {
-		protected["kid"] = c.accountURL
-	} else {
-		jwk, err := c.getJWK()
+	for attempt := 0; attempt < acmeRateLimitMaxAttempts; attempt++ {
+		nonce, err := c.getNonce(ctx)
 		if err != nil {
 			return nil, nil, err
 		}
-		protected["jwk"] = jwk
+
+		alg := "ES256"
+		if _, ok := c.accountKey.(*rsa.PrivateKey); ok {
+			alg = "RS256"
+		}
+		protected := map[string]interface{}{
+			"alg":   alg,
+			"nonce": nonce,
+			"url":   url,
+		}
+
+		if useKID && c.accountURL != "" {
+			protected["kid"] = c.accountURL
+		} else {
+			jwk, err := c.getJWK()
+			if err != nil {
+				return nil, nil, err
+			}
+			protected["jwk"] = jwk
+		}
+
+		protectedBytes, _ := json.Marshal(protected)
+		protectedB64 := base64.RawURLEncoding.EncodeToString(protectedBytes)
+		payloadB64 := base64.RawURLEncoding.EncodeToString(payloadBytes)
+
+		signingInput := protectedB64 + "." + payloadB64
+		signature, err := c.sign([]byte(signingInput))
+		if err != nil {
+			return nil, nil, err
+		}
+
+		joseBody := map[string]string{
+			"protected": protectedB64,
+			"payload":   payloadB64,
+			"signature": base64.RawURLEncoding.EncodeToString(signature),
+		}
+
+		bodyBytes, _ := json.Marshal(joseBody)
+		req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(bodyBytes))
+		if err != nil {
+			return nil, nil, err
+		}
+		req.Header.Set("Content-Type", "application/jose+json")
+
+		resp, err := c.client.Do(req)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		respBody, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			return nil, nil, err
+		}
+
+		if newNonce := resp.Header.Get("Replay-Nonce"); newNonce != "" {
+			c.nonce = newNonce
+		}
+
+		code := resp.StatusCode
+		if code == http.StatusTooManyRequests || code == http.StatusServiceUnavailable {
+			if attempt+1 >= acmeRateLimitMaxAttempts {
+				c.log(fmt.Sprintf("ACME请求失败(已达重试上限): status=%d url=%s body=%s", code, url, string(respBody)))
+				return nil, nil, fmt.Errorf("ACME error (HTTP %d) 重试次数已用尽: %s", code, string(respBody))
+			}
+			wait := acmeComputeRetryWait(resp.Header, respBody, attempt)
+			c.log(fmt.Sprintf("ACME 限流或服务繁忙 (HTTP %d)，等待约 %s 后重试 (%d/%d)", code, wait.Round(time.Second), attempt+1, acmeRateLimitMaxAttempts))
+			select {
+			case <-time.After(wait):
+			case <-ctx.Done():
+				return nil, nil, ctx.Err()
+			}
+			continue
+		}
+
+		if code >= 400 {
+			c.log(fmt.Sprintf("ACME请求失败: status=%d url=%s body=%s", code, url, string(respBody)))
+			return nil, nil, fmt.Errorf("ACME error (HTTP %d): %s", code, string(respBody))
+		}
+
+		return respBody, resp.Header, nil
 	}
 
-	protectedBytes, _ := json.Marshal(protected)
-	protectedB64 := base64.RawURLEncoding.EncodeToString(protectedBytes)
-	payloadB64 := base64.RawURLEncoding.EncodeToString(payloadBytes)
-
-	signingInput := protectedB64 + "." + payloadB64
-	signature, err := c.sign([]byte(signingInput))
-	if err != nil {
-		return nil, nil, err
-	}
-
-	body := map[string]string{
-		"protected": protectedB64,
-		"payload":   payloadB64,
-		"signature": base64.RawURLEncoding.EncodeToString(signature),
-	}
-
-	bodyBytes, _ := json.Marshal(body)
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(bodyBytes))
-	if err != nil {
-		return nil, nil, err
-	}
-	req.Header.Set("Content-Type", "application/jose+json")
-
-	resp, err := c.client.Do(req)
-	if err != nil {
-		return nil, nil, err
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	// 保存新的 nonce
-	if newNonce := resp.Header.Get("Replay-Nonce"); newNonce != "" {
-		c.nonce = newNonce
-	}
-
-	if resp.StatusCode >= 400 {
-		c.log(fmt.Sprintf("ACME请求失败: status=%d url=%s body=%s", resp.StatusCode, url, string(respBody)))
-		return nil, nil, fmt.Errorf("ACME error (HTTP %d): %s", resp.StatusCode, string(respBody))
-	}
-
-	return respBody, resp.Header, nil
+	return nil, nil, fmt.Errorf("ACME: 超过最大请求尝试次数")
 }
 
 func (c *ACMEClient) getJWK() (map[string]interface{}, error) {
@@ -624,73 +687,101 @@ func (c *ACMEClient) CreateOrder(ctx context.Context, domains []string, order *c
 		if !ok {
 			return nil, fmt.Errorf("授权响应缺少 challenges 字段")
 		}
+
+		preferred := strings.ToLower(strings.TrimSpace(order.PreferredChallenge))
+		if preferred != "http-01" && preferred != "dns-01" {
+			preferred = ""
+		}
+
+		var wantChallengeOrder []string
+		switch idType {
+		case "ip":
+			wantChallengeOrder = []string{"http-01"}
+		default:
+			if isWildcard {
+				if preferred == "http-01" {
+					return nil, fmt.Errorf("通配符域名 %s 仅支持 DNS-01 验证", domain)
+				}
+				wantChallengeOrder = []string{"dns-01"}
+			} else if preferred == "http-01" {
+				wantChallengeOrder = []string{"http-01"}
+			} else {
+				wantChallengeOrder = []string{"dns-01"}
+			}
+		}
+
 		chosen := false
-		for _, ch := range challenges {
-			challenge, ok := ch.(map[string]interface{})
-			if !ok {
-				continue
-			}
-			chType, _ := challenge["type"].(string)
-			if idType == "ip" && chType != "http-01" {
-				continue
-			}
-			if idType != "ip" && chType != "dns-01" {
-				continue
-			}
-			if chType == "dns-01" {
-				token, _ := challenge["token"].(string)
-				chURL, _ := challenge["url"].(string)
-				keyAuth := c.getKeyAuthorization(token)
-				hash := sha256.Sum256([]byte(keyAuth))
-				txtValue := base64.RawURLEncoding.EncodeToString(hash[:])
+	outerWant:
+		for _, wantType := range wantChallengeOrder {
+			for _, ch := range challenges {
+				challenge, ok := ch.(map[string]interface{})
+				if !ok {
+					continue
+				}
+				chType, _ := challenge["type"].(string)
+				if chType != wantType {
+					continue
+				}
+				if chType == "dns-01" {
+					token, _ := challenge["token"].(string)
+					chURL, _ := challenge["url"].(string)
+					keyAuth := c.getKeyAuthorization(token)
+					hash := sha256.Sum256([]byte(keyAuth))
+					txtValue := base64.RawURLEncoding.EncodeToString(hash[:])
 
-				order.Challenges[challengeKey] = cert.Challenge{
-					Type:   "dns-01",
-					URL:    chURL,
-					Token:  token,
-					Status: challenge["status"].(string),
-				}
+					chSt, _ := challenge["status"].(string)
+					order.Challenges[challengeKey] = cert.Challenge{
+						Type:   "dns-01",
+						URL:    chURL,
+						Token:  token,
+						Status: chSt,
+					}
 
-				rr := "_acme-challenge"
-				if domain != mainDomain {
-					rr = "_acme-challenge." + strings.TrimSuffix(domain, "."+mainDomain)
-				}
+					rr := "_acme-challenge"
+					if domain != mainDomain {
+						rr = "_acme-challenge." + strings.TrimSuffix(domain, "."+mainDomain)
+					}
 
-				if _, ok := dnsRecords[mainDomain]; !ok {
-					dnsRecords[mainDomain] = []cert.DNSRecord{}
+					if _, ok := dnsRecords[mainDomain]; !ok {
+						dnsRecords[mainDomain] = []cert.DNSRecord{}
+					}
+					dnsRecords[mainDomain] = append(dnsRecords[mainDomain], cert.DNSRecord{
+						Name:  rr,
+						Type:  "TXT",
+						Value: txtValue,
+					})
+					chosen = true
+					break outerWant
 				}
-				dnsRecords[mainDomain] = append(dnsRecords[mainDomain], cert.DNSRecord{
-					Name:  rr,
-					Type:  "TXT",
-					Value: txtValue,
-				})
-				chosen = true
-				break
-			}
-			if chType == "http-01" {
-				token, _ := challenge["token"].(string)
-				chURL, _ := challenge["url"].(string)
-				keyAuth := c.getKeyAuthorization(token)
-				order.Challenges[challengeKey] = cert.Challenge{
-					Type:   "http-01",
-					URL:    chURL,
-					Token:  token,
-					Status: challenge["status"].(string),
+				if chType == "http-01" {
+					token, _ := challenge["token"].(string)
+					chURL, _ := challenge["url"].(string)
+					keyAuth := c.getKeyAuthorization(token)
+					chSt, _ := challenge["status"].(string)
+					order.Challenges[challengeKey] = cert.Challenge{
+						Type:   "http-01",
+						URL:    chURL,
+						Token:  token,
+						Status: chSt,
+					}
+					if _, ok := dnsRecords[mainDomain]; !ok {
+						dnsRecords[mainDomain] = []cert.DNSRecord{}
+					}
+					dnsRecords[mainDomain] = append(dnsRecords[mainDomain], cert.DNSRecord{
+						Name:  token,
+						Type:  "HTTP-01",
+						Value: keyAuth,
+					})
+					chosen = true
+					break outerWant
 				}
-				if _, ok := dnsRecords[mainDomain]; !ok {
-					dnsRecords[mainDomain] = []cert.DNSRecord{}
-				}
-				dnsRecords[mainDomain] = append(dnsRecords[mainDomain], cert.DNSRecord{
-					Name:  token,
-					Type:  "HTTP-01",
-					Value: keyAuth,
-				})
-				chosen = true
-				break
 			}
 		}
 		if !chosen {
-			return nil, fmt.Errorf("ACME 未找到可用挑战: identifier=%s type=%s（域名需 dns-01，IP 需 http-01）", domain, idType)
+			if preferred == "http-01" && idType == "dns" && !isWildcard {
+				return nil, fmt.Errorf("ACME 未提供 HTTP-01 挑战: %s", domain)
+			}
+			return nil, fmt.Errorf("ACME 未找到可用挑战: identifier=%s type=%s（IP 需 http-01；域名默认可选 dns-01 / http-01）", domain, idType)
 		}
 	}
 

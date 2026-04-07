@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -14,11 +14,17 @@ import { Textarea } from '@/components/ui/textarea'
 import { Switch } from '@/components/ui/switch'
 import { Checkbox } from '@/components/ui/checkbox'
 import { toast } from 'sonner'
-import { certApi, CertOrder, CertAccount } from '@/lib/api'
+import { certApi, CertOrder, CertAccount, CertProviderConfig, ProviderConfigField } from '@/lib/api'
+import {
+  isDeployFieldVisible,
+  mergeProviderFieldDefaults,
+  resolveSelectFieldValue,
+} from '@/lib/deploy-config-form'
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { cn } from '@/lib/utils'
 import { TableSkeleton } from '@/components/table-skeleton'
 import { EmptyState } from '@/components/empty-state'
-import { ShieldCheck, Plus, Search, RefreshCw, Download, Eye, Trash2, Play, FileText, CheckCircle, XCircle, Clock, AlertTriangle, Server, Rocket, Upload, Loader2, RotateCcw, KeyRound, Globe, Copy, Check } from 'lucide-react'
+import { ShieldCheck, Plus, Search, RefreshCw, Download, Eye, Trash2, Play, FileText, CheckCircle, XCircle, Clock, AlertTriangle, Server, Rocket, Upload, Loader2, RotateCcw, KeyRound, Globe, Copy, Check, Info } from 'lucide-react'
 import Link from 'next/link'
 
 const CERT_STATUS_MAP: Record<number, { label: string; color: string; icon: React.ReactNode }> = {
@@ -39,14 +45,15 @@ const KEY_SIZES: Record<string, string[]> = {
   ECC: ['256', '384'],
 }
 
-const orderKindLabel = (kind?: string): string => {
+const orderKindLabel = (kind?: string, challengeType?: string): string => {
+  const ch = (challengeType || '').toLowerCase()
   switch (kind) {
     case 'ip':
       return 'IP (HTTP-01)'
     case 'mixed':
-      return '混合'
+      return ch === 'http-01' ? '混合 (域名 HTTP-01)' : '混合'
     case 'dns':
-      return '域名 (DNS-01)'
+      return ch === 'http-01' ? '域名 (HTTP-01)' : '域名 (DNS-01)'
     default:
       return '—'
   }
@@ -111,6 +118,9 @@ export default function CertPage() {
   const [selectedOrder, setSelectedOrder] = useState<CertOrder | null>(null)
   const [deployAccounts, setDeployAccounts] = useState<CertAccount[]>([])
   const [selectedDeployAccount, setSelectedDeployAccount] = useState<string>('')
+  const [deployProviders, setDeployProviders] = useState<Record<string, CertProviderConfig>>({})
+  const [quickDeployFormConfig, setQuickDeployFormConfig] = useState<Record<string, string>>({})
+  const [quickDeployRemark, setQuickDeployRemark] = useState('')
   const [deploying, setDeploying] = useState(false)
   const [orderDetail, setOrderDetail] = useState<CertOrder | null>(null)
   const [orderLog, setOrderLog] = useState('')
@@ -123,6 +133,7 @@ export default function CertPage() {
     key_type: 'RSA',
     key_size: '2048',
     is_auto: true,
+    challenge_type: 'dns-01' as 'dns-01' | 'http-01',
   })
   const [submitting, setSubmitting] = useState(false)
 
@@ -133,10 +144,11 @@ export default function CertPage() {
   const loadData = async () => {
     setLoading(true)
     try {
-      const [ordersRes, accountsRes, deployAccountsRes] = await Promise.all([
+      const [ordersRes, accountsRes, deployAccountsRes, providersRes] = await Promise.all([
         certApi.getOrders(),
         certApi.getAccounts({ is_deploy: false }),
         certApi.getAccounts({ is_deploy: true }),
+        certApi.getProviders(),
       ])
       if (ordersRes.code === 0 && ordersRes.data) {
         setOrders(Array.isArray(ordersRes.data) ? ordersRes.data : (ordersRes.data as { list: CertOrder[] }).list || [])
@@ -146,6 +158,9 @@ export default function CertPage() {
       }
       if (deployAccountsRes.code === 0 && deployAccountsRes.data) {
         setDeployAccounts(Array.isArray(deployAccountsRes.data) ? deployAccountsRes.data : (deployAccountsRes.data as { list: CertAccount[] }).list || [])
+      }
+      if (providersRes.code === 0 && providersRes.data) {
+        setDeployProviders(providersRes.data.deploy || {})
       }
     } catch {
       toast.error('加载数据失败')
@@ -161,6 +176,7 @@ export default function CertPage() {
       key_type: 'RSA',
       key_size: '2048',
       is_auto: true,
+      challenge_type: 'dns-01',
     })
     setShowAddDialog(true)
   }
@@ -175,6 +191,10 @@ export default function CertPage() {
       toast.error('请输入至少一个域名或 IP')
       return
     }
+    if (formData.challenge_type === 'http-01' && domainList.some((d) => d.startsWith('*.'))) {
+      toast.error('通配符域名不能使用 HTTP-01，请改用 DNS-01')
+      return
+    }
 
     setSubmitting(true)
     try {
@@ -184,6 +204,7 @@ export default function CertPage() {
         key_type: formData.key_type,
         key_size: formData.key_size,
         is_auto: formData.is_auto,
+        challenge_type: formData.challenge_type,
       })
       if (res.code === 0) {
         toast.success('创建证书订单成功')
@@ -377,9 +398,116 @@ export default function CertPage() {
     }
   }
 
+  const quickDeployProvider = useMemo(() => {
+    if (!selectedDeployAccount) return undefined
+    const account = deployAccounts.find((a) => a.id.toString() === selectedDeployAccount)
+    return account ? deployProviders[account.type] : undefined
+  }, [selectedDeployAccount, deployAccounts, deployProviders])
+
+  const quickDeployConfigFields = useMemo(
+    () => quickDeployProvider?.deploy_config ?? [],
+    [quickDeployProvider],
+  )
+
+  useEffect(() => {
+    if (!selectedDeployAccount || !selectedOrder) {
+      setQuickDeployFormConfig({})
+      return
+    }
+    const account = deployAccounts.find((a) => a.id.toString() === selectedDeployAccount)
+    if (!account) return
+    const fields = deployProviders[account.type]?.deploy_config
+    const doms = selectedOrder.domains ?? []
+    const base: Record<string, string> = {}
+    if (doms.length) {
+      base.domains = doms.join('\n')
+      base.domain = doms[0]
+      base.sites = doms.join('\n')
+    }
+    setQuickDeployFormConfig(mergeProviderFieldDefaults(fields, base))
+  }, [selectedDeployAccount, selectedOrder, deployAccounts, deployProviders])
+
+  const renderQuickDeployField = (field: ProviderConfigField) => {
+    const raw = quickDeployFormConfig[field.key]
+    const value = raw ?? field.value ?? ''
+
+    if (field.type === 'radio' && field.options) {
+      const v = value || field.value || field.options[0]?.value || ''
+      return (
+        <RadioGroup
+          value={v}
+          onValueChange={(nv) =>
+            setQuickDeployFormConfig((prev) => ({ ...prev, [field.key]: nv }))
+          }
+          className="flex flex-wrap gap-4"
+        >
+          {field.options.map((opt) => (
+            <div key={opt.value} className="flex items-center space-x-2">
+              <RadioGroupItem value={opt.value} id={`quick-deploy-${field.key}-${opt.value}`} />
+              <Label htmlFor={`quick-deploy-${field.key}-${opt.value}`} className="font-normal cursor-pointer">
+                {opt.label}
+              </Label>
+            </div>
+          ))}
+        </RadioGroup>
+      )
+    }
+
+    if (field.type === 'select' && field.options) {
+      const resolved = resolveSelectFieldValue(field, raw)
+      return (
+        <Select
+          value={resolved}
+          onValueChange={(v) =>
+            setQuickDeployFormConfig((prev) => ({ ...prev, [field.key]: v }))
+          }
+        >
+          <SelectTrigger>
+            <SelectValue placeholder={field.placeholder || `请选择${field.name}`} />
+          </SelectTrigger>
+          <SelectContent>
+            {field.options.map((opt) => (
+              <SelectItem key={opt.value} value={opt.value}>
+                {opt.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      )
+    }
+
+    if (field.type === 'textarea') {
+      const rows = field.key === 'domains' || field.key === 'sites' ? 6 : field.key === 'domain' ? 4 : 4
+      return (
+        <Textarea
+          value={value}
+          onChange={(e) =>
+            setQuickDeployFormConfig((prev) => ({ ...prev, [field.key]: e.target.value }))
+          }
+          placeholder={field.placeholder}
+          rows={rows}
+          className="min-h-[96px] font-mono text-sm"
+        />
+      )
+    }
+
+    return (
+      <Input
+        type={field.type === 'password' ? 'password' : 'text'}
+        value={value}
+        onChange={(e) =>
+          setQuickDeployFormConfig((prev) => ({ ...prev, [field.key]: e.target.value }))
+        }
+        placeholder={field.placeholder}
+      />
+    )
+  }
+
   const handleQuickDeploy = (order: CertOrder) => {
     setSelectedOrder(order)
     setSelectedDeployAccount('')
+    setQuickDeployFormConfig({})
+    setQuickDeployRemark('')
     setShowDeployDialog(true)
   }
 
@@ -388,13 +516,22 @@ export default function CertPage() {
       toast.error('请选择部署账户')
       return
     }
+    for (const field of quickDeployConfigFields) {
+      if (!isDeployFieldVisible(field, quickDeployFormConfig)) continue
+      const v = quickDeployFormConfig[field.key]
+      if (field.required && (v === undefined || String(v).trim() === '')) {
+        toast.error(`请填写${field.name}`)
+        return
+      }
+    }
     setDeploying(true)
     try {
-      // 先创建部署任务
+      const defaultRemark = `快速部署 - ${selectedOrder.domains?.join(', ') ?? ''}`
       const createRes = await certApi.createDeploy({
         account_id: Number(selectedDeployAccount),
         order_id: selectedOrder.id,
-        remark: `快速部署 - ${selectedOrder.domains?.join(', ')}`
+        config: quickDeployFormConfig,
+        remark: quickDeployRemark.trim() || defaultRemark,
       })
       if (createRes.code !== 0) {
         toast.error(createRes.msg || '创建部署任务失败')
@@ -468,7 +605,7 @@ export default function CertPage() {
   }
 
   const filteredOrders = orders.filter(order => {
-    const kindText = orderKindLabel(order.order_kind)
+    const kindText = orderKindLabel(order.order_kind, order.challenge_type)
     const matchKeyword = !keyword ||
       (order.domains && order.domains.some(d => d.includes(keyword))) ||
       order.issuer?.includes(keyword) ||
@@ -648,7 +785,7 @@ export default function CertPage() {
                         </div>
                         {order.order_kind && (
                           <Badge className={cn('text-[10px] px-1.5 py-0', orderKindBadgeClass(order.order_kind))}>
-                            {orderKindLabel(order.order_kind)}
+                            {orderKindLabel(order.order_kind, order.challenge_type)}
                           </Badge>
                         )}
                         {getStatusBadge(order.status)}
@@ -748,7 +885,7 @@ export default function CertPage() {
                       </TableCell>
                       <TableCell>
                         <Badge className={cn('text-[10px] px-1.5 py-0', orderKindBadgeClass(order.order_kind))}>
-                          {orderKindLabel(order.order_kind)}
+                          {orderKindLabel(order.order_kind, order.challenge_type)}
                         </Badge>
                       </TableCell>
                       <TableCell>
@@ -860,7 +997,27 @@ export default function CertPage() {
                 rows={5}
               />
               <p className="text-xs text-muted-foreground">
-                纯域名走 DNS-01（可自动写解析）；公网 IP 走 HTTP-01。混合订单需同时完成 TXT 与 80 端口校验。
+                默认 DNS-01：可在本系统托管的解析上自动添加 TXT。选 HTTP-01 时需在域名解析到的服务器上开放 80 端口，按订单说明放置校验文件。公网 IP 固定 HTTP-01。通配符仅支持 DNS-01。
+              </p>
+            </div>
+            <div className="space-y-2">
+              <Label>域名验证方式（ACME）</Label>
+              <Select
+                value={formData.challenge_type}
+                onValueChange={(v) =>
+                  setFormData({ ...formData, challenge_type: v as 'dns-01' | 'http-01' })
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="dns-01">DNS-01（TXT 记录，可自动写解析）</SelectItem>
+                  <SelectItem value="http-01">HTTP-01（80 端口，自行配置 Web 服务器）</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                订单中仅有公网 IP 时，此项会被忽略（固定 HTTP-01）。混合域名+IP 时：选 DNS-01 则域名为 TXT、IP 仍为 HTTP-01；选 HTTP-01 则仅作用于域名部分。
               </p>
             </div>
             <div className="grid grid-cols-2 gap-4">
@@ -938,7 +1095,7 @@ export default function CertPage() {
                   <div className="flex flex-wrap items-center gap-2">
                     {orderDetail.order_kind && (
                       <Badge className={cn('text-[10px]', orderKindBadgeClass(orderDetail.order_kind))}>
-                        {orderKindLabel(orderDetail.order_kind)}
+                        {orderKindLabel(orderDetail.order_kind, orderDetail.challenge_type)}
                       </Badge>
                     )}
                     <div className="flex flex-wrap gap-1.5">
@@ -1056,13 +1213,13 @@ export default function CertPage() {
 
       {/* Quick Deploy Dialog */}
       <Dialog open={showDeployDialog} onOpenChange={setShowDeployDialog}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Rocket className="h-5 w-5 text-violet-500" />
               一键部署证书
             </DialogTitle>
-            <DialogDescription>选择部署账户，将证书快速部署到目标服务</DialogDescription>
+            <DialogDescription>选择部署账户并填写与「部署管理」一致的部署参数，将证书部署到目标服务</DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             {selectedOrder && (
@@ -1082,7 +1239,10 @@ export default function CertPage() {
             )}
             <div className="space-y-2">
               <Label>部署账户 *</Label>
-              <Select value={selectedDeployAccount} onValueChange={setSelectedDeployAccount}>
+              <Select
+                value={selectedDeployAccount}
+                onValueChange={setSelectedDeployAccount}
+              >
                 <SelectTrigger>
                   <SelectValue placeholder="选择部署账户" />
                 </SelectTrigger>
@@ -1098,6 +1258,42 @@ export default function CertPage() {
                 </SelectContent>
               </Select>
               <p className="text-xs text-muted-foreground">如需添加新的部署账户，请前往「部署账户」页面配置</p>
+            </div>
+
+            {quickDeployProvider?.note && (
+              <p className="text-sm text-muted-foreground border-l-2 border-primary/40 pl-3 py-1">
+                {quickDeployProvider.note}
+              </p>
+            )}
+            {quickDeployProvider?.deploy_note && (
+              <div className="flex gap-2 rounded-md border border-amber-200/80 bg-amber-50/80 dark:border-amber-900/50 dark:bg-amber-950/40 px-3 py-2 text-sm text-amber-900 dark:text-amber-100">
+                <Info className="h-4 w-4 shrink-0 mt-0.5" />
+                <span>{quickDeployProvider.deploy_note}</span>
+              </div>
+            )}
+
+            {selectedDeployAccount &&
+              quickDeployConfigFields
+                .filter((field) => isDeployFieldVisible(field, quickDeployFormConfig))
+                .map((field) => (
+                  <div key={field.key} className="space-y-2">
+                    <Label>
+                      {field.name}
+                      {field.required && <span className="text-destructive ml-1">*</span>}
+                    </Label>
+                    {renderQuickDeployField(field)}
+                    {field.note && <p className="text-xs text-muted-foreground">{field.note}</p>}
+                  </div>
+                ))}
+
+            <div className="space-y-2">
+              <Label>备注</Label>
+              <Textarea
+                placeholder="可选；留空则使用「快速部署 - 域名列表」"
+                value={quickDeployRemark}
+                onChange={(e) => setQuickDeployRemark(e.target.value)}
+                rows={2}
+              />
             </div>
           </div>
           <DialogFooter>

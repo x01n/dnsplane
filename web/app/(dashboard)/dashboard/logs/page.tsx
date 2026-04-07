@@ -10,7 +10,7 @@ import { Badge } from '@/components/ui/badge'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog'
 import { toast } from 'sonner'
-import { logApi, userApi, OperationLog, User } from '@/lib/api'
+import { logApi, userApi, OperationLog, OperationLogStats, User } from '@/lib/api'
 import { ScrollText, Search, RefreshCw, Eye, Calendar, User as UserIcon, Globe, Activity, Trash2 } from 'lucide-react'
 import { TableSkeleton } from '@/components/table-skeleton'
 import { EmptyState } from '@/components/empty-state'
@@ -273,6 +273,8 @@ export default function LogsPage() {
   const [actionFilter, setActionFilter] = useState<string>('all')
   const [page, setPage] = useState(1)
   const [total, setTotal] = useState(0)
+  /** 与当前筛选条件一致的全量统计（非仅本页） */
+  const [logStats, setLogStats] = useState<OperationLogStats | null>(null)
   const pageSize = 20
 
   const [showDetailDialog, setShowDetailDialog] = useState(false)
@@ -324,14 +326,16 @@ export default function LogsPage() {
       }
       if (keyword) params.keyword = keyword
       if (domain) params.domain = domain
-      if (userId && userId !== 'all') params.uid = userId
+      if (userId && userId !== 'all') params.user_id = userId
       if (actionFilter && actionFilter !== 'all') params.action = actionFilter
 
       const res = await logApi.list(params)
       if (res.code === 0 && res.data) {
-        const data = res.data as { total: number; list: OperationLog[] }
-        setLogs(data.list || [])
-        setTotal(data.total || 0)
+        const data = res.data
+        const rows = data.list ?? data.records ?? []
+        setLogs(rows)
+        setTotal(data.total ?? 0)
+        setLogStats(data.stats ?? null)
       }
     } catch {
       toast.error('加载日志失败')
@@ -424,10 +428,12 @@ export default function LogsPage() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold text-blue-600 dark:text-blue-400">
-              {logs.filter(l => {
-                const today = new Date().toDateString()
-                return new Date(l.created_at).toDateString() === today
-              }).length}
+              {logStats
+                ? logStats.today_count
+                : logs.filter((l) => {
+                    const today = new Date().toDateString()
+                    return new Date(l.created_at).toDateString() === today
+                  }).length}
             </div>
           </CardContent>
         </Card>
@@ -438,7 +444,7 @@ export default function LogsPage() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold text-green-600 dark:text-green-400">
-              {new Set(logs.map(l => l.uid)).size}
+              {logStats ? logStats.distinct_users : new Set(logs.map((l) => l.uid)).size}
             </div>
           </CardContent>
         </Card>
@@ -449,7 +455,9 @@ export default function LogsPage() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold text-purple-600 dark:text-purple-400">
-              {new Set(logs.filter(l => l.domain).map(l => l.domain)).size}
+              {logStats
+                ? logStats.distinct_domains
+                : new Set(logs.filter((l) => l.domain).map((l) => l.domain)).size}
             </div>
           </CardContent>
         </Card>

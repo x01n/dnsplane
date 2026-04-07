@@ -15,7 +15,7 @@ import (
 
 /*
  * AuditLog 审计日志中间件
- * 功能：自动记录所有写操作(POST/PUT/DELETE)的请求信息
+ * 功能：自动记录写操作（当前 API 仅 GET/POST，以 POST 为写；登录等路径跳过）
  *       无需每个 handler 手动调用 service.Audit
  */
 func AuditLog() gin.HandlerFunc {
@@ -26,9 +26,9 @@ func AuditLog() gin.HandlerFunc {
 		// 执行 handler
 		c.Next()
 
-		// 只记录写操作
+		// 只记录写操作（路由层仅 GET + POST，变更类均为 POST）
 		method := c.Request.Method
-		if method != "POST" && method != "PUT" && method != "DELETE" {
+		if method != "POST" && method != "PUT" && method != "DELETE" && method != "PATCH" {
 			return
 		}
 
@@ -70,8 +70,11 @@ func AuditLog() gin.HandlerFunc {
 
 		uidUint, _ := strconv.ParseUint(userID, 10, 32)
 
-		// 异步写入数据库（不阻塞响应）
+		// 异步写入日志库（与 service.Audit、GetLogs 共用 LogDB）
 		utils.SafeGo(func() {
+			if database.LogDB == nil {
+				return
+			}
 			log := models.Log{
 				UserID:    uint(uidUint),
 				Username:  usernameStr,
@@ -82,7 +85,7 @@ func AuditLog() gin.HandlerFunc {
 				UserAgent: truncate(c.Request.UserAgent(), 200),
 				CreatedAt: time.Now(),
 			}
-			database.LogDB.Create(&log)
+			_ = database.LogDB.Create(&log).Error
 		})
 	}
 }
@@ -152,10 +155,12 @@ func deriveAction(path, method string) string {
 	action := strings.ReplaceAll(path, "/", "_")
 	action = strings.TrimSuffix(action, "_")
 
-	// 对于 RESTful 风格的 v1 路由，加上方法前缀
+	// 历史兼容：若仍存在 PUT/DELETE
 	if method == "PUT" {
 		action = "update_" + action
 	} else if method == "DELETE" {
+		action = "delete_" + action
+	} else if method == "POST" && strings.HasSuffix(path, "/delete") {
 		action = "delete_" + action
 	}
 

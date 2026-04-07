@@ -76,6 +76,15 @@ import { domainApi, monitorApi, DNSRecord, RecordLine, authApi, User } from '@/l
 import { DNS_RECORD_TYPES, copyToClipboard, cn, hasModuleAccess } from '@/lib/utils'
 import { ProviderBadge } from '@/components/provider-icon'
 
+const LIST_PAGE_SIZE_OPTIONS = [10, 20, 50, 100] as const
+const LS_RECORDS_PAGE_SIZE = 'dnsplane-records-page-size'
+
+function readStoredRecordsPageSize(): number {
+  if (typeof window === 'undefined') return 20
+  const n = parseInt(localStorage.getItem(LS_RECORDS_PAGE_SIZE) || '', 10)
+  return LIST_PAGE_SIZE_OPTIONS.includes(n as (typeof LIST_PAGE_SIZE_OPTIONS)[number]) ? n : 20
+}
+
 const RECORD_TYPE_COLORS: Record<string, string> = {
   A: 'bg-blue-100 text-blue-700 border-blue-200 dark:bg-blue-900/30 dark:text-blue-400',
   AAAA: 'bg-purple-100 text-purple-700 border-purple-200 dark:bg-purple-900/30 dark:text-purple-400',
@@ -110,7 +119,7 @@ export default function DomainRecordsClient() {
   const [wideFuzzy, setWideFuzzy] = useState(true)
   const [recordPage, setRecordPage] = useState(1)
   const [recordTotal, setRecordTotal] = useState(0)
-  const [recordPageSize] = useState(20)
+  const [recordPageSize, setRecordPageSize] = useState(readStoredRecordsPageSize)
   const [viewMode, setViewMode] = useState<'table' | 'card'>('table')
   const [dialogOpen, setDialogOpen] = useState(false)
   const [batchDialogOpen, setBatchDialogOpen] = useState(false)
@@ -189,8 +198,19 @@ export default function DomainRecordsClient() {
   }, [domainId])
 
   const filterKey = useMemo(
-    () => [domainId, debouncedKeyword, filterType, filterLine, filterStatus, filterSubdomain, filterValue, wideFuzzy ? '1' : '0'].join('\x1e'),
-    [domainId, debouncedKeyword, filterType, filterLine, filterStatus, filterSubdomain, filterValue, wideFuzzy]
+    () =>
+      [
+        domainId,
+        debouncedKeyword,
+        filterType,
+        filterLine,
+        filterStatus,
+        filterSubdomain,
+        filterValue,
+        wideFuzzy ? '1' : '0',
+        recordPageSize,
+      ].join('\x1e'),
+    [domainId, debouncedKeyword, filterType, filterLine, filterStatus, filterSubdomain, filterValue, wideFuzzy, recordPageSize]
   )
   const filterKeyRef = useRef(filterKey)
   const lastFetchSigRef = useRef('')
@@ -277,6 +297,17 @@ export default function DomainRecordsClient() {
 
   const handleRefresh = () => {
     fetchRecords(true)
+  }
+
+  const handleRecordPageSizeChange = (value: string) => {
+    const next = parseInt(value, 10)
+    if (!LIST_PAGE_SIZE_OPTIONS.includes(next as (typeof LIST_PAGE_SIZE_OPTIONS)[number])) return
+    setRecordPageSize(next)
+    try {
+      localStorage.setItem(LS_RECORDS_PAGE_SIZE, String(next))
+    } catch {
+      // ignore
+    }
   }
 
   const openCreateDialog = () => {
@@ -954,12 +985,53 @@ export default function DomainRecordsClient() {
           )}
 
           {/* 分页 */}
-          {recordTotal > recordPageSize && (
+          {recordTotal > 0 && (
             <div className="flex flex-wrap items-center justify-between gap-3 mt-4 pt-4 border-t">
-              <p className="text-sm text-muted-foreground">共 {recordTotal} 条，第 {recordPage}/{Math.ceil(recordTotal / recordPageSize)} 页</p>
+              <div className="flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
+                <span>
+                  共 {recordTotal} 条，第 {recordPage}/{Math.max(1, Math.ceil(recordTotal / recordPageSize))} 页
+                </span>
+                <div className="flex items-center gap-2">
+                  <span className="whitespace-nowrap">每页</span>
+                  <Select value={String(recordPageSize)} onValueChange={handleRecordPageSizeChange}>
+                    <SelectTrigger className="h-8 w-[92px]" aria-label="每页条数">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {LIST_PAGE_SIZE_OPTIONS.map((n) => (
+                        <SelectItem key={n} value={String(n)}>
+                          {n} 条
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
               <div className="flex items-center gap-2 w-full sm:w-auto">
-                <Button variant="outline" size="sm" className="min-h-10 flex-1 sm:flex-initial" disabled={recordPage <= 1} onClick={() => { const newPage = recordPage - 1; setRecordPage(newPage); }}>上一页</Button>
-                <Button variant="outline" size="sm" className="min-h-10 flex-1 sm:flex-initial" disabled={recordPage >= Math.ceil(recordTotal / recordPageSize)} onClick={() => { const newPage = recordPage + 1; setRecordPage(newPage); }}>下一页</Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="min-h-10 flex-1 sm:flex-initial"
+                  disabled={recordPage <= 1}
+                  onClick={() => {
+                    const newPage = recordPage - 1
+                    setRecordPage(newPage)
+                  }}
+                >
+                  上一页
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="min-h-10 flex-1 sm:flex-initial"
+                  disabled={recordPage >= Math.max(1, Math.ceil(recordTotal / recordPageSize))}
+                  onClick={() => {
+                    const newPage = recordPage + 1
+                    setRecordPage(newPage)
+                  }}
+                >
+                  下一页
+                </Button>
               </div>
             </div>
           )}

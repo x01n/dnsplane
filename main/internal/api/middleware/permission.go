@@ -179,8 +179,8 @@ func Permission() gin.HandlerFunc {
 			return
 		}
 
-		// 检查只读权限（写操作拦截）
-		if perm.ReadOnly && isWriteMethod(c.Request.Method) {
+		// 检查只读权限（写操作拦截；POST 中含仅查询类接口如 whois）
+		if perm.ReadOnly && isDomainScopedWriteRequest(c) {
 			c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "该域名为只读权限，无法执行写操作"})
 			c.Abort()
 			return
@@ -258,9 +258,24 @@ func getSubDomainFromRequest(c *gin.Context) string {
 	return ""
 }
 
-/* isWriteMethod 判断 HTTP 方法是否为写操作 */
-func isWriteMethod(method string) bool {
-	return method == "POST" || method == "PUT" || method == "DELETE" || method == "PATCH"
+/*
+ * isDomainScopedWriteRequest 在已解析出 domain_id 的上下文中判断是否应视为「写操作」
+ * API 仅暴露 GET/POST：POST 默认视为写；例外为纯查询类 POST（如 WHOIS）
+ */
+func isDomainScopedWriteRequest(c *gin.Context) bool {
+	method := c.Request.Method
+	switch method {
+	case "PUT", "DELETE", "PATCH":
+		return true
+	case "POST":
+		p := c.Request.URL.Path
+		if strings.HasSuffix(p, "/whois") {
+			return false
+		}
+		return true
+	default:
+		return false
+	}
 }
 
 /* parseStringID 将 interface{} 转换为 string ID（兼容 string/float64） */

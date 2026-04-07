@@ -26,7 +26,7 @@ const (
  */
 func JSONBodyToDecryptedData() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if c.Request.Method == "POST" || c.Request.Method == "PUT" || c.Request.Method == "DELETE" {
+		if c.Request.Method == "POST" {
 			var body map[string]interface{}
 			if err := c.ShouldBindJSON(&body); err == nil && body != nil {
 				c.Set("decrypted_data", body)

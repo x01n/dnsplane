@@ -216,11 +216,12 @@ func GetCertOrders(c *gin.Context) {
 }
 
 type CreateCertOrderRequest struct {
-	AccountID uint     `json:"account_id" binding:"required"`
-	Domains   []string `json:"domains" binding:"required"`
-	KeyType   string   `json:"key_type"`
-	KeySize   string   `json:"key_size"`
-	IsAuto    bool     `json:"is_auto"`
+	AccountID     uint     `json:"account_id" binding:"required"`
+	Domains       []string `json:"domains" binding:"required"`
+	KeyType       string   `json:"key_type"`
+	KeySize       string   `json:"key_size"`
+	IsAuto        bool     `json:"is_auto"`
+	ChallengeType string   `json:"challenge_type"` // 空|dns-01|http-01（ACME 域名验证；通配符仅 dns-01）
 }
 
 func validateCertOrderDomains(domains []string) error {
@@ -267,6 +268,38 @@ func detectCertOrderKind(domains []string) string {
 	return "dns"
 }
 
+func normalizeCertChallengeType(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	switch s {
+	case "http-01", "http01", "http":
+		return "http-01"
+	case "dns-01", "dns01", "dns":
+		return "dns-01"
+	default:
+		return ""
+	}
+}
+
+func validateChallengeChoice(domains []string, orderKind, challengeType string) error {
+	ct := normalizeCertChallengeType(challengeType)
+	if ct == "" {
+		return nil
+	}
+	if orderKind == "ip" && ct == "dns-01" {
+		return fmt.Errorf("纯 IP 订单仅支持 HTTP-01 验证")
+	}
+	if ct != "http-01" {
+		return nil
+	}
+	for _, d := range domains {
+		d = strings.TrimSpace(d)
+		if strings.HasPrefix(d, "*.") {
+			return fmt.Errorf("通配符域名不能使用 HTTP-01，请改用 DNS-01")
+		}
+	}
+	return nil
+}
+
 func certCountChallengeRecords(dnsRecords map[string][]cert.DNSRecord) (dnsLike, http01 int) {
 	for _, records := range dnsRecords {
 		for _, r := range records {
@@ -303,13 +336,24 @@ func CreateCertOrder(c *gin.Context) {
 		req.KeySize = "2048"
 	}
 
+	orderKind := detectCertOrderKind(normDomains)
+	normChallenge := normalizeCertChallengeType(req.ChallengeType)
+	if orderKind == "ip" {
+		normChallenge = ""
+	}
+	if err := validateChallengeChoice(normDomains, orderKind, normChallenge); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": -1, "msg": err.Error()})
+		return
+	}
+
 	order := models.CertOrder{
-		AccountID: req.AccountID,
-		KeyType:   req.KeyType,
-		KeySize:   req.KeySize,
-		IsAuto:    req.IsAuto,
-		OrderKind: detectCertOrderKind(normDomains),
-		Status:    0,
+		AccountID:     req.AccountID,
+		KeyType:       req.KeyType,
+		KeySize:       req.KeySize,
+		IsAuto:        req.IsAuto,
+		OrderKind:     orderKind,
+		ChallengeType: normChallenge,
+		Status:        0,
 	}
 
 	if err := database.DB.Create(&order).Error; err != nil {
@@ -529,6 +573,9 @@ func processCertOrderAsync(order *models.CertOrder, provider cert.Provider, doma
 
 	// 创建订单信息
 	orderInfo := &cert.OrderInfo{}
+	if t := strings.TrimSpace(order.ChallengeType); t != "" {
+		orderInfo.PreferredChallenge = strings.ToLower(t)
+	}
 
 	// 创建证书订单
 	dnsRecords, err := provider.CreateOrder(ctx, domains, orderInfo, order.KeyType, order.KeySize)
@@ -911,19 +958,20 @@ func GetCertOrderDetail(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"code": 0,
 		"data": gin.H{
-			"id":          order.ID,
-			"domains":     domainList,
-			"order_kind":  order.OrderKind,
-			"key_type":    order.KeyType,
-			"key_size":    order.KeySize,
-			"status":      order.Status,
-			"issuer":      order.Issuer,
-			"issue_time":  order.IssueTime,
-			"expire_time": order.ExpireTime,
-			"is_auto":     order.IsAuto,
-			"fullchain":   order.FullChain,
-			"private_key": order.PrivateKey,
-			"dns_info":    order.DNS,
+			"id":             order.ID,
+			"domains":        domainList,
+			"order_kind":     order.OrderKind,
+			"challenge_type": order.ChallengeType,
+			"key_type":       order.KeyType,
+			"key_size":       order.KeySize,
+			"status":         order.Status,
+			"issuer":         order.Issuer,
+			"issue_time":     order.IssueTime,
+			"expire_time":    order.ExpireTime,
+			"is_auto":        order.IsAuto,
+			"fullchain":      order.FullChain,
+			"private_key":    order.PrivateKey,
+			"dns_info":       order.DNS,
 		},
 	})
 }
@@ -1066,6 +1114,7 @@ func CreateCertDeploy(c *gin.Context) {
 
 	configJSON, _ := json.Marshal(req.Config)
 	deploy := models.CertDeploy{
+		UserID:    currentUIDUint(c),
 		AccountID: req.AccountID,
 		OrderID:   req.OrderID,
 		Config:    string(configJSON),

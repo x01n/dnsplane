@@ -2,7 +2,10 @@ package middleware
 
 import (
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
+	"strings"
 
 	"main/internal/logger"
 	"main/internal/utils"
@@ -97,10 +100,23 @@ func GetAESKey(c *gin.Context) []byte {
 	return nil
 }
 
-// BindDecryptedData 将解密数据绑定到结构体
+// BindDecryptedData 将解密数据绑定到结构体；无加密时：GET/HEAD 用 Query，其余用 JSON body（与前端 GET+Query、POST+JSON 一致）
 func BindDecryptedData(c *gin.Context, v interface{}) error {
 	data := GetDecryptedData(c)
 	if data == nil {
+		if c.Request.Method == http.MethodGet || c.Request.Method == http.MethodHead {
+			return c.ShouldBindQuery(v)
+		}
+		if err := c.ShouldBindJSON(v); err != nil {
+			// POST 无 body（如 /accounts/:id/delete）时 ShouldBindJSON 报 EOF，路径参数由 handler 补全
+			if errors.Is(err, io.EOF) {
+				return nil
+			}
+			if msg := strings.ToLower(err.Error()); strings.Contains(msg, "unexpected end of json input") {
+				return nil
+			}
+			return err
+		}
 		return nil
 	}
 	jsonBytes, err := json.Marshal(data)

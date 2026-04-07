@@ -208,6 +208,7 @@ type CertOrder struct {
 	KeyType           string     `gorm:"size:20" json:"key_type"`              // RSA, EC
 	KeySize           string     `gorm:"size:20" json:"key_size"`              // 2048, 4096, 256, 384
 	OrderKind         string     `gorm:"size:12;default:''" json:"order_kind"` // dns | ip | mixed（由域名/IP 自动判定）
+	ChallengeType     string     `gorm:"size:16;default:''" json:"challenge_type"` // 空|dns-01|http-01（ACME 域名验证方式；通配符仅 dns-01）
 	ProcessID         string     `gorm:"size:32" json:"process_id"`
 	IssueTime         *time.Time `json:"issue_time"`
 	ExpireTime        *time.Time `json:"expire_time"`

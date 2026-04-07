@@ -2,11 +2,14 @@ package dnspod
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"main/internal/dns"
 	"strconv"
+	"strings"
 
 	"github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common"
+	tcerr "github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common/errors"
 	"github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common/profile"
 	dnspod "github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/dnspod/v20210323"
 )
@@ -46,6 +49,15 @@ func NewProvider(config map[string]string, domain, domainID string) dns.Provider
 		domain:   domain,
 		domainID: domainID,
 	}
+}
+
+/* normalizeRecordLine DNSPod v20210323 的 RecordLine 为线路名称（如「默认」），非数字 ID；历史配置曾用 "0" 表示默认 */
+func normalizeRecordLine(line string) string {
+	line = strings.TrimSpace(line)
+	if line == "" || strings.EqualFold(line, "default") || line == "0" {
+		return "默认"
+	}
+	return line
 }
 
 func (p *Provider) GetError() string {
@@ -101,11 +113,20 @@ func (p *Provider) GetDomainRecords(ctx context.Context, page, pageSize int, key
 		request.Subdomain = common.StringPtr(subDomain)
 	}
 	if line != "" {
-		request.RecordLine = common.StringPtr(line)
+		request.RecordLine = common.StringPtr(normalizeRecordLine(line))
 	}
 
 	response, err := p.client.DescribeRecordList(request)
 	if err != nil {
+		/* 按子域名等条件查询时，若该条件下尚无任何记录，DNSPod 返回 ResourceNotFound.NoDataOfRecord
+		   而非空列表；ACME 自动写 _acme-challenge 前会先 List，需当作 0 条否则无法 Create */
+		var sdkErr *tcerr.TencentCloudSDKError
+		if errors.As(err, &sdkErr) && sdkErr.Code == "ResourceNotFound.NoDataOfRecord" {
+			return &dns.PageResult{
+				Total:   0,
+				Records: []dns.Record{},
+			}, nil
+		}
 		return nil, err
 	}
 
@@ -164,9 +185,7 @@ func (p *Provider) GetDomainRecordInfo(ctx context.Context, recordID string) (*d
 }
 
 func (p *Provider) AddDomainRecord(ctx context.Context, name, recordType, value, line string, ttl, mx int, weight *int, remark string) (string, error) {
-	if line == "" || line == "default" {
-		line = "默认"
-	}
+	line = normalizeRecordLine(line)
 	request := dnspod.NewCreateRecordRequest()
 	request.Domain = common.StringPtr(p.domain)
 	request.SubDomain = common.StringPtr(name)
@@ -196,6 +215,7 @@ func (p *Provider) AddDomainRecord(ctx context.Context, name, recordType, value,
 }
 
 func (p *Provider) UpdateDomainRecord(ctx context.Context, recordID, name, recordType, value, line string, ttl, mx int, weight *int, remark string) error {
+	line = normalizeRecordLine(line)
 	id, _ := strconv.ParseUint(recordID, 10, 64)
 	request := dnspod.NewModifyRecordRequest()
 	request.Domain = common.StringPtr(p.domain)

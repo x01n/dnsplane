@@ -218,7 +218,7 @@ func GetDomains(c *gin.Context) {
 
 /*
  * GetDomainDetail 获取单个域名详情
- * @route POST /domains/detail
+ * @route GET /domains/:id（路径 id）；兼容 body/query 中的 id
  * 功能：根据域名ID返回域名信息，避免前端拉取全量列表查找单条记录
  */
 func GetDomainDetail(c *gin.Context) {
@@ -226,9 +226,12 @@ func GetDomainDetail(c *gin.Context) {
 		return
 	}
 	var req struct {
-		ID string `json:"id"`
+		ID string `json:"id" form:"id"`
 	}
 	middleware.BindDecryptedData(c, &req)
+	if req.ID == "" {
+		req.ID = c.Param("id")
+	}
 
 	if req.ID == "" {
 		middleware.ErrorResponse(c, "缺少域名ID")
@@ -496,7 +499,7 @@ func SyncDomains(c *gin.Context) {
 }
 
 type DeleteDomainRequest struct {
-	ID string `json:"id" binding:"required"`
+	ID string `json:"id"`
 }
 
 /*
@@ -516,6 +519,9 @@ func DeleteDomain(c *gin.Context) {
 		return
 	}
 
+	if req.ID == "" {
+		req.ID = c.Param("id")
+	}
 	if req.ID == "" {
 		middleware.ErrorResponse(c, "缺少域名ID")
 		return
@@ -550,15 +556,15 @@ func DeleteDomain(c *gin.Context) {
 }
 
 type GetRecordsRequest struct {
-	DomainID   string `json:"domain_id" binding:"required"`
-	Page       int    `json:"page"`
-	PageSize   int    `json:"page_size"`
-	Keyword    string `json:"keyword"`
-	RecordType string `json:"type"`
-	Line       string `json:"line"`
-	Status     string `json:"status"`    // 1/0、enable/disable，或 ENABLE/DISABLE
-	SubDomain  string `json:"subdomain"` // 主机记录（前缀）筛选，与 dnsmgr subdomain 一致
-	Value      string `json:"value"`     // 记录值模糊
+	DomainID   string `json:"domain_id" form:"domain_id"`
+	Page       int    `json:"page" form:"page"`
+	PageSize   int    `json:"page_size" form:"page_size"`
+	Keyword    string `json:"keyword" form:"keyword"`
+	RecordType string `json:"type" form:"type"`
+	Line       string `json:"line" form:"line"`
+	Status     string `json:"status" form:"status"`       // 1/0、enable/disable，或 ENABLE/DISABLE
+	SubDomain  string `json:"subdomain" form:"subdomain"` // 主机记录（前缀）筛选，与 dnsmgr subdomain 一致
+	Value      string `json:"value" form:"value"`         // 记录值模糊
 }
 
 /*
@@ -576,6 +582,9 @@ func GetRecords(c *gin.Context) {
 		return
 	}
 
+	if req.DomainID == "" {
+		req.DomainID = c.Param("id")
+	}
 	if req.DomainID == "" {
 		middleware.ErrorResponse(c, "缺少域名ID")
 		return
@@ -770,7 +779,7 @@ func recordItemStatusWant(raw string) (string, bool) {
 }
 
 type CreateRecordRequest struct {
-	DomainID string `json:"domain_id" binding:"required"`
+	DomainID string `json:"domain_id"`
 	Name     string `json:"name" binding:"required"`
 	Type     string `json:"type" binding:"required"`
 	Value    string `json:"value" binding:"required"`
@@ -796,6 +805,9 @@ func CreateRecord(c *gin.Context) {
 		return
 	}
 
+	if req.DomainID == "" {
+		req.DomainID = c.Param("id")
+	}
 	if req.DomainID == "" {
 		middleware.ErrorResponse(c, "缺少域名ID")
 		return
@@ -847,8 +859,8 @@ func CreateRecord(c *gin.Context) {
 }
 
 type UpdateRecordRequest struct {
-	DomainID string `json:"domain_id" binding:"required"`
-	RecordID string `json:"record_id" binding:"required"`
+	DomainID string `json:"domain_id"`
+	RecordID string `json:"record_id"`
 	Name     string `json:"name" binding:"required"`
 	Type     string `json:"type" binding:"required"`
 	Value    string `json:"value" binding:"required"`
@@ -874,6 +886,12 @@ func UpdateRecord(c *gin.Context) {
 		return
 	}
 
+	if req.DomainID == "" {
+		req.DomainID = c.Param("id")
+	}
+	if req.RecordID == "" {
+		req.RecordID = c.Param("recordId")
+	}
 	if req.DomainID == "" || req.RecordID == "" {
 		middleware.ErrorResponse(c, "参数错误")
 		return
@@ -917,8 +935,8 @@ func UpdateRecord(c *gin.Context) {
 }
 
 type DeleteRecordRequest struct {
-	DomainID string `json:"domain_id" binding:"required"`
-	RecordID string `json:"record_id" binding:"required"`
+	DomainID string `json:"domain_id"`
+	RecordID string `json:"record_id"`
 }
 
 /*
@@ -936,6 +954,12 @@ func DeleteRecord(c *gin.Context) {
 		return
 	}
 
+	if req.DomainID == "" {
+		req.DomainID = c.Param("id")
+	}
+	if req.RecordID == "" {
+		req.RecordID = c.Param("recordId")
+	}
 	if req.DomainID == "" || req.RecordID == "" {
 		middleware.ErrorResponse(c, "参数错误")
 		return
@@ -985,8 +1009,8 @@ func DeleteRecord(c *gin.Context) {
 }
 
 type SetRecordStatusRequest struct {
-	DomainID string `json:"domain_id" binding:"required"`
-	RecordID string `json:"record_id" binding:"required"`
+	DomainID string `json:"domain_id"`
+	RecordID string `json:"record_id"`
 	Enable   bool   `json:"enable"`
 }
 
@@ -1005,6 +1029,12 @@ func SetRecordStatus(c *gin.Context) {
 		return
 	}
 
+	if req.DomainID == "" {
+		req.DomainID = c.Param("id")
+	}
+	if req.RecordID == "" {
+		req.RecordID = c.Param("recordId")
+	}
 	if req.DomainID == "" || req.RecordID == "" {
 		middleware.ErrorResponse(c, "参数错误")
 		return
@@ -1048,7 +1078,7 @@ func SetRecordStatus(c *gin.Context) {
 }
 
 type GetRecordLinesRequest struct {
-	DomainID string `json:"domain_id" binding:"required"`
+	DomainID string `json:"domain_id" form:"domain_id"`
 }
 
 /*
@@ -1066,6 +1096,9 @@ func GetRecordLines(c *gin.Context) {
 		return
 	}
 
+	if req.DomainID == "" {
+		req.DomainID = c.Param("id")
+	}
 	if req.DomainID == "" {
 		middleware.ErrorResponse(c, "缺少域名ID")
 		return
@@ -1098,8 +1131,8 @@ func GetRecordLines(c *gin.Context) {
 }
 
 type GetAccountDomainListRequest struct {
-	ID      string `json:"id" binding:"required"`
-	Keyword string `json:"keyword"`
+	ID      string `json:"id" form:"id"`
+	Keyword string `json:"keyword" form:"keyword"`
 }
 
 /*
@@ -1117,6 +1150,9 @@ func GetAccountDomainList(c *gin.Context) {
 		return
 	}
 
+	if req.ID == "" {
+		req.ID = c.Param("id")
+	}
 	if req.ID == "" {
 		middleware.ErrorResponse(c, "缺少账户ID")
 		return
@@ -1186,7 +1222,7 @@ func GetAccountDomainList(c *gin.Context) {
 }
 
 type UpdateDomainRequest struct {
-	ID         string     `json:"id" binding:"required"`
+	ID         string     `json:"id"`
 	IsHide     *bool      `json:"is_hide"`
 	IsSSO      *bool      `json:"is_sso"`
 	IsNotice   *bool      `json:"is_notice"`
@@ -1209,6 +1245,9 @@ func UpdateDomain(c *gin.Context) {
 		return
 	}
 
+	if req.ID == "" {
+		req.ID = c.Param("id")
+	}
 	if req.ID == "" {
 		middleware.ErrorResponse(c, "缺少域名ID")
 		return

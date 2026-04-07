@@ -230,14 +230,14 @@ func CreateAccount(c *gin.Context) {
 		return
 	}
 
-	logger.Info("创建DNS账户成功: %s (ID: %s)", req.Name, account.ID)
+	logger.Info("创建DNS账户成功: %s (ID: %d)", req.Name, account.ID)
 	dbcache.BustAccounts(uid)
 	service.Audit.LogAction(c, "create_account", "", fmt.Sprintf("创建DNS账户: %s (%s)", req.Name, req.Type))
 	middleware.SuccessResponse(c, gin.H{"id": account.ID})
 }
 
 type UpdateAccountRequest struct {
-	ID     string            `json:"id" binding:"required"`
+	ID     string            `json:"id"`
 	Type   string            `json:"type"`
 	Name   string            `json:"name"`
 	Config map[string]string `json:"config"`
@@ -290,7 +290,7 @@ func UpdateAccount(c *gin.Context) {
 }
 
 type DeleteAccountRequest struct {
-	ID string `json:"id" binding:"required"`
+	ID string `json:"id"`
 }
 
 /*
@@ -308,6 +308,9 @@ func DeleteAccount(c *gin.Context) {
 		return
 	}
 
+	if req.ID == "" {
+		req.ID = c.Param("id")
+	}
 	if req.ID == "" {
 		middleware.ErrorResponse(c, "缺少账户ID")
 		return
@@ -341,7 +344,7 @@ func DeleteAccount(c *gin.Context) {
 }
 
 type CheckAccountRequest struct {
-	ID string `json:"id" binding:"required"`
+	ID string `json:"id"`
 }
 
 /*
@@ -359,6 +362,9 @@ func CheckAccount(c *gin.Context) {
 		return
 	}
 
+	if req.ID == "" {
+		req.ID = c.Param("id")
+	}
 	if req.ID == "" {
 		middleware.ErrorResponse(c, "缺少账户ID")
 		return

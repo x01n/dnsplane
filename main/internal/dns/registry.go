@@ -56,8 +56,9 @@ func GetAllProviderConfigs() map[string]ProviderConfig {
 }
 
 var DefaultLineMapping = map[string]map[string]string{
-	"aliyun":     {"DEF": "default", "CT": "telecom", "CU": "unicom", "CM": "mobile", "AB": "oversea"},
-	"dnspod":     {"DEF": "0", "CT": "10=0", "CU": "10=1", "CM": "10=3", "AB": "3=0"},
+	"aliyun": {"DEF": "default", "CT": "telecom", "CU": "unicom", "CM": "mobile", "AB": "oversea"},
+	// DEF 须为空：CreateRecord 的 RecordLine 为线路名称（如「默认」），传 "0" 会报 RecordLineInvalid
+	"dnspod":     {"DEF": "", "CT": "10=0", "CU": "10=1", "CM": "10=3", "AB": "3=0"},
 	"huawei":     {"DEF": "default_view", "CT": "Dianxin", "CU": "Liantong", "CM": "Yidong", "AB": "Abroad"},
 	"west":       {"DEF": "", "CT": "LTEL", "CU": "LCNC", "CM": "LMOB", "AB": "LFOR"},
 	"dnsla":      {"DEF": "", "CT": "84613316902921216", "CU": "84613316923892736", "CM": "84613316953252864", "AB": ""},

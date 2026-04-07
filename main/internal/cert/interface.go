@@ -11,6 +11,8 @@ type OrderInfo struct {
 	Status         string               `json:"status"`
 	Identifiers    []Identifier         `json:"identifiers"`
 	Challenges     map[string]Challenge `json:"challenges"`
+	// PreferredChallenge ACME：空或 dns-01 为默认 DNS TXT；http-01 时对非通配符域名走 HTTP 校验（需公网 80）。IP 标识符始终 http-01。
+	PreferredChallenge string `json:"preferred_challenge,omitempty"`
 }
 
 /* Identifier 域名标识 */

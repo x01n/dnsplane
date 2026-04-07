@@ -23,7 +23,14 @@ var (
 func Register(name string, factory ProviderFactory, config ProviderConfig) {
 	providersMu.Lock()
 	defer providersMu.Unlock()
-	providers[name] = factory
+	_, hadCfg := configs[name]
+	if factory != nil {
+		providers[name] = factory
+	}
+	// acme 包 init 会用空 ProviderConfig 仅补全工厂，避免覆盖 providers.go 中的名称/说明/表单字段
+	if config.Type == "" && hadCfg {
+		return
+	}
 	configs[name] = config
 }
 

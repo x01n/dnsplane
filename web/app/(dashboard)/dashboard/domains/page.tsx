@@ -69,12 +69,21 @@ import { domainApi, accountApi, Domain, Account, DomainItem, WhoisInfo } from '@
 import { formatDate, getDaysRemaining } from '@/lib/utils'
 import { ProviderBadge } from '@/components/provider-icon'
 
+const LIST_PAGE_SIZE_OPTIONS = [10, 20, 50, 100] as const
+const LS_DOMAINS_PAGE_SIZE = 'dnsplane-domains-page-size'
+
+function readStoredDomainsPageSize(): number {
+  if (typeof window === 'undefined') return 20
+  const n = parseInt(localStorage.getItem(LS_DOMAINS_PAGE_SIZE) || '', 10)
+  return LIST_PAGE_SIZE_OPTIONS.includes(n as (typeof LIST_PAGE_SIZE_OPTIONS)[number]) ? n : 20
+}
+
 export default function DomainsPage() {
   const router = useRouter()
   const [domains, setDomains] = useState<Domain[]>([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
-  const [pageSize] = useState(20)
+  const [pageSize, setPageSize] = useState(readStoredDomainsPageSize)
   const [accounts, setAccounts] = useState<Account[]>([])
   const [loading, setLoading] = useState(true)
   const [keyword, setKeyword] = useState('')
@@ -131,11 +140,12 @@ export default function DomainsPage() {
     }
   }
 
-  const fetchDomains = async (p?: number) => {
+  const fetchDomains = async (p?: number, sizeOverride?: number) => {
     setLoading(true)
     try {
       const currentPage = p ?? page
-      const params: Record<string, string | number> = { page: currentPage, page_size: pageSize }
+      const ps = sizeOverride ?? pageSize
+      const params: Record<string, string | number> = { page: currentPage, page_size: ps }
       if (keyword) params.keyword = keyword
       if (selectedAid) params.aid = selectedAid
       const res = await domainApi.list(params)
@@ -166,6 +176,19 @@ export default function DomainsPage() {
     if (debounceRef.current) clearTimeout(debounceRef.current)
     setPage(1)
     fetchDomains(1)
+  }
+
+  const handlePageSizeChange = (value: string) => {
+    const next = parseInt(value, 10)
+    if (!LIST_PAGE_SIZE_OPTIONS.includes(next as (typeof LIST_PAGE_SIZE_OPTIONS)[number])) return
+    setPageSize(next)
+    try {
+      localStorage.setItem(LS_DOMAINS_PAGE_SIZE, String(next))
+    } catch {
+      // ignore
+    }
+    setPage(1)
+    fetchDomains(1, next)
   }
 
   /* 根据到期天数返回表格行高亮 className */
@@ -764,25 +787,48 @@ export default function DomainsPage() {
           )}
 
           {/* Pagination */}
-          {total > pageSize && (
-            <div className="flex flex-wrap items-center justify-between gap-2 mt-4 pt-4 border-t">
-              <p className="text-sm text-muted-foreground">
-                共 {total} 条，第 {page}/{Math.ceil(total / pageSize)} 页
-              </p>
+          {total > 0 && (
+            <div className="flex flex-wrap items-center justify-between gap-3 mt-4 pt-4 border-t">
+              <div className="flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
+                <span>
+                  共 {total} 条，第 {page}/{Math.max(1, Math.ceil(total / pageSize))} 页
+                </span>
+                <div className="flex items-center gap-2">
+                  <span className="text-muted-foreground whitespace-nowrap">每页</span>
+                  <Select value={String(pageSize)} onValueChange={handlePageSizeChange}>
+                    <SelectTrigger className="h-8 w-[92px]" aria-label="每页条数">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {LIST_PAGE_SIZE_OPTIONS.map((n) => (
+                        <SelectItem key={n} value={String(n)}>
+                          {n} 条
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
               <div className="flex items-center gap-2">
                 <Button
                   variant="outline"
                   size="sm"
                   disabled={page <= 1}
-                  onClick={() => { setPage(page - 1); fetchDomains(page - 1) }}
+                  onClick={() => {
+                    setPage(page - 1)
+                    fetchDomains(page - 1)
+                  }}
                 >
                   上一页
                 </Button>
                 <Button
                   variant="outline"
                   size="sm"
-                  disabled={page >= Math.ceil(total / pageSize)}
-                  onClick={() => { setPage(page + 1); fetchDomains(page + 1) }}
+                  disabled={page >= Math.max(1, Math.ceil(total / pageSize))}
+                  onClick={() => {
+                    setPage(page + 1)
+                    fetchDomains(page + 1)
+                  }}
                 >
                   下一页
                 </Button>

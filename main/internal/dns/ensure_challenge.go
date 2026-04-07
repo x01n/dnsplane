@@ -53,7 +53,11 @@ func EnsureChallengeRecord(ctx context.Context, p Provider, subHost, recordType,
 
 	pr, err := p.GetSubDomainRecords(ctx, subHost, 1, 100, "", "")
 	if err != nil {
-		return "", false, err
+		if TreatAsEmptySubDomainRecordListError(err) {
+			pr = &PageResult{Total: 0, Records: []Record{}}
+		} else {
+			return "", false, err
+		}
 	}
 	list, err := recordsFromPageResult(pr)
 	if err != nil {
@@ -74,6 +78,10 @@ func EnsureChallengeRecord(ctx context.Context, p Provider, subHost, recordType,
 			}
 			return "", true, nil
 		}
+	}
+	if strings.EqualFold(rt, "TXT") {
+		rid, err := p.AddDomainRecord(ctx, subHost, rt, wantValue, line, ttl, 0, nil, remark)
+		return rid, false, err
 	}
 
 	for _, rec := range sameType {

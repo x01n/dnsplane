@@ -103,7 +103,7 @@ func CreateCertCNAME(c *gin.Context) {
 }
 
 type DeleteCertCNAMERequest struct {
-	ID string `json:"id" binding:"required"`
+	ID string `json:"id"`
 }
 
 /*
@@ -124,6 +124,9 @@ func DeleteCertCNAME(c *gin.Context) {
 		return
 	}
 
+	if req.ID == "" {
+		req.ID = c.Param("id")
+	}
 	if req.ID == "" {
 		middleware.ErrorResponse(c, "缺少ID")
 		return
