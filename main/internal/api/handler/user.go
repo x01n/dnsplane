@@ -3,6 +3,8 @@ package handler
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
+	"fmt"
 	"main/internal/api/middleware"
 	"main/internal/database"
 	"main/internal/dbcache"
@@ -409,8 +411,8 @@ func GetLogs(c *gin.Context) {
 			"list":    logs,
 			"records": logs,
 			"stats": gin.H{
-				"today_count":       todayCount,
-				"distinct_users":    distinctUsers,
+				"today_count":      todayCount,
+				"distinct_users":   distinctUsers,
 				"distinct_domains": distinctDomains,
 			},
 		},
@@ -449,14 +451,54 @@ func GetSystemConfig(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"code": 0, "data": result})
 }
 
+// sysConfigJSONValueToDB 将前端 JSON 任意类型转为 SysConfig 表中的字符串（bool/number/null 等）
+func sysConfigJSONValueToDB(v interface{}) string {
+	if v == nil {
+		return ""
+	}
+	switch t := v.(type) {
+	case string:
+		return t
+	case bool:
+		if t {
+			return "true"
+		}
+		return "false"
+	case float64:
+		if t == float64(int64(t)) {
+			return strconv.FormatInt(int64(t), 10)
+		}
+		return fmt.Sprintf("%g", t)
+	case json.Number:
+		return t.String()
+	case []interface{}, map[string]interface{}:
+		b, err := json.Marshal(t)
+		if err != nil {
+			return fmt.Sprintf("%v", v)
+		}
+		return string(b)
+	default:
+		return fmt.Sprintf("%v", v)
+	}
+}
+
 func UpdateSystemConfig(c *gin.Context) {
-	var req map[string]string
-	if err := c.ShouldBindJSON(&req); err != nil {
+	var req map[string]interface{}
+	if d := middleware.GetDecryptedData(c); d != nil {
+		req = d
+	} else {
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"code": -1, "msg": "参数错误"})
+			return
+		}
+	}
+	if len(req) == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"code": -1, "msg": "参数错误"})
 		return
 	}
 
-	for key, value := range req {
+	for key, val := range req {
+		value := sysConfigJSONValueToDB(val)
 		database.DB.Where("key = ?", key).Assign(models.SysConfig{Key: key, Value: value}).FirstOrCreate(&models.SysConfig{})
 	}
 
