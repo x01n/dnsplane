@@ -15,6 +15,22 @@ env:
   IMAGE_NAME: ghcr.io/${{ github.repository }}
 
 jobs:
+  # Cache is unreliable across jobs for tag builds (restore misses matrix-saved keys).
+  # Create the release once; each binaries matrix leg uploads its own asset (no artifact quota for many small files if under limits; avoids binary cache).
+  release-init:
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ensure GitHub Release exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          if ! gh release view "$tag" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            gh release create "$tag" --repo "${GITHUB_REPOSITORY}" --title "$tag" --generate-notes
+          fi
+
   frontend:
     runs-on: ubuntu-latest
     steps:
@@ -40,7 +56,7 @@ jobs:
           path: main/web
 
   binaries:
-    needs: frontend
+    needs: [frontend, release-init]
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -112,90 +128,21 @@ jobs:
           name="dnsplane-${{ matrix.artifact }}"
           CGO_ENABLED=0 go build -buildvcs=false -trimpath -ldflags="-s -w" -o "dist/${name}${ext}" .
 
-      - uses: actions/cache/save@v4
-        with:
-          key: binary-${{ matrix.artifact }}-${{ github.sha }}
-          path: main/dist
-
-  release:
-    needs: binaries
-    if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/cache/restore@v4
-        with:
-          key: binary-linux-amd64-${{ github.sha }}
-          path: bin-linux-amd64
-          fail-on-cache-miss: true
-      - uses: actions/cache/restore@v4
-        with:
-          key: binary-linux-arm64-${{ github.sha }}
-          path: bin-linux-arm64
-          fail-on-cache-miss: true
-      - uses: actions/cache/restore@v4
-        with:
-          key: binary-linux-armv7-${{ github.sha }}
-          path: bin-linux-armv7
-          fail-on-cache-miss: true
-      - uses: actions/cache/restore@v4
-        with:
-          key: binary-linux-386-${{ github.sha }}
-          path: bin-linux-386
-          fail-on-cache-miss: true
-      - uses: actions/cache/restore@v4
-        with:
-          key: binary-darwin-amd64-${{ github.sha }}
-          path: bin-darwin-amd64
-          fail-on-cache-miss: true
-      - uses: actions/cache/restore@v4
-        with:
-          key: binary-darwin-arm64-${{ github.sha }}
-          path: bin-darwin-arm64
-          fail-on-cache-miss: true
-      - uses: actions/cache/restore@v4
-        with:
-          key: binary-windows-amd64-${{ github.sha }}
-          path: bin-windows-amd64
-          fail-on-cache-miss: true
-      - uses: actions/cache/restore@v4
-        with:
-          key: binary-windows-arm64-${{ github.sha }}
-          path: bin-windows-arm64
-          fail-on-cache-miss: true
-      - uses: actions/cache/restore@v4
-        with:
-          key: binary-freebsd-amd64-${{ github.sha }}
-          path: bin-freebsd-amd64
-          fail-on-cache-miss: true
-      - uses: actions/cache/restore@v4
-        with:
-          key: binary-freebsd-arm64-${{ github.sha }}
-          path: bin-freebsd-arm64
-          fail-on-cache-miss: true
-      - uses: actions/cache/restore@v4
-        with:
-          key: binary-linux-ppc64le-${{ github.sha }}
-          path: bin-linux-ppc64le
-          fail-on-cache-miss: true
-      - uses: actions/cache/restore@v4
-        with:
-          key: binary-linux-riscv64-${{ github.sha }}
-          path: bin-linux-riscv64
-          fail-on-cache-miss: true
-
-      - name: Flatten binaries for release
+      - name: Upload release asset
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
         run: |
-          mkdir -p release-assets
-          for d in bin-linux-amd64 bin-linux-arm64 bin-linux-armv7 bin-linux-386 \
-                   bin-darwin-amd64 bin-darwin-arm64 bin-windows-amd64 bin-windows-arm64 \
-                   bin-freebsd-amd64 bin-freebsd-arm64 bin-linux-ppc64le bin-linux-riscv64; do
-            find "$d" -type f -exec cp {} release-assets/ \;
-          done
-
-      - uses: softprops/action-gh-release@v2
-        with:
-          files: release-assets/*
-          generate_release_notes: true
+          set -euo pipefail
+          cd main/dist
+          shopt -s nullglob
+          files=( *)
+          if [[ ${#files[@]} -eq 0 ]]; then
+            echo "No files in main/dist" >&2
+            exit 1
+          fi
+          gh release upload "${GITHUB_REF_NAME}" "${files[@]}" --repo "${GITHUB_REPOSITORY}" --clobber
 
   docker:
     runs-on: ubuntu-latest
