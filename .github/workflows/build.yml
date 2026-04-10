@@ -32,11 +32,12 @@ jobs:
           npm ci
           npm run build:ci
 
-      - uses: actions/upload-artifact@v4
+      # Use Actions cache instead of artifacts to avoid org artifact storage quota
+      # (artifacts and cache bill separately; see run 24220646667 / upload-artifact failure).
+      - uses: actions/cache/save@v4
         with:
-          name: embedded-web
+          key: embedded-web-${{ github.sha }}
           path: main/web
-          retention-days: 14
 
   binaries:
     needs: frontend
@@ -86,10 +87,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/cache/restore@v4
         with:
-          name: embedded-web
+          key: embedded-web-${{ github.sha }}
           path: main/web
+          fail-on-cache-miss: true
 
       - uses: actions/setup-go@v5
         with:
@@ -110,22 +112,85 @@ jobs:
           name="dnsplane-${{ matrix.artifact }}"
           CGO_ENABLED=0 go build -buildvcs=false -trimpath -ldflags="-s -w" -o "dist/${name}${ext}" .
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/cache/save@v4
         with:
-          name: binary-${{ matrix.artifact }}
-          path: main/dist/*
-          retention-days: 14
+          key: binary-${{ matrix.artifact }}-${{ github.sha }}
+          path: main/dist
 
   release:
     needs: binaries
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/cache/restore@v4
         with:
-          path: release-assets
-          pattern: binary-*
-          merge-multiple: true
+          key: binary-linux-amd64-${{ github.sha }}
+          path: bin-linux-amd64
+          fail-on-cache-miss: true
+      - uses: actions/cache/restore@v4
+        with:
+          key: binary-linux-arm64-${{ github.sha }}
+          path: bin-linux-arm64
+          fail-on-cache-miss: true
+      - uses: actions/cache/restore@v4
+        with:
+          key: binary-linux-armv7-${{ github.sha }}
+          path: bin-linux-armv7
+          fail-on-cache-miss: true
+      - uses: actions/cache/restore@v4
+        with:
+          key: binary-linux-386-${{ github.sha }}
+          path: bin-linux-386
+          fail-on-cache-miss: true
+      - uses: actions/cache/restore@v4
+        with:
+          key: binary-darwin-amd64-${{ github.sha }}
+          path: bin-darwin-amd64
+          fail-on-cache-miss: true
+      - uses: actions/cache/restore@v4
+        with:
+          key: binary-darwin-arm64-${{ github.sha }}
+          path: bin-darwin-arm64
+          fail-on-cache-miss: true
+      - uses: actions/cache/restore@v4
+        with:
+          key: binary-windows-amd64-${{ github.sha }}
+          path: bin-windows-amd64
+          fail-on-cache-miss: true
+      - uses: actions/cache/restore@v4
+        with:
+          key: binary-windows-arm64-${{ github.sha }}
+          path: bin-windows-arm64
+          fail-on-cache-miss: true
+      - uses: actions/cache/restore@v4
+        with:
+          key: binary-freebsd-amd64-${{ github.sha }}
+          path: bin-freebsd-amd64
+          fail-on-cache-miss: true
+      - uses: actions/cache/restore@v4
+        with:
+          key: binary-freebsd-arm64-${{ github.sha }}
+          path: bin-freebsd-arm64
+          fail-on-cache-miss: true
+      - uses: actions/cache/restore@v4
+        with:
+          key: binary-linux-ppc64le-${{ github.sha }}
+          path: bin-linux-ppc64le
+          fail-on-cache-miss: true
+      - uses: actions/cache/restore@v4
+        with:
+          key: binary-linux-riscv64-${{ github.sha }}
+          path: bin-linux-riscv64
+          fail-on-cache-miss: true
+
+      - name: Flatten binaries for release
+        run: |
+          mkdir -p release-assets
+          for d in bin-linux-amd64 bin-linux-arm64 bin-linux-armv7 bin-linux-386 \
+                   bin-darwin-amd64 bin-darwin-arm64 bin-windows-amd64 bin-windows-arm64 \
+                   bin-freebsd-amd64 bin-freebsd-arm64 bin-linux-ppc64le bin-linux-riscv64; do
+            find "$d" -type f -exec cp {} release-assets/ \;
+          done
 
       - uses: softprops/action-gh-release@v2
         with:
