@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useMemo, useRef } from 'react'
+import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import {
   Plus,
@@ -16,6 +17,8 @@ import {
   FileText,
   RefreshCw,
   Shield,
+  ShieldCheck,
+  Activity,
   Grid3X3,
   List,
   Filter,
@@ -72,7 +75,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Switch } from '@/components/ui/switch'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { toast } from 'sonner'
-import { domainApi, monitorApi, DNSRecord, RecordLine, authApi, User } from '@/lib/api'
+import { domainApi, DNSRecord, RecordLine, authApi, User } from '@/lib/api'
 import { DNS_RECORD_TYPES, copyToClipboard, cn, hasModuleAccess } from '@/lib/utils'
 import { ProviderBadge } from '@/components/provider-icon'
 
@@ -124,7 +127,6 @@ export default function DomainRecordsClient() {
   const [dialogOpen, setDialogOpen] = useState(false)
   const [batchDialogOpen, setBatchDialogOpen] = useState(false)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
-  const [monitorDialogOpen, setMonitorDialogOpen] = useState(false)
   const [selectedRecord, setSelectedRecord] = useState<DNSRecord | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [selectedRecordIds, setSelectedRecordIds] = useState<string[]>([])
@@ -146,16 +148,9 @@ export default function DomainRecordsClient() {
     ttl: 600,
   })
 
-  const [monitorData, setMonitorData] = useState({
-    type: 0,
-    check_type: 0,
-    backup_value: '',
-    frequency: 60,
-    cycle: 3,
-    timeout: 5,
-  })
   const [currentUser, setCurrentUser] = useState<User | null>(null)
   const canUseMonitor = currentUser != null && hasModuleAccess(currentUser, 'monitor')
+  const canUseCert = currentUser != null && hasModuleAccess(currentUser, 'cert')
 
   // 记录统计
   const recordStats = useMemo(() => {
@@ -190,11 +185,13 @@ export default function DomainRecordsClient() {
     return () => clearTimeout(t)
   }, [keyword])
 
+  // domainId 变化时拉取；fetch 函数内含本地状态，不宜放入依赖避免循环
   useEffect(() => {
     if (domainId) {
       fetchDomainInfo()
       fetchLines()
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [domainId])
 
   const filterKey = useMemo(
@@ -343,17 +340,13 @@ export default function DomainRecordsClient() {
     setDeleteDialogOpen(true)
   }
 
-  const openMonitorDialog = (record: DNSRecord) => {
-    setSelectedRecord(record)
-    setMonitorData({
-      type: 0,
-      check_type: 0,
-      backup_value: '',
-      frequency: 60,
-      cycle: 3,
-      timeout: 5,
-    })
-    setMonitorDialogOpen(true)
+  /** 跳转监控页智能创建向导，并预填域名与子域（主机记录） */
+  const openMonitorWizard = (record: DNSRecord) => {
+    if (!domainId) return
+    const rr = encodeURIComponent(record.Name)
+    router.push(
+      `/dashboard/monitor?open_smart=1&prefill_did=${encodeURIComponent(domainId)}&prefill_rr=${rr}`,
+    )
   }
 
   const handleSubmit = async () => {
@@ -420,35 +413,6 @@ export default function DomainRecordsClient() {
       }
     } catch {
       toast.error('操作失败')
-    }
-  }
-
-  const handleCreateMonitor = async () => {
-    if (!selectedRecord) return
-    setSubmitting(true)
-    try {
-      const res = await monitorApi.create({
-        domain_id: domainId,
-        rr: selectedRecord.Name,
-        record_id: selectedRecord.RecordId,
-        main_value: Array.isArray(selectedRecord.Value) ? selectedRecord.Value[0] : selectedRecord.Value,
-        type: monitorData.type,
-        check_type: monitorData.check_type,
-        backup_value: monitorData.backup_value,
-        frequency: monitorData.frequency,
-        cycle: monitorData.cycle,
-        timeout: monitorData.timeout,
-      })
-      if (res.code === 0) {
-        toast.success('监控任务创建成功')
-        setMonitorDialogOpen(false)
-      } else {
-        toast.error(res.msg || '创建失败')
-      }
-    } catch {
-      toast.error('创建失败')
-    } finally {
-      setSubmitting(false)
     }
   }
 
@@ -578,6 +542,26 @@ export default function DomainRecordsClient() {
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto sm:justify-end">
+          {domainInfo && canUseCert && (
+            <Button variant="outline" size="sm" className="min-h-10 flex-1 sm:flex-initial" asChild>
+              <Link href={`/dashboard/cert?domain=${encodeURIComponent(domainInfo.name)}`}>
+                <ShieldCheck className="h-4 w-4 sm:mr-2" />
+                <span className="hidden sm:inline">申请证书</span>
+                <span className="sm:hidden">证书</span>
+              </Link>
+            </Button>
+          )}
+          {domainId && canUseMonitor && (
+            <Button variant="outline" size="sm" className="min-h-10 flex-1 sm:flex-initial" asChild>
+              <Link
+                href={`/dashboard/monitor?open_smart=1&prefill_did=${encodeURIComponent(domainId)}`}
+              >
+                <Activity className="h-4 w-4 sm:mr-2" />
+                <span className="hidden sm:inline">智能监控</span>
+                <span className="sm:hidden">监控</span>
+              </Link>
+            </Button>
+          )}
           <Button variant="outline" size="sm" className="min-h-10 flex-1 sm:flex-initial" onClick={handleRefresh} disabled={refreshing}>
             <RefreshCw className={cn("h-4 w-4 sm:mr-2", refreshing && "animate-spin")} />
             <span className="hidden sm:inline">刷新</span>
@@ -867,9 +851,9 @@ export default function DomainRecordsClient() {
                               复制记录值
                             </DropdownMenuItem>
                             {canUseMonitor && (record.Type === 'A' || record.Type === 'AAAA') && (
-                              <DropdownMenuItem onClick={() => openMonitorDialog(record)}>
+                              <DropdownMenuItem onClick={() => openMonitorWizard(record)}>
                                 <Shield className="h-4 w-4 mr-2" />
-                                添加容灾监控
+                                智能监控向导
                               </DropdownMenuItem>
                             )}
                             <DropdownMenuSeparator />
@@ -921,9 +905,9 @@ export default function DomainRecordsClient() {
                           编辑
                         </DropdownMenuItem>
                         {canUseMonitor && (record.Type === 'A' || record.Type === 'AAAA') && (
-                          <DropdownMenuItem onClick={() => openMonitorDialog(record)}>
+                          <DropdownMenuItem onClick={() => openMonitorWizard(record)}>
                             <Shield className="h-4 w-4 mr-2" />
-                            添加监控
+                            智能监控向导
                           </DropdownMenuItem>
                         )}
                         <DropdownMenuSeparator />
@@ -1282,115 +1266,6 @@ export default function DomainRecordsClient() {
         </AlertDialogContent>
       </AlertDialog>
 
-      {/* 添加容灾监控弹窗 */}
-      <Dialog open={monitorDialogOpen} onOpenChange={setMonitorDialogOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>添加容灾监控</DialogTitle>
-            <DialogDescription>
-              为记录 &ldquo;{selectedRecord?.Name}&rdquo; 配置容灾切换任务
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4">
-            <div className="p-3 bg-muted rounded-lg space-y-1">
-              <div className="flex items-center gap-2 text-sm">
-                <span className="text-muted-foreground">主机记录:</span>
-                <span className="font-medium">{selectedRecord?.Name}</span>
-              </div>
-              <div className="flex items-center gap-2 text-sm">
-                <span className="text-muted-foreground">记录值:</span>
-                <code className="bg-background px-1.5 py-0.5 rounded text-xs">
-                  {selectedRecord && (Array.isArray(selectedRecord.Value) ? selectedRecord.Value[0] : selectedRecord.Value)}
-                </code>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label>切换方式</Label>
-                <Select
-                  value={monitorData.type.toString()}
-                  onValueChange={(v) => setMonitorData({ ...monitorData, type: parseInt(v) })}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="0">暂停/启用记录</SelectItem>
-                    <SelectItem value="1">删除记录</SelectItem>
-                    <SelectItem value="2">切换备用记录</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label>检测类型</Label>
-                <Select
-                  value={monitorData.check_type.toString()}
-                  onValueChange={(v) => setMonitorData({ ...monitorData, check_type: parseInt(v) })}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="0">Ping</SelectItem>
-                    <SelectItem value="1">TCP</SelectItem>
-                    <SelectItem value="2">HTTP</SelectItem>
-                    <SelectItem value="3">HTTPS</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-
-            {monitorData.type === 2 && (
-              <div className="space-y-2">
-                <Label>备用IP/值</Label>
-                <Input
-                  value={monitorData.backup_value}
-                  onChange={(e) => setMonitorData({ ...monitorData, backup_value: e.target.value })}
-                  placeholder="故障时切换到的备用IP或域名"
-                />
-              </div>
-            )}
-
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-              <div className="space-y-2">
-                <Label>检测间隔(秒)</Label>
-                <Input
-                  type="number"
-                  value={monitorData.frequency}
-                  onChange={(e) => setMonitorData({ ...monitorData, frequency: parseInt(e.target.value) || 60 })}
-                  min={10}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label>失败次数</Label>
-                <Input
-                  type="number"
-                  value={monitorData.cycle}
-                  onChange={(e) => setMonitorData({ ...monitorData, cycle: parseInt(e.target.value) || 3 })}
-                  min={1}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label>超时时间(秒)</Label>
-                <Input
-                  type="number"
-                  value={monitorData.timeout}
-                  onChange={(e) => setMonitorData({ ...monitorData, timeout: parseInt(e.target.value) || 5 })}
-                  min={1}
-                />
-              </div>
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setMonitorDialogOpen(false)}>取消</Button>
-            <Button onClick={handleCreateMonitor} disabled={submitting}>
-              {submitting && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
-              创建监控
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
   )
 }

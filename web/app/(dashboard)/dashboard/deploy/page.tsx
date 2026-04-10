@@ -16,6 +16,13 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { toast } from 'sonner'
 import { certApi, CertDeploy, CertAccount, CertOrder, CertProviderConfig, ProviderConfigField } from '@/lib/api'
 import {
+  certOrderDomainsLine,
+  certOrderKindShort,
+  compareIssuedCertOrders,
+  formatCertOrderExpiryLine,
+} from '@/lib/cert-order-display'
+import { CertOrderSelectItem } from '@/components/cert-order-select'
+import {
   evaluateDeployFieldShow,
   isDeployFieldVisible,
   mergeProviderFieldDefaults,
@@ -104,6 +111,14 @@ export default function DeployPage() {
     if (!account) return undefined
     return providers[account.type]
   }, [formData.account_id, accounts, providers])
+
+  const issuedOrders = useMemo(
+    () => [...orders].filter((o) => o.status === 3).sort(compareIssuedCertOrders),
+    [orders],
+  )
+
+  const orderSelectTriggerClass =
+    'w-full min-h-[4.25rem] h-auto items-start py-2.5 whitespace-normal text-left [&_[data-slot=select-value]]:line-clamp-none [&_[data-slot=select-value]]:w-full [&_[data-slot=select-value]]:items-start [&_[data-slot=select-value]]:text-left'
 
   const applyAccountDeployDefaults = (accountId: string, base: Record<string, string> = {}) => {
     const account = accounts.find(a => a.id.toString() === accountId)
@@ -257,7 +272,7 @@ export default function DeployPage() {
       } else {
         toast.error(res.msg || '操作失败')
       }
-    } catch (error) {
+    } catch {
       toast.error('操作失败')
     } finally {
       setSubmitting(false)
@@ -273,7 +288,7 @@ export default function DeployPage() {
       } else {
         toast.error(res.msg || '部署失败')
       }
-    } catch (error) {
+    } catch {
       toast.error('部署失败')
     }
   }
@@ -293,7 +308,7 @@ export default function DeployPage() {
       } else {
         toast.error(res.msg || '删除失败')
       }
-    } catch (error) {
+    } catch {
       toast.error('删除失败')
     } finally {
       setShowDeleteDialog(false)
@@ -327,14 +342,32 @@ export default function DeployPage() {
     )
   }
 
-  const getOrderDisplay = (orderId: number) => {
-    const order = orders.find(o => o.id === orderId)
-    if (!order) return `订单 #${orderId}`
-    const domainStr = order.domains?.slice(0, 2).join(', ')
-    if (order.domains && order.domains.length > 2) {
-      return `${domainStr} 等${order.domains.length}个域名`
+  const renderOrderCell = (orderId: number) => {
+    const order = orders.find((o) => o.id === orderId)
+    if (!order) {
+      return <span className="text-muted-foreground tabular-nums">订单 #{orderId}</span>
     }
-    return domainStr || `订单 #${orderId}`
+    const exp = formatCertOrderExpiryLine(order)
+    return (
+      <div className="max-w-[280px] space-y-1">
+        <p className="text-sm font-medium leading-snug break-all">{certOrderDomainsLine(order, 3)}</p>
+        <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-muted-foreground">
+          <span className="tabular-nums">#{order.id}</span>
+          <span>{certOrderKindShort(order)}</span>
+          <span
+            className={
+              exp.text === '已过期'
+                ? 'text-destructive font-medium'
+                : exp.urgent
+                  ? 'text-amber-700 dark:text-amber-400'
+                  : ''
+            }
+          >
+            {exp.text}
+          </span>
+        </div>
+      </div>
+    )
   }
 
   return (
@@ -488,19 +521,7 @@ export default function DeployPage() {
                           }}
                         />
                       </TableCell>
-                      <TableCell>
-                        <div className="max-w-[200px]">
-                          {deploy.domains?.slice(0, 2).map((d, i) => (
-                            <div key={i} className="truncate text-sm">{d}</div>
-                          ))}
-                          {deploy.domains && deploy.domains.length > 2 && (
-                            <div className="text-xs text-muted-foreground">等 {deploy.domains.length} 个域名</div>
-                          )}
-                          {(!deploy.domains || deploy.domains.length === 0) && (
-                            <span className="text-muted-foreground">{getOrderDisplay(deploy.oid)}</span>
-                          )}
-                        </div>
-                      </TableCell>
+                      <TableCell>{renderOrderCell(deploy.oid)}</TableCell>
                       <TableCell>
                         <span className="text-sm">{deploy.type_name || accounts.find(a => a.id === deploy.aid)?.name || '-'}</span>
                       </TableCell>
@@ -515,7 +536,7 @@ export default function DeployPage() {
                             try {
                               await certApi.updateDeploy(deploy.id, { ...deploy, active: !deploy.active })
                               loadData()
-                            } catch (e) {
+                            } catch {
                               toast.error('操作失败')
                             }
                           }}
@@ -583,19 +604,23 @@ export default function DeployPage() {
             </div>
             <div className="space-y-2">
               <Label>证书订单 *</Label>
-              <Select value={formData.order_id} onValueChange={(v) => setFormData({ ...formData, order_id: v })}>
-                <SelectTrigger>
-                  <SelectValue placeholder="选择证书订单" />
+              <p className="text-xs text-muted-foreground">
+                仅显示已签发订单；按剩余有效期排序，快过期在前。下拉内可看到域名、CA、密钥、验证方式与到期。
+              </p>
+              <Select
+                value={formData.order_id}
+                onValueChange={(v) => setFormData({ ...formData, order_id: v })}
+              >
+                <SelectTrigger className={orderSelectTriggerClass}>
+                  <SelectValue placeholder="选择已签发的证书订单" />
                 </SelectTrigger>
-                <SelectContent>
-                  {orders.filter(o => o.status === 3).map((order) => (
-                    <SelectItem key={order.id} value={order.id.toString()}>
-                      {order.domains?.slice(0, 2).join(', ')} {order.domains && order.domains.length > 2 ? `等${order.domains.length}个域名` : ''}
-                    </SelectItem>
+                <SelectContent position="popper" className="max-h-[min(70vh,380px)] w-[min(100vw-2rem,520px)] max-w-[520px]">
+                  {issuedOrders.map((order) => (
+                    <CertOrderSelectItem key={order.id} order={order} />
                   ))}
                 </SelectContent>
               </Select>
-              {orders.filter(o => o.status === 3).length === 0 && (
+              {issuedOrders.length === 0 && (
                 <p className="text-xs text-muted-foreground">暂无已签发的证书订单</p>
               )}
             </div>
@@ -679,15 +704,16 @@ export default function DeployPage() {
             </div>
             <div className="space-y-2">
               <Label>证书订单 *</Label>
-              <Select value={formData.order_id} onValueChange={(v) => setFormData({ ...formData, order_id: v })}>
-                <SelectTrigger>
-                  <SelectValue placeholder="选择证书订单" />
+              <Select
+                value={formData.order_id}
+                onValueChange={(v) => setFormData({ ...formData, order_id: v })}
+              >
+                <SelectTrigger className={orderSelectTriggerClass}>
+                  <SelectValue placeholder="选择已签发的证书订单" />
                 </SelectTrigger>
-                <SelectContent>
-                  {orders.filter(o => o.status === 3).map((order) => (
-                    <SelectItem key={order.id} value={order.id.toString()}>
-                      {order.domains?.slice(0, 2).join(', ')} {order.domains && order.domains.length > 2 ? `等${order.domains.length}个域名` : ''}
-                    </SelectItem>
+                <SelectContent position="popper" className="max-h-[min(70vh,380px)] w-[min(100vw-2rem,520px)] max-w-[520px]">
+                  {issuedOrders.map((order) => (
+                    <CertOrderSelectItem key={order.id} order={order} />
                   ))}
                 </SelectContent>
               </Select>

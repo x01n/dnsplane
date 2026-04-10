@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog'
 import { toast } from 'sonner'
 import { logApi, userApi, OperationLog, OperationLogStats, User } from '@/lib/api'
-import { ScrollText, Search, RefreshCw, Eye, Calendar, User as UserIcon, Globe, Activity, Trash2 } from 'lucide-react'
+import { ScrollText, Search, RefreshCw, Eye, Calendar, User as UserIcon, Globe, Activity, Trash2, Download } from 'lucide-react'
 import { TableSkeleton } from '@/components/table-skeleton'
 import { EmptyState } from '@/components/empty-state'
 import { formatDate } from '@/lib/utils'
@@ -263,6 +263,61 @@ const ACTION_OPTIONS = [
   { value: 'totp', label: '二步验证' },
 ]
 
+function defaultLogWeekRange(): { dateFrom: string; dateTo: string } {
+  const end = new Date()
+  const start = new Date()
+  start.setDate(start.getDate() - 6)
+  const ymd = (d: Date) =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+  return { dateFrom: ymd(start), dateTo: ymd(end) }
+}
+
+function isDestructiveLogAction(action: string) {
+  const a = action.toLowerCase()
+  return (
+    a.includes('delete') ||
+    a.includes('_del') ||
+    a.includes('clean') ||
+    a.includes('clear') ||
+    a === 'logout' ||
+    a.includes('reset_password') ||
+    a.includes('reset-password') ||
+    a.includes('reset_totp')
+  )
+}
+
+function csvEscape(s: string) {
+  return `"${String(s).replace(/"/g, '""')}"`
+}
+
+function exportLogsPageCsv(rows: OperationLog[]) {
+  const headers = ['id', 'username', 'uid', 'action', 'domain', 'created_at', 'data']
+  const lines = [headers.join(',')]
+  for (const log of rows) {
+    const data = (log.data || '').replace(/\r?\n/g, ' ')
+    lines.push(
+      [
+        log.id,
+        log.username || '',
+        log.uid,
+        log.action,
+        log.domain || '',
+        log.created_at,
+        data.slice(0, 2000),
+      ]
+        .map((x) => csvEscape(String(x)))
+        .join(','),
+    )
+  }
+  const blob = new Blob([`\ufeff${lines.join('\n')}`], { type: 'text/csv;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `operation-logs-page-${new Date().toISOString().slice(0, 10)}.csv`
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
 export default function LogsPage() {
   const [logs, setLogs] = useState<OperationLog[]>([])
   const [users, setUsers] = useState<User[]>([])
@@ -276,6 +331,7 @@ export default function LogsPage() {
   /** 与当前筛选条件一致的全量统计（非仅本页） */
   const [logStats, setLogStats] = useState<OperationLogStats | null>(null)
   const pageSize = 20
+  const [dateRange, setDateRange] = useState(() => defaultLogWeekRange())
 
   const [showDetailDialog, setShowDetailDialog] = useState(false)
   const [selectedLog, setSelectedLog] = useState<OperationLog | null>(null)
@@ -288,7 +344,7 @@ export default function LogsPage() {
   useEffect(() => {
     loadData()
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, userId, actionFilter])
+  }, [page, userId, actionFilter, dateRange.dateFrom, dateRange.dateTo])
 
   const loadUsers = async () => {
     try {
@@ -328,6 +384,8 @@ export default function LogsPage() {
       if (domain) params.domain = domain
       if (userId && userId !== 'all') params.user_id = userId
       if (actionFilter && actionFilter !== 'all') params.action = actionFilter
+      if (dateRange.dateFrom) params.date_from = dateRange.dateFrom
+      if (dateRange.dateTo) params.date_to = dateRange.dateTo
 
       const res = await logApi.list(params)
       if (res.code === 0 && res.data) {
@@ -347,6 +405,16 @@ export default function LogsPage() {
   const handleSearch = () => {
     setPage(1)
     loadData()
+  }
+
+  const applyWeekPreset = () => {
+    setDateRange(defaultLogWeekRange())
+    setPage(1)
+  }
+
+  const clearDateRange = () => {
+    setDateRange({ dateFrom: '', dateTo: '' })
+    setPage(1)
   }
 
   const handleViewDetail = (log: OperationLog) => {
@@ -467,9 +535,43 @@ export default function LogsPage() {
       <Card>
         <CardHeader>
           <CardTitle>日志列表</CardTitle>
-          <CardDescription>查看所有系统操作记录</CardDescription>
+          <CardDescription>
+            默认展示最近 7 天；可清空日期查看全部。导出为当前页 CSV。
+          </CardDescription>
         </CardHeader>
         <CardContent>
+          <div className="flex flex-col sm:flex-row flex-wrap gap-3 mb-4 items-end">
+            <div className="space-y-1">
+              <label className="text-xs text-muted-foreground">开始日期</label>
+              <Input
+                type="date"
+                value={dateRange.dateFrom}
+                onChange={(e) => {
+                  setPage(1)
+                  setDateRange((p) => ({ ...p, dateFrom: e.target.value }))
+                }}
+                className="w-[160px]"
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs text-muted-foreground">结束日期</label>
+              <Input
+                type="date"
+                value={dateRange.dateTo}
+                onChange={(e) => {
+                  setPage(1)
+                  setDateRange((p) => ({ ...p, dateTo: e.target.value }))
+                }}
+                className="w-[160px]"
+              />
+            </div>
+            <Button type="button" variant="secondary" size="sm" onClick={applyWeekPreset}>
+              近 7 天
+            </Button>
+            <Button type="button" variant="ghost" size="sm" onClick={clearDateRange}>
+              全部时间
+            </Button>
+          </div>
           <div className="flex flex-col sm:flex-row gap-4 mb-6">
             <div className="relative flex-1">
               <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
@@ -520,6 +622,14 @@ export default function LogsPage() {
               <RefreshCw className="h-4 w-4 mr-2" />
               刷新
             </Button>
+            <Button
+              variant="outline"
+              disabled={logs.length === 0}
+              onClick={() => exportLogsPageCsv(logs)}
+            >
+              <Download className="h-4 w-4 mr-2" />
+              导出本页
+            </Button>
           </div>
 
           {loading ? (
@@ -545,7 +655,14 @@ export default function LogsPage() {
               </TableHeader>
               <TableBody>
                 {logs.map((log) => (
-                    <TableRow key={log.id}>
+                    <TableRow
+                      key={log.id}
+                      className={
+                        isDestructiveLogAction(log.action)
+                          ? 'bg-destructive/[0.06] hover:bg-destructive/[0.1] dark:bg-destructive/10 dark:hover:bg-destructive/15'
+                          : undefined
+                      }
+                    >
                       <TableCell>
                         <span className="text-muted-foreground">#{log.id}</span>
                       </TableCell>

@@ -41,7 +41,10 @@ export function TurnstileWidget({ siteKey, onToken, refreshSignal = 0, disabled,
   const hostRef = useRef<HTMLDivElement>(null)
   const widgetIdRef = useRef<string | null>(null)
   const onTokenRef = useRef(onToken)
-  onTokenRef.current = onToken
+
+  useEffect(() => {
+    onTokenRef.current = onToken
+  }, [onToken])
 
   useEffect(() => {
     if (!siteKey || disabled) {

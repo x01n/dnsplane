@@ -251,7 +251,13 @@ export default function SettingsPage() {
         pass: config.proxy_password,
       })
       if (res.code === 0) {
-        toast.success('代理连接成功')
+        const lat = res.data?.latency
+        const st = res.data?.status
+        toast.success(
+          typeof lat === 'number'
+            ? `代理连接成功（延迟约 ${lat} ms${st != null ? `，HTTP ${st}` : ''}）`
+            : '代理连接成功',
+        )
       } else {
         toast.error(res.msg || '代理连接失败')
       }

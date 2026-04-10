@@ -157,7 +157,12 @@ class ApiClient {
       throw new Error('未登录或登录已过期')
     }
 
-    const result = await response.json()
+    let result: ApiResponse<T>
+    try {
+      result = (await response.json()) as ApiResponse<T>
+    } catch {
+      throw new Error('服务器返回了无效的响应格式')
+    }
     if (
       typeof process !== 'undefined' &&
       process.env.NODE_ENV === 'development' &&
@@ -325,10 +330,20 @@ export const domainApi = {
     api.post('/domains/sync', data),
   update: (id: number, data: Partial<Domain>) => api.post<Domain>(`/domains/${id}`, data),
   delete: (id: number) => api.post(`/domains/${id}/delete`, {}),
-  batchAction: (data: { ids: number[]; action: string; [key: string]: unknown }) =>
-    api.post('/domains/batch', data),
+  /** 后端 BatchDomainActionRequest.ids 为 []string，此处统一转字符串 */
+  batchAction: (data: {
+    ids: (number | string)[]
+    action: string
+    is_notice?: boolean
+    remark?: string
+  }) =>
+    api.post('/domains/batch', {
+      ...data,
+      ids: data.ids.map((id) => String(id)),
+    }),
   updateExpire: (id: number) => api.post(`/domains/${id}/update-expire`),
-  batchUpdateExpire: (ids: number[]) => api.post('/domains/batch/update-expire', { ids }),
+  batchUpdateExpire: (ids: number[]) =>
+    api.post('/domains/batch/update-expire', { ids: ids.map((id) => String(id)) }),
   getRecords: (id: number, params?: { page?: number; page_size?: number; keyword?: string; type?: string; line?: string }) =>
     api.get<{ total: number; list: DNSRecord[] }>(`/domains/${id}/records`, params),
   createRecord: (id: number, data: { name: string; type: string; value: string; line?: string; ttl?: number; mx?: number; remark?: string }) =>
@@ -378,6 +393,9 @@ export const monitorApi = {
     }),
   getOverview: () => api.get<MonitorOverview>('/monitor/overview'),
   batchCreate: (data: { tasks: Partial<MonitorTask>[] }) => api.post('/monitor/tasks/batch', data),
+  /** 智能创建（lookup 选记录后批量建任务），与 handler.AutoCreateMonitorTask 一致 */
+  autoCreate: (data: Record<string, unknown>) =>
+    api.post<{ ids: number[]; created: number }>('/monitor/tasks/auto-create', data),
   getStatus: () => api.get<{ running: boolean; last_run: string }>('/monitor/status'),
 }
 
@@ -480,6 +498,9 @@ export const logApi = {
     user_id?: string | number
     action?: string
     entity?: string
+    /** 含当日，格式 YYYY-MM-DD，与 date_to 均为可选 */
+    date_from?: string
+    date_to?: string
   }) => api.get<OperationLogListData>('/logs', params),
 }
 
@@ -510,8 +531,14 @@ export const systemApi = {
   testMail: () => api.post('/system/mail/test'),
   testTelegram: () => api.post('/system/telegram/test'),
   testWebhook: () => api.post('/system/webhook/test'),
-  testProxy: (data: { server: string; port: number; type: string; user?: string; password?: string }) =>
-    api.post('/system/proxy/test', data),
+  /** 与 handler.TestProxy JSON 一致：host、pass（非 server/password） */
+  testProxy: (data: {
+    host: string
+    port: number
+    type: string
+    user?: string
+    pass?: string
+  }) => api.post<{ latency?: number; status?: number }>('/system/proxy/test', data),
   clearCache: () => api.post('/system/cache/clear'),
   getTaskStatus: () => api.get<{ running: boolean; last_run: string; error?: string }>('/system/task/status'),
   getCronConfig: () => api.get<CronConfig>('/system/cron'),

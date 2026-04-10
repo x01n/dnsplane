@@ -23,6 +23,8 @@ import {
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { formatDate } from '@/lib/utils'
 import { ProviderBadge } from '@/components/provider-icon'
+import { EmptyState } from '@/components/empty-state'
+import { TableSkeleton } from '@/components/table-skeleton'
 import Link from 'next/link'
 
 export default function DeployAccountsPage() {
@@ -42,9 +44,11 @@ export default function DeployAccountsPage() {
     remark: '',
   })
 
+  // 仅挂载时拉取；keyword 由搜索显式调用 fetchAccounts
   useEffect(() => {
     fetchProviders()
     fetchAccounts()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const fetchProviders = async () => {
@@ -64,6 +68,8 @@ export default function DeployAccountsPage() {
           deploy_note: cfg.deploy_note,
         }))
         setProviders(providerList)
+      } else if (res.code !== 0) {
+        toast.error(res.msg || '获取部署方式列表失败')
       }
     } catch {
       toast.error('获取部署方式列表失败')
@@ -79,9 +85,13 @@ export default function DeployAccountsPage() {
         setAccounts(data.filter(a => 
           !keyword || a.name.toLowerCase().includes(keyword.toLowerCase())
         ))
+      } else {
+        toast.error(res.msg || '获取账户列表失败')
+        setAccounts([])
       }
     } catch {
       toast.error('获取账户列表失败')
+      setAccounts([])
     } finally {
       setLoading(false)
     }
@@ -280,7 +290,12 @@ export default function DeployAccountsPage() {
       <Card>
         <CardHeader>
           <CardTitle>账户列表</CardTitle>
-          <CardDescription>查看和管理所有证书部署目标账户</CardDescription>
+          <CardDescription>
+            查看和管理所有证书部署目标账户
+            {!loading && accounts.length > 0 && (
+              <span className="text-muted-foreground/80"> · 当前 {accounts.length} 个</span>
+            )}
+          </CardDescription>
         </CardHeader>
         <CardContent>
           <div className="flex items-center gap-4 mb-4">
@@ -303,14 +318,20 @@ export default function DeployAccountsPage() {
           </div>
 
           {loading ? (
-            <div className="flex items-center justify-center py-8">
-              <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-            </div>
+            <TableSkeleton rows={6} columns={6} />
           ) : accounts.length === 0 ? (
-            <div className="text-center py-8 text-muted-foreground">
-              <Upload className="h-12 w-12 mx-auto mb-2 opacity-50" />
-              <p>暂无数据，请添加部署账户</p>
-            </div>
+            <EmptyState
+              icon={Upload}
+              title="暂无部署账户"
+              description="配置云厂商或 Web 服务器等部署渠道后，即可将已签发证书推送到目标环境"
+            >
+              <Button asChild size="sm" className="mt-1">
+                <Link href="/dashboard/deploy-accounts/add">
+                  <Plus className="h-4 w-4 mr-2" />
+                  添加账户
+                </Link>
+              </Button>
+            </EmptyState>
           ) : (
             <Table>
               <TableHeader>

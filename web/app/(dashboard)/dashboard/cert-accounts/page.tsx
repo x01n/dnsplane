@@ -16,6 +16,8 @@ import { toast } from 'sonner'
 import { certApi, api, CertAccount, CertProvider, CertProviderConfig, ProviderConfigField } from '@/lib/api'
 import { formatDate } from '@/lib/utils'
 import { ProviderBadge } from '@/components/provider-icon'
+import { EmptyState } from '@/components/empty-state'
+import { TableSkeleton } from '@/components/table-skeleton'
 import Link from 'next/link'
 
 export default function CertAccountsPage() {
@@ -35,9 +37,11 @@ export default function CertAccountsPage() {
     remark: '',
   })
 
+  // 仅挂载时拉取；keyword 由搜索显式调用 fetchAccounts
   useEffect(() => {
     fetchProviders()
     fetchAccounts()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const fetchProviders = async () => {
@@ -56,6 +60,8 @@ export default function CertAccountsPage() {
           is_deploy: false,
         }))
         setProviders(providerList)
+      } else if (res.code !== 0) {
+        toast.error(res.msg || '获取证书服务商列表失败')
       }
     } catch {
       toast.error('获取证书服务商列表失败')
@@ -71,9 +77,13 @@ export default function CertAccountsPage() {
         setAccounts(data.filter(a => 
           !keyword || a.name.toLowerCase().includes(keyword.toLowerCase())
         ))
+      } else {
+        toast.error(res.msg || '获取账户列表失败')
+        setAccounts([])
       }
     } catch {
       toast.error('获取账户列表失败')
+      setAccounts([])
     } finally {
       setLoading(false)
     }
@@ -259,7 +269,12 @@ export default function CertAccountsPage() {
       <Card>
         <CardHeader>
           <CardTitle>账户列表</CardTitle>
-          <CardDescription>查看和管理所有SSL证书申请账户</CardDescription>
+          <CardDescription>
+            查看和管理所有 SSL 证书申请账户
+            {!loading && accounts.length > 0 && (
+              <span className="text-muted-foreground/80"> · 当前 {accounts.length} 个</span>
+            )}
+          </CardDescription>
         </CardHeader>
         <CardContent>
           <div className="flex items-center gap-4 mb-4">
@@ -282,14 +297,20 @@ export default function CertAccountsPage() {
           </div>
 
           {loading ? (
-            <div className="flex items-center justify-center py-8">
-              <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-            </div>
+            <TableSkeleton rows={6} columns={6} />
           ) : accounts.length === 0 ? (
-            <div className="text-center py-8 text-muted-foreground">
-              <ShieldCheck className="h-12 w-12 mx-auto mb-2 opacity-50" />
-              <p>暂无数据，请添加证书账户</p>
-            </div>
+            <EmptyState
+              icon={ShieldCheck}
+              title="暂无证书账户"
+              description="添加 ACME / 证书渠道账户后，即可在「证书订单」中申请与续期"
+            >
+              <Button asChild size="sm" className="mt-1">
+                <Link href="/dashboard/cert-accounts/add">
+                  <Plus className="h-4 w-4 mr-2" />
+                  添加账户
+                </Link>
+              </Button>
+            </EmptyState>
           ) : (
             <Table>
               <TableHeader>

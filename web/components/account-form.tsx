@@ -314,6 +314,7 @@ export function AccountForm({ type, providers, onSubmit, backUrl, title, descrip
     if (style.image) {
       return (
         <div className={cn(sizeClass, 'rounded-lg overflow-hidden flex-shrink-0 bg-white dark:bg-gray-800 p-1')}>
+          {/* eslint-disable-next-line @next/next/no-img-element -- 提供商静态图标 URL */}
           <img 
             src={style.image} 
             alt={providerType} 

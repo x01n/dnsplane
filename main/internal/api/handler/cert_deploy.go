@@ -574,7 +574,7 @@ func DeployAdd(c *gin.Context) {
 		return
 	}
 
-	service.Audit.LogAction(c, "create_deploy_task", "", fmt.Sprintf("创建部署任务: 账户=%s, 订单=%s", account.Name, order.ID))
+	service.Audit.LogAction(c, "create_deploy_task", "", fmt.Sprintf("创建部署任务: 账户=%s, 订单=%d", account.Name, order.ID))
 	middleware.SuccessResponse(c, gin.H{"id": deployTask.ID})
 }
 
@@ -848,7 +848,7 @@ func DeployProcess(c *gin.Context) {
 				"log_content": logBuilder.String(),
 				"last_time":   time.Now(),
 			})
-			service.Audit.LogActionDirect(userID, username, ip, ua, "process_deploy_failed", "", fmt.Sprintf("部署任务 %s 失败: %s", taskID, err.Error()))
+			service.Audit.LogActionDirect(userID, username, ip, ua, "process_deploy_failed", "", fmt.Sprintf("部署任务 %d 失败: %s", taskID, err.Error()))
 			return
 		}
 
@@ -861,7 +861,7 @@ func DeployProcess(c *gin.Context) {
 			"last_time":   time.Now(),
 			"issue_time":  issueTime,
 		})
-		service.Audit.LogActionDirect(userID, username, ip, ua, "process_deploy", "", fmt.Sprintf("手动执行部署任务: %s", taskID))
+		service.Audit.LogActionDirect(userID, username, ip, ua, "process_deploy", "", fmt.Sprintf("手动执行部署任务: %d", taskID))
 	})
 
 	middleware.SuccessMsg(c, "提交成功")

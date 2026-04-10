@@ -160,7 +160,7 @@ export default function UsersPage() {
       } else {
         toast.error(res.msg || '操作失败')
       }
-    } catch (error) {
+    } catch {
       toast.error('操作失败')
     } finally {
       setSubmitting(false)
@@ -182,7 +182,7 @@ export default function UsersPage() {
       } else {
         toast.error(res.msg || '删除失败')
       }
-    } catch (error) {
+    } catch {
       toast.error('删除失败')
     } finally {
       setShowDeleteDialog(false)
@@ -200,7 +200,7 @@ export default function UsersPage() {
       } else {
         toast.error(res.msg || '操作失败')
       }
-    } catch (error) {
+    } catch {
       toast.error('操作失败')
     }
   }
@@ -224,7 +224,7 @@ export default function UsersPage() {
       } else {
         toast.error(res.msg || '重置API Key失败')
       }
-    } catch (error) {
+    } catch {
       toast.error('重置API Key失败')
     }
   }

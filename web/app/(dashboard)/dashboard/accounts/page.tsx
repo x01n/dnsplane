@@ -16,6 +16,8 @@ import { toast } from 'sonner'
 import { accountApi, systemApi, api, Account, DNSProvider, ProviderConfigField } from '@/lib/api'
 import { formatDate } from '@/lib/utils'
 import { ProviderBadge } from '@/components/provider-icon'
+import { EmptyState } from '@/components/empty-state'
+import { TableSkeleton } from '@/components/table-skeleton'
 import Link from 'next/link'
 
 export default function AccountsPage() {
@@ -27,6 +29,7 @@ export default function AccountsPage() {
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [selectedAccount, setSelectedAccount] = useState<Account | null>(null)
   const [submitting, setSubmitting] = useState(false)
+  const [checkingId, setCheckingId] = useState<number | null>(null)
 
   const [formData, setFormData] = useState({
     type: '',
@@ -35,9 +38,11 @@ export default function AccountsPage() {
     remark: '',
   })
 
+  // 仅挂载时拉取；keyword 由搜索表单显式调用 fetchAccounts
   useEffect(() => {
     fetchProviders()
     fetchAccounts()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const fetchProviders = async () => {
@@ -45,6 +50,8 @@ export default function AccountsPage() {
       const res = await systemApi.getDNSProviders()
       if (res.code === 0 && res.data) {
         setProviders(res.data)
+      } else if (res.code !== 0) {
+        toast.error(res.msg || '获取DNS服务商列表失败')
       }
     } catch {
       toast.error('获取DNS服务商列表失败')
@@ -57,9 +64,13 @@ export default function AccountsPage() {
       const res = await accountApi.list({ keyword, page_size: 100 })
       if (res.code === 0 && res.data) {
         setAccounts(res.data.list || [])
+      } else {
+        toast.error(res.msg || '获取账户列表失败')
+        setAccounts([])
       }
     } catch {
       toast.error('获取账户列表失败')
+      setAccounts([])
     } finally {
       setLoading(false)
     }
@@ -140,15 +151,19 @@ export default function AccountsPage() {
   }
 
   const handleCheck = async (account: Account) => {
+    if (checkingId !== null) return
+    setCheckingId(account.id)
     try {
       const res = await accountApi.check(account.id)
       if (res.code === 0) {
-        toast.success('账户验证成功')
+        toast.success(res.msg || '账户验证成功')
       } else {
         toast.error(res.msg || '账户验证失败')
       }
     } catch {
       toast.error('账户验证失败')
+    } finally {
+      setCheckingId(null)
     }
   }
 
@@ -249,7 +264,12 @@ export default function AccountsPage() {
       <Card>
         <CardHeader>
           <CardTitle>账户列表</CardTitle>
-          <CardDescription>查看和管理所有DNS服务商账户</CardDescription>
+          <CardDescription>
+            查看和管理所有 DNS 服务商账户
+            {!loading && accounts.length > 0 && (
+              <span className="text-muted-foreground/80"> · 当前 {accounts.length} 个</span>
+            )}
+          </CardDescription>
         </CardHeader>
         <CardContent>
           <div className="flex items-center gap-4 mb-4">
@@ -272,14 +292,20 @@ export default function AccountsPage() {
           </div>
 
           {loading ? (
-            <div className="flex items-center justify-center py-8">
-              <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-            </div>
+            <TableSkeleton rows={6} columns={6} />
           ) : accounts.length === 0 ? (
-            <div className="text-center py-8 text-muted-foreground">
-              <Cloud className="h-12 w-12 mx-auto mb-2 opacity-50" />
-              <p>暂无数据，请添加DNS账户</p>
-            </div>
+            <EmptyState
+              icon={Cloud}
+              title="暂无 DNS 账户"
+              description="添加服务商账户后，即可同步域名、管理解析与证书 DNS 验证"
+            >
+              <Button asChild size="sm" className="mt-1">
+                <Link href="/dashboard/accounts/add">
+                  <Plus className="h-4 w-4 mr-2" />
+                  添加账户
+                </Link>
+              </Button>
+            </EmptyState>
           ) : (
             <Table>
               <TableHeader>
@@ -310,9 +336,16 @@ export default function AccountsPage() {
                           </Button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end">
-                          <DropdownMenuItem onClick={() => handleCheck(account)}>
-                            <RefreshCw className="h-4 w-4 mr-2" />
-                            验证账户
+                          <DropdownMenuItem
+                            onClick={() => void handleCheck(account)}
+                            disabled={checkingId !== null}
+                          >
+                            {checkingId === account.id ? (
+                              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                            ) : (
+                              <RefreshCw className="h-4 w-4 mr-2" />
+                            )}
+                            {checkingId === account.id ? '验证中…' : '验证账户'}
                           </DropdownMenuItem>
                           <DropdownMenuItem onClick={() => openEditDialog(account)}>
                             <Pencil className="h-4 w-4 mr-2" />

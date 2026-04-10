@@ -34,6 +34,7 @@ import {
 import { cn, hasModuleAccess } from '@/lib/utils'
 import { api, authApi, User } from '@/lib/api'
 import { toast } from 'sonner'
+import { DashboardUserProvider } from '@/contexts/dashboard-user-context'
 
 type NavItem = {
   name: string
@@ -222,6 +223,7 @@ export default function DashboardLayout({
   }
 
   return (
+    <DashboardUserProvider user={user}>
     <div className="relative min-h-screen bg-background">
       {/* 背景装饰 */}
       <div
@@ -386,5 +388,6 @@ export default function DashboardLayout({
         <main className="p-4 sm:p-6">{children}</main>
       </div>
     </div>
+    </DashboardUserProvider>
   )
 }

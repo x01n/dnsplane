@@ -354,6 +354,22 @@ func applyOperationLogFilters(db *gorm.DB, keyword, entity, actionFilter, userID
 	return q
 }
 
+// applyLogDateRange 按创建日期筛选（date_from / date_to 为 YYYY-MM-DD，含结束日当天）
+func applyLogDateRange(db *gorm.DB, dateFrom, dateTo string) *gorm.DB {
+	q := db
+	if dateFrom != "" {
+		if t, err := time.ParseInLocation("2006-01-02", dateFrom, time.Local); err == nil {
+			q = q.Where("created_at >= ?", t)
+		}
+	}
+	if dateTo != "" {
+		if t, err := time.ParseInLocation("2006-01-02", dateTo, time.Local); err == nil {
+			q = q.Where("created_at < ?", t.AddDate(0, 0, 1))
+		}
+	}
+	return q
+}
+
 func GetLogs(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
@@ -365,6 +381,8 @@ func GetLogs(c *gin.Context) {
 		userID = c.Query("uid")
 	}
 	domain := c.Query("domain")
+	dateFrom := c.Query("date_from")
+	dateTo := c.Query("date_to")
 
 	var logs []models.Log
 	var total int64
@@ -377,7 +395,10 @@ func GetLogs(c *gin.Context) {
 		return
 	}
 
-	base := applyOperationLogFilters(database.LogDB.Model(&models.Log{}), keyword, entity, action, userID, domain)
+	base := applyLogDateRange(
+		applyOperationLogFilters(database.LogDB.Model(&models.Log{}), keyword, entity, action, userID, domain),
+		dateFrom, dateTo,
+	)
 	base.Count(&total)
 	base.Order("id DESC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&logs)
 
@@ -385,20 +406,27 @@ func GetLogs(c *gin.Context) {
 	dayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
 	dayEnd := dayStart.Add(24 * time.Hour)
 
+	filtered := func() *gorm.DB {
+		return applyLogDateRange(
+			applyOperationLogFilters(database.LogDB.Model(&models.Log{}), keyword, entity, action, userID, domain),
+			dateFrom, dateTo,
+		)
+	}
+
 	var todayCount int64
-	applyOperationLogFilters(database.LogDB.Model(&models.Log{}), keyword, entity, action, userID, domain).
+	filtered().
 		Where("created_at >= ? AND created_at < ?", dayStart, dayEnd).
 		Count(&todayCount)
 
 	var uids []uint
-	applyOperationLogFilters(database.LogDB.Model(&models.Log{}), keyword, entity, action, userID, domain).
+	filtered().
 		Where("uid > 0").
 		Distinct("uid").
 		Pluck("uid", &uids)
 	distinctUsers := int64(len(uids))
 
 	var doms []string
-	applyOperationLogFilters(database.LogDB.Model(&models.Log{}), keyword, entity, action, userID, domain).
+	filtered().
 		Where("domain != ?", "").
 		Distinct("domain").
 		Pluck("domain", &doms)

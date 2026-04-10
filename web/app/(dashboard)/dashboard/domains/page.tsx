@@ -14,6 +14,13 @@ import {
   Download,
   Globe,
   Layers,
+  ShieldCheck,
+  Activity,
+  Bell,
+  BellOff,
+  CalendarClock,
+  Tag,
+  ChevronDown,
 } from 'lucide-react'
 import { EmptyState } from '@/components/empty-state'
 import { TableSkeleton } from '@/components/table-skeleton'
@@ -61,6 +68,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Label } from '@/components/ui/label'
+import { Textarea } from '@/components/ui/textarea'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
@@ -124,9 +132,15 @@ export default function DomainsPage() {
   const [crossAccountDomains, setCrossAccountDomains] = useState<{ account: Account; domains: DomainItem[]; loading: boolean }[]>([])
   const [crossSelectedDomains, setCrossSelectedDomains] = useState<{ accountId: string; domains: DomainItem[] }[]>([])
 
+  const [batchRemarkOpen, setBatchRemarkOpen] = useState(false)
+  const [batchRemarkText, setBatchRemarkText] = useState('')
+  const [batchRemarkSubmitting, setBatchRemarkSubmitting] = useState(false)
+
+  // 仅挂载时拉取；分页/筛选由显式操作触发 fetchDomains
   useEffect(() => {
     fetchAccounts()
     fetchDomains()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const fetchAccounts = async () => {
@@ -512,6 +526,67 @@ export default function DomainsPage() {
     }
   }
 
+  const handleBatchUpdateExpire = async () => {
+    if (selectedIds.length === 0) return
+    try {
+      const res = await domainApi.batchUpdateExpire(selectedIds)
+      if (res.code === 0) {
+        toast.success(res.msg || '已提交批量更新到期')
+        setSelectedIds([])
+        fetchDomains()
+      } else {
+        toast.error(res.msg || '提交失败')
+      }
+    } catch {
+      toast.error('提交失败')
+    }
+  }
+
+  const handleBatchSetNotice = async (on: boolean) => {
+    if (selectedIds.length === 0) return
+    try {
+      const res = await domainApi.batchAction({
+        ids: selectedIds,
+        action: 'set_notice',
+        is_notice: on,
+      })
+      if (res.code === 0) {
+        toast.success(on ? '已开启到期通知' : '已关闭到期通知')
+        setSelectedIds([])
+        fetchDomains()
+      } else {
+        toast.error(res.msg || '操作失败')
+      }
+    } catch {
+      toast.error('操作失败')
+    }
+  }
+
+  const handleBatchRemarkSubmit = async () => {
+    if (selectedIds.length === 0) return
+    setBatchRemarkSubmitting(true)
+    try {
+      const res = await domainApi.batchAction({
+        ids: selectedIds,
+        action: 'set_remark',
+        remark: batchRemarkText.trim(),
+      })
+      if (res.code === 0) {
+        toast.success('备注已更新')
+        setBatchRemarkOpen(false)
+        setBatchRemarkText('')
+        setSelectedIds([])
+        fetchDomains()
+      } else {
+        toast.error(res.msg || '操作失败')
+      }
+    } catch {
+      toast.error('操作失败')
+    } finally {
+      setBatchRemarkSubmitting(false)
+    }
+  }
+
   const handleBatchDelete = async () => {
     if (selectedIds.length === 0) {
       toast.error('请选择要删除的域名')
@@ -664,8 +739,39 @@ export default function DomainsPage() {
               <Button type="submit" variant="secondary">搜索</Button>
             </form>
             {selectedIds.length > 0 && (
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <span className="text-sm text-muted-foreground">已选 {selectedIds.length} 项</span>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="outline" size="sm" className="gap-1">
+                      批量工具
+                      <ChevronDown className="h-3.5 w-3.5 opacity-60" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-52">
+                    <DropdownMenuItem onClick={handleBatchUpdateExpire}>
+                      <CalendarClock className="h-4 w-4 mr-2" />
+                      更新 WHOIS 到期
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => handleBatchSetNotice(true)}>
+                      <Bell className="h-4 w-4 mr-2" />
+                      开启到期通知
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => handleBatchSetNotice(false)}>
+                      <BellOff className="h-4 w-4 mr-2" />
+                      关闭到期通知
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onClick={() => {
+                        setBatchRemarkText('')
+                        setBatchRemarkOpen(true)
+                      }}
+                    >
+                      <Tag className="h-4 w-4 mr-2" />
+                      统一设置备注
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
                 <Button variant="destructive" size="sm" onClick={handleBatchDelete}>
                   批量删除
                 </Button>
@@ -767,6 +873,26 @@ export default function DomainsPage() {
                           <DropdownMenuItem onClick={() => handleQueryWhois(domain.id)}>
                             <Globe className="h-4 w-4 mr-2" />
                             更新WHOIS
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            onClick={() =>
+                              router.push(
+                                `/dashboard/cert?domain=${encodeURIComponent(domain.name)}`,
+                              )
+                            }
+                          >
+                            <ShieldCheck className="h-4 w-4 mr-2" />
+                            申请证书
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            onClick={() =>
+                              router.push(
+                                `/dashboard/monitor?open_smart=1&prefill_did=${domain.id}`,
+                              )
+                            }
+                          >
+                            <Activity className="h-4 w-4 mr-2" />
+                            智能添加监控
                           </DropdownMenuItem>
                           <DropdownMenuSeparator />
                           <DropdownMenuItem
@@ -1189,6 +1315,33 @@ export default function DomainsPage() {
             <Button onClick={handleCrossImport} disabled={submitting || totalCrossSelected === 0}>
               {submitting && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
               导入选中 ({totalCrossSelected})
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={batchRemarkOpen} onOpenChange={setBatchRemarkOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>批量设置备注</DialogTitle>
+            <DialogDescription>
+              将应用到已选中的 {selectedIds.length} 个域名
+            </DialogDescription>
+          </DialogHeader>
+          <Textarea
+            placeholder="备注内容（可留空以清空备注）"
+            value={batchRemarkText}
+            onChange={(e) => setBatchRemarkText(e.target.value)}
+            rows={4}
+            className="resize-none"
+          />
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setBatchRemarkOpen(false)}>
+              取消
+            </Button>
+            <Button onClick={handleBatchRemarkSubmit} disabled={batchRemarkSubmitting}>
+              {batchRemarkSubmitting && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+              保存
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -26,11 +26,15 @@ import { Progress } from '@/components/ui/progress'
 import { Button } from '@/components/ui/button'
 import { dashboardApi, systemApi, DashboardStats, SystemInfo } from '@/lib/api'
 import { Skeleton } from '@/components/ui/skeleton'
+import { useDashboardUser } from '@/contexts/dashboard-user-context'
 
 /* 自动刷新间隔（毫秒） */
 const AUTO_REFRESH_INTERVAL = 30_000
 
 export default function DashboardPage() {
+  const dashboardUser = useDashboardUser()
+  const fetchSystemInfo = dashboardUser != null && dashboardUser.level >= 2
+
   const [stats, setStats] = useState<DashboardStats | null>(null)
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
@@ -44,7 +48,7 @@ export default function DashboardPage() {
     try {
       const [statsResult, sysResult] = await Promise.allSettled([
         dashboardApi.getStats(),
-        systemApi.getSystemInfo(),
+        fetchSystemInfo ? systemApi.getSystemInfo() : Promise.resolve({ code: -1 as const, msg: 'skip' }),
       ])
       if (statsResult.status === 'fulfilled') {
         const statsRes = statsResult.value
@@ -61,7 +65,7 @@ export default function DashboardPage() {
       setLoading(false)
       setRefreshing(false)
     }
-  }, [])
+  }, [fetchSystemInfo])
 
   /* 首次加载 + 定时自动刷新 */
   useEffect(() => {

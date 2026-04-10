@@ -1,6 +1,7 @@
 'use client'
 
-import { useState, useEffect, useMemo, useCallback } from 'react'
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
+import { useSearchParams, useRouter, usePathname } from 'next/navigation'
 import {
   Plus,
   Search,
@@ -13,11 +14,9 @@ import {
   XCircle,
   Activity,
   AlertTriangle,
-  History,
   Shield,
   Eye,
   ArrowRightLeft,
-  Clock,
   Globe,
   Zap,
   ChevronRight,
@@ -28,7 +27,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent, CardHeader } from '@/components/ui/card'
 import {
   Table,
   TableBody,
@@ -78,10 +77,40 @@ import { Separator } from '@/components/ui/separator'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { toast } from 'sonner'
 import { monitorApi, domainApi, MonitorTask, MonitorOverview, Domain, MonitorLog, authApi, User } from '@/lib/api'
-import { formatTimestamp, formatDate, MONITOR_CHECK_TYPES, MONITOR_SWITCH_TYPES, cn, hasModuleAccess } from '@/lib/utils'
+import { formatDate, MONITOR_CHECK_TYPES, MONITOR_SWITCH_TYPES, cn, hasModuleAccess } from '@/lib/utils'
+
+/** 智能添加 / lookup 返回的记录行（兼容 PascalCase 与小写） */
+type LookupRecordRow = {
+  id?: string
+  RecordId?: string
+  record_id?: string
+  type?: string
+  Type?: string
+  value?: string
+  Value?: string
+  line?: string
+  Line?: string
+  LineName?: string
+  line_name?: string
+  name?: string
+}
+
+type ResolveStatusRow = {
+  address?: string
+  value?: string
+  role?: string
+  status?: string
+  success?: boolean
+  latency?: number
+  duration?: number
+  error?: string
+  last_check?: string
+}
+
+type HistoryPoint = { success: boolean; duration: number; created_at: string }
 
 // ============== Mini Uptime Bar ==============
-function MiniUptimeBar({ history }: { history: { success: boolean; duration: number; created_at: string }[] }) {
+function MiniUptimeBar({ history }: { history: HistoryPoint[] }) {
   const last20 = history.slice(-20)
   if (last20.length === 0) {
     return (
@@ -120,6 +149,11 @@ function MiniUptimeBar({ history }: { history: { success: boolean; duration: num
 }
 
 export default function MonitorPage() {
+  const searchParams = useSearchParams()
+  const router = useRouter()
+  const pathname = usePathname()
+  const urlSmartPrefillDone = useRef(false)
+
   const [me, setMe] = useState<User | null>(null)
   const canManageMonitor = me != null && hasModuleAccess(me, 'monitor')
 
@@ -141,10 +175,10 @@ export default function MonitorPage() {
   const [historyData, setHistoryData] = useState<{ id: number; task_id: number; success: boolean; duration: number; created_at: string }[]>([])
   const [uptimeData, setUptimeData] = useState<Record<string, { total: number; success: number; uptime: number; avg_duration: number }> | null>(null)
   const [taskLogs, setTaskLogs] = useState<MonitorLog[]>([])
-  const [resolveStatus, setResolveStatus] = useState<any[]>([])
+  const [resolveStatus, setResolveStatus] = useState<ResolveStatusRow[]>([])
 
   // Task history cache (for mini uptime bars)
-  const [taskHistoryCache, setTaskHistoryCache] = useState<Record<number, { success: boolean; duration: number; created_at: string }[]>>({})
+  const [taskHistoryCache, setTaskHistoryCache] = useState<Record<number, HistoryPoint[]>>({})
 
   // Edit dialog
   const [editDialogOpen, setEditDialogOpen] = useState(false)
@@ -183,8 +217,12 @@ export default function MonitorPage() {
   const [addDomainId, setAddDomainId] = useState('')
   const [addSubDomain, setAddSubDomain] = useState('')
   const [lookupLoading, setLookupLoading] = useState(false)
-  const [lookupResult, setLookupResult] = useState<{ domain: string; account_type: string; records: any[] } | null>(null)
-  const [selectedRecords, setSelectedRecords] = useState<any[]>([])
+  const [lookupResult, setLookupResult] = useState<{
+    domain: string
+    account_type: string
+    records: LookupRecordRow[]
+  } | null>(null)
+  const [selectedRecords, setSelectedRecords] = useState<LookupRecordRow[]>([])
   const [addConfig, setAddConfig] = useState({
     backup_value: '',
     type: 0,
@@ -226,18 +264,27 @@ export default function MonitorPage() {
     })
   }, [])
 
-  useEffect(() => {
-    fetchDomains()
-    fetchTasks()
-    fetchOverview()
-    const interval = setInterval(() => {
-      fetchOverview()
-      fetchTasks()
-    }, 15000)
-    return () => clearInterval(interval)
+  const fetchAllTaskHistories = useCallback(async (taskList: MonitorTask[]) => {
+    const promises = taskList.map(async (task) => {
+      try {
+        const res = await monitorApi.getHistory(task.id, '1h')
+        if (res.code === 0 && res.data) {
+          return { id: task.id, data: res.data as HistoryPoint[] }
+        }
+      } catch {
+        // ignore
+      }
+      return { id: task.id, data: [] as HistoryPoint[] }
+    })
+    const results = await Promise.all(promises)
+    const cache: Record<number, HistoryPoint[]> = {}
+    results.forEach((r) => {
+      cache[r.id] = r.data
+    })
+    setTaskHistoryCache(cache)
   }, [])
 
-  const fetchDomains = async () => {
+  const fetchDomains = useCallback(async () => {
     try {
       const res = await domainApi.list({ page_size: 500 })
       if (res.code === 0 && res.data) {
@@ -246,17 +293,16 @@ export default function MonitorPage() {
     } catch {
       // ignore
     }
-  }
+  }, [])
 
-  const fetchTasks = async () => {
+  const fetchTasks = useCallback(async () => {
     try {
       const params: Record<string, string | number> = { page_size: 200 }
       const res = await monitorApi.list(params)
       if (res.code === 0 && res.data) {
         const taskList = res.data.list || []
         setTasks(taskList)
-        // Fetch history for all tasks
-        fetchAllTaskHistories(taskList)
+        void fetchAllTaskHistories(taskList)
       } else if (res.code !== 0) {
         toast.error(res.msg || '获取任务列表失败')
       }
@@ -265,27 +311,9 @@ export default function MonitorPage() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [fetchAllTaskHistories])
 
-  const fetchAllTaskHistories = async (taskList: MonitorTask[]) => {
-    const promises = taskList.map(async (task) => {
-      try {
-        const res = await monitorApi.getHistory(task.id, '1h')
-        if (res.code === 0 && res.data) {
-          return { id: task.id, data: res.data }
-        }
-      } catch {
-        // ignore
-      }
-      return { id: task.id, data: [] }
-    })
-    const results = await Promise.all(promises)
-    const cache: Record<number, any[]> = {}
-    results.forEach(r => { cache[r.id] = r.data })
-    setTaskHistoryCache(cache)
-  }
-
-  const fetchOverview = async () => {
+  const fetchOverview = useCallback(async () => {
     try {
       const res = await monitorApi.getOverview()
       if (res.code === 0 && res.data) {
@@ -294,7 +322,18 @@ export default function MonitorPage() {
     } catch {
       // ignore
     }
-  }
+  }, [])
+
+  useEffect(() => {
+    void fetchDomains()
+    void fetchTasks()
+    void fetchOverview()
+    const interval = setInterval(() => {
+      void fetchOverview()
+      void fetchTasks()
+    }, 15000)
+    return () => clearInterval(interval)
+  }, [fetchDomains, fetchTasks, fetchOverview])
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault()
@@ -460,7 +499,9 @@ export default function MonitorPage() {
       // Try to fetch resolve status
       try {
         const rsRes = await monitorApi.getResolveStatus(task.id)
-        if (rsRes.code === 0 && rsRes.data) setResolveStatus(rsRes.data)
+        if (rsRes.code === 0 && Array.isArray(rsRes.data)) {
+          setResolveStatus(rsRes.data as ResolveStatusRow[])
+        }
       } catch {
         // ignore - API may not exist yet
       }
@@ -469,10 +510,10 @@ export default function MonitorPage() {
   }
 
   // ============== Smart Add Dialog ==============
-  const openSmartAdd = () => {
+  const openSmartAdd = useCallback((prefill?: { domainId?: string; subDomain?: string }) => {
     setAddStep(1)
-    setAddDomainId('')
-    setAddSubDomain('')
+    setAddDomainId(prefill?.domainId ?? '')
+    setAddSubDomain(prefill?.subDomain ?? '')
     setLookupResult(null)
     setSelectedRecords([])
     setAddConfig({
@@ -498,7 +539,23 @@ export default function MonitorPage() {
       proxy_password: '',
     })
     setAddDialogOpen(true)
-  }
+  }, [])
+
+  /* 从域名管理跳转：/dashboard/monitor?open_smart=1&prefill_did=123&prefill_rr=www */
+  useEffect(() => {
+    if (urlSmartPrefillDone.current) return
+    if (searchParams.get('open_smart') !== '1') return
+    const did = searchParams.get('prefill_did')
+    if (!did) return
+    urlSmartPrefillDone.current = true
+    const rrRaw = searchParams.get('prefill_rr')
+    const sub =
+      rrRaw === null || rrRaw === ''
+        ? ''
+        : decodeURIComponent(rrRaw.replace(/\+/g, ' '))
+    openSmartAdd({ domainId: did, subDomain: sub })
+    router.replace(pathname, { scroll: false })
+  }, [searchParams, router, pathname, openSmartAdd])
 
   const handleLookup = async () => {
     if (!addDomainId || !addSubDomain) {
@@ -509,7 +566,11 @@ export default function MonitorPage() {
     try {
       const res = await monitorApi.lookup(parseInt(addDomainId), addSubDomain)
       if (res.code === 0 && res.data) {
-        setLookupResult(res.data)
+        setLookupResult({
+          domain: res.data.domain,
+          account_type: res.data.account_type,
+          records: Array.isArray(res.data.records) ? (res.data.records as LookupRecordRow[]) : [],
+        })
         setSelectedRecords([])
         setAddStep(2)
       } else {
@@ -563,7 +624,7 @@ export default function MonitorPage() {
       }
       const res = await monitorApi.autoCreate(data)
       if (res.code === 0) {
-        const created = (res.data as any)?.created || 0
+        const created = res.data?.created ?? 0
         toast.success(`成功创建 ${created} 个监控任务`)
         setAddDialogOpen(false)
         fetchTasks()
@@ -580,10 +641,11 @@ export default function MonitorPage() {
 
   // ============== Record Field Helpers ==============
   // dns.Record 返回 {id, type, value, line, name}, 需兼容 PascalCase/snake_case
-  const getRecordId = (r: any): string => r?.id || r?.RecordId || r?.record_id || ''
-  const getRecordType = (r: any): string => r?.type || r?.Type || ''
-  const getRecordValue = (r: any): string => r?.value || r?.Value || ''
-  const getRecordLine = (r: any): string => r?.LineName || r?.line_name || r?.line || r?.Line || '-'
+  const getRecordId = (r: LookupRecordRow): string => r.id || r.RecordId || r.record_id || ''
+  const getRecordType = (r: LookupRecordRow): string => r.type || r.Type || ''
+  const getRecordValue = (r: LookupRecordRow): string => r.value || r.Value || ''
+  const getRecordLine = (r: LookupRecordRow): string =>
+    r.LineName || r.line_name || r.line || r.Line || '-'
 
   // ============== Helpers ==============
   const parseBackupHealth = (backupHealthStr?: string): Record<string, boolean> => {
@@ -1196,7 +1258,7 @@ export default function MonitorPage() {
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {resolveStatus.map((rs: any, i: number) => (
+                        {resolveStatus.map((rs, i) => (
                           <TableRow key={i}>
                             <TableCell>
                               <code className="text-sm bg-muted px-1.5 py-0.5 rounded">{rs.address || rs.value || '-'}</code>
@@ -1644,16 +1706,18 @@ export default function MonitorPage() {
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {lookupResult.records.map((record: any, idx: number) => (
+                      {lookupResult.records.map((record, idx) => (
                         <TableRow key={idx}>
                           <TableCell>
                             <Checkbox
-                              checked={selectedRecords.some((r: any) => getRecordId(r) === getRecordId(record))}
+                              checked={selectedRecords.some((r) => getRecordId(r) === getRecordId(record))}
                               onCheckedChange={(checked) => {
                                 if (checked) {
                                   setSelectedRecords([...selectedRecords, record])
                                 } else {
-                                  setSelectedRecords(selectedRecords.filter((r: any) => getRecordId(r) !== getRecordId(record)))
+                                  setSelectedRecords(
+                                    selectedRecords.filter((r) => getRecordId(r) !== getRecordId(record)),
+                                  )
                                 }
                               }}
                             />

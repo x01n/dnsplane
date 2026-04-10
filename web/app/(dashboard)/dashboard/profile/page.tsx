@@ -624,7 +624,14 @@ export default function ProfilePage() {
         <DialogContent className="max-w-md">
           <DialogHeader><DialogTitle>启用二步验证</DialogTitle><DialogDescription>使用身份验证器App扫描二维码</DialogDescription></DialogHeader>
           <div className="space-y-4">
-            {totpQrCode && <div className="flex justify-center"><div className="p-3 bg-white rounded-lg"><img src={totpQrCode} alt="QR" className="w-44 h-44" /></div></div>}
+            {totpQrCode && (
+              <div className="flex justify-center">
+                <div className="p-3 bg-white rounded-lg">
+                  {/* eslint-disable-next-line @next/next/no-img-element -- TOTP 为 data URL 动态二维码 */}
+                  <img src={totpQrCode} alt="QR" className="w-44 h-44" />
+                </div>
+              </div>
+            )}
             {totpData?.secret && (
               <div className="space-y-1">
                 <Label className="text-xs">手动输入密钥</Label>

@@ -311,16 +311,19 @@ export function AuthCaptchaFields({
             加载失败，点击重试
           </button>
         ) : imgB64 ? (
-          <img
-            src={imageDataUrl(imgB64)}
-            alt="验证码"
-            className="rounded-md border bg-background max-h-[52px] w-auto object-contain object-left"
-            onError={() => {
-              setImgError(true)
-              setImgB64('')
-              notify('', '')
-            }}
-          />
+          <>
+            {/* eslint-disable-next-line @next/next/no-img-element -- 后端下发的 Base64 验证码图 */}
+            <img
+              src={imageDataUrl(imgB64)}
+              alt="验证码"
+              className="rounded-md border bg-background max-h-[52px] w-auto object-contain object-left"
+              onError={() => {
+                setImgError(true)
+                setImgB64('')
+                notify('', '')
+              }}
+            />
+          </>
         ) : (
           <div className="h-[52px] rounded-md border bg-muted/50 animate-pulse" />
         )}

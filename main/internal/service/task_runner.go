@@ -279,7 +279,7 @@ func (r *TaskRunner) executeDeployTasks() {
 				if !order.IssueTime.After(*deployTask.IssueTime) {
 					continue // 证书未更新，不需要重新部署
 				}
-				logger.Info("部署任务 %s: 检测到证书已更新，开始重新部署", deployTask.ID)
+				logger.Info("部署任务 %d: 检测到证书已更新，开始重新部署", deployTask.ID)
 			} else {
 				continue
 			}
@@ -326,7 +326,7 @@ func (r *TaskRunner) retryFailedDeployTasks() {
 			continue
 		}
 
-		logger.Info("部署任务 %s: 开始第 %d 次重试", deployTask.ID, deployTask.Retry+1)
+		logger.Info("部署任务 %d: 开始第 %d 次重试", deployTask.ID, deployTask.Retry+1)
 		r.executeSingleDeploy(&deployTask, &order)
 	}
 }
@@ -406,7 +406,7 @@ func (r *TaskRunner) executeSingleDeploy(deployTask *models.CertDeploy, order *m
 	if err := provider.Deploy(ctx, order.FullChain, order.PrivateKey, deployConfig); err != nil {
 		logBuilder.WriteString(fmt.Sprintf("[%s] 部署失败: %s\n", time.Now().Format("2006-01-02 15:04:05"), err.Error()))
 		r.updateDeployFailedWithLog(deployTask, err.Error(), logBuilder.String())
-		logger.Error("部署任务 %s 执行失败: %v", deployTask.ID, err)
+		logger.Error("部署任务 %d 执行失败: %v", deployTask.ID, err)
 
 		// 发送失败通知（仅在最后一次重试时）
 		maxRetry := deployTask.MaxRetry
@@ -432,7 +432,7 @@ func (r *TaskRunner) executeSingleDeploy(deployTask *models.CertDeploy, order *m
 		"issue_time":  order.IssueTime,
 	})
 
-	logger.Info("部署任务 %s 执行成功", deployTask.ID)
+	logger.Info("部署任务 %d 执行成功", deployTask.ID)
 
 	r.sendDeployNotification(deployTask, domainList, true, "")
 
@@ -442,7 +442,7 @@ func (r *TaskRunner) executeSingleDeploy(deployTask *models.CertDeploy, order *m
 		Username:  "系统",
 		Action:    "auto_deploy",
 		Domain:    strings.Join(domainList, ","),
-		Data:      fmt.Sprintf("自动部署成功: 账户=%s, 订单=%s", account.Name, order.ID),
+		Data:      fmt.Sprintf("自动部署成功: 账户=%s, 订单=%d", account.Name, order.ID),
 		CreatedAt: time.Now(),
 	})
 }

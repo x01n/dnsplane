@@ -1,6 +1,7 @@
 'use client'
 
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
+import { useSearchParams, useRouter, usePathname } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -21,7 +22,12 @@ import {
   resolveSelectFieldValue,
 } from '@/lib/deploy-config-form'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
-import { cn } from '@/lib/utils'
+import { cn, formatDate } from '@/lib/utils'
+import {
+  certOrderDomainsLine,
+  certOrderKindShort,
+  formatCertOrderExpiryLine,
+} from '@/lib/cert-order-display'
 import { TableSkeleton } from '@/components/table-skeleton'
 import { EmptyState } from '@/components/empty-state'
 import { ShieldCheck, Plus, Search, RefreshCw, Download, Eye, Trash2, Play, FileText, CheckCircle, XCircle, Clock, AlertTriangle, Server, Rocket, Upload, Loader2, RotateCcw, KeyRound, Globe, Copy, Check, Info } from 'lucide-react'
@@ -100,7 +106,20 @@ const getCertRowClassName = (order: CertOrder): string => {
   return ''
 }
 
+/** 单行域名预填时判断是否更像 IP（证书 IP 单证倾向 HTTP-01） */
+function looksLikeSingleIpToken(s: string): boolean {
+  const t = s.trim()
+  if (!t || t.startsWith('*.')) return false
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(t)) return true
+  if (t.includes(':') && /^[0-9a-fA-F:]+$/.test(t) && t.length >= 3) return true
+  return false
+}
+
 export default function CertPage() {
+  const searchParams = useSearchParams()
+  const router = useRouter()
+  const pathname = usePathname()
+  const certUrlPrefillDone = useRef(false)
   const [orders, setOrders] = useState<CertOrder[]>([])
   const [accounts, setAccounts] = useState<CertAccount[]>([])
   const [loading, setLoading] = useState(true)
@@ -140,6 +159,28 @@ export default function CertPage() {
   useEffect(() => {
     loadData()
   }, [])
+
+  /* 域名管理跳转：/dashboard/cert?domain=example.com 或 ?domains=a.com,b.com */
+  useEffect(() => {
+    if (certUrlPrefillDone.current) return
+    const raw = searchParams.get('domain') || searchParams.get('domains')
+    if (!raw?.trim()) return
+    certUrlPrefillDone.current = true
+    const decoded = decodeURIComponent(raw.replace(/\+/g, ' '))
+    const lines = decoded
+      .split(/[\n,;]+/)
+      .map((s) => s.trim())
+      .filter(Boolean)
+    const text = lines.join('\n')
+    const singleIp = lines.length === 1 && looksLikeSingleIpToken(lines[0])
+    setFormData((prev) => ({
+      ...prev,
+      domains: text,
+      challenge_type: singleIp ? 'http-01' : prev.challenge_type,
+    }))
+    setShowAddDialog(true)
+    router.replace(pathname, { scroll: false })
+  }, [searchParams, router, pathname])
 
   const loadData = async () => {
     setLoading(true)
@@ -1223,17 +1264,58 @@ export default function CertPage() {
           </DialogHeader>
           <div className="space-y-4">
             {selectedOrder && (
-              <div className="bg-muted/50 rounded-lg p-4 space-y-2">
-                <div className="text-sm">
-                  <span className="text-muted-foreground">证书域名：</span>
-                  <span className="font-medium">{selectedOrder.domains?.slice(0, 2).join(', ')}</span>
-                  {selectedOrder.domains && selectedOrder.domains.length > 2 && (
-                    <span className="text-muted-foreground"> 等{selectedOrder.domains.length}个</span>
-                  )}
-                </div>
-                <div className="text-sm">
-                  <span className="text-muted-foreground">颁发机构：</span>
-                  <span>{selectedOrder.issuer || '-'}</span>
+              <div className="rounded-lg border bg-muted/40 p-4 space-y-3">
+                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                  即将部署的证书
+                </p>
+                <p className="text-sm font-semibold leading-snug break-all text-foreground">
+                  {certOrderDomainsLine(selectedOrder, 6)}
+                </p>
+                <div className="grid gap-3 sm:grid-cols-2 text-sm">
+                  <div className="space-y-0.5">
+                    <span className="text-xs text-muted-foreground">订单号</span>
+                    <p className="font-mono tabular-nums">#{selectedOrder.id}</p>
+                  </div>
+                  <div className="space-y-0.5">
+                    <span className="text-xs text-muted-foreground">证书账户 / 类型</span>
+                    <p className="break-all">
+                      {selectedOrder.type_name || '—'}{' '}
+                      <Badge variant="outline" className="ml-1 text-[10px] h-5 align-middle font-normal">
+                        {certOrderKindShort(selectedOrder)}
+                      </Badge>
+                    </p>
+                  </div>
+                  <div className="space-y-0.5">
+                    <span className="text-xs text-muted-foreground">密钥</span>
+                    <p>
+                      {[selectedOrder.key_type, selectedOrder.key_size].filter(Boolean).join(' ') || '默认'}
+                    </p>
+                  </div>
+                  <div className="space-y-0.5">
+                    <span className="text-xs text-muted-foreground">到期</span>
+                    {(() => {
+                      const exp = formatCertOrderExpiryLine(selectedOrder)
+                      return (
+                        <p
+                          className={cn(
+                            exp.text === '已过期' && 'text-destructive font-medium',
+                            exp.urgent && exp.text !== '已过期' && 'text-amber-700 dark:text-amber-400 font-medium',
+                          )}
+                        >
+                          {exp.text}
+                          {selectedOrder.expire_time && (
+                            <span className="block text-xs font-normal text-muted-foreground mt-0.5">
+                              {formatDate(selectedOrder.expire_time, 'datetime')}
+                            </span>
+                          )}
+                        </p>
+                      )
+                    })()}
+                  </div>
+                  <div className="space-y-0.5 sm:col-span-2">
+                    <span className="text-xs text-muted-foreground">颁发机构</span>
+                    <p className="break-all">{selectedOrder.issuer || '—'}</p>
+                  </div>
                 </div>
               </div>
             )}

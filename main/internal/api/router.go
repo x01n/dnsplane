@@ -95,6 +95,7 @@ func SetupRouter(staticFS embed.FS) *gin.Engine {
 			auth.GET("/monitor/tasks/:id/resolve-status", handler.GetResolveStatus)
 			auth.GET("/monitor/overview", handler.GetMonitorOverview)
 			auth.POST("/monitor/tasks/batch", handler.BatchCreateMonitorTasks)
+			auth.POST("/monitor/tasks/auto-create", handler.AutoCreateMonitorTask)
 			auth.POST("/monitor/lookup", handler.LookupRecord)
 			auth.GET("/monitor/status", handler.GetMonitorStatus)
 
