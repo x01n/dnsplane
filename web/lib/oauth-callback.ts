@@ -1,8 +1,14 @@
 /**
- * OAuth / 旧版登录回调：从 URL fragment（优先）或 query 读取 token，避免 access token 出现在查询串（易进 Referer/日志）。
- * 读到 fragment 后会 replaceState 清除 hash。
+ * OAuth / 旧版登录回调：仅从 URL fragment (#access_token=) 读取 token。
+ *
+ * 安全审计 H-4：删除查询串 (?token= / ?access_token=) 的 fallback 读取路径；
+ * 查询串参数会进入 Referer/浏览器历史/代理日志，凭据永久泄露。
+ * Fragment (#) 不会发送到服务器、不进 Referer，是 OAuth Implicit Flow 的唯一安全载体。
+ * 命中后立刻 replaceState 清空 hash。
+ *
+ * 参数 _ 已弃用，保留签名避免全量改调用方；后续可清理。
  */
-export function consumeOAuthTokensFromUrl(searchParams: URLSearchParams): {
+export function consumeOAuthTokensFromUrl(_: URLSearchParams): {
   access_token: string | null
   refresh_token: string | null
 } {
@@ -18,11 +24,6 @@ export function consumeOAuthTokensFromUrl(searchParams: URLSearchParams): {
         return { access_token, refresh_token }
       }
     }
-  }
-  const access_token = searchParams.get('access_token') || searchParams.get('token')
-  const refresh_token = searchParams.get('refresh_token')
-  if (access_token && refresh_token) {
-    return { access_token, refresh_token }
   }
   return { access_token: null, refresh_token: null }
 }

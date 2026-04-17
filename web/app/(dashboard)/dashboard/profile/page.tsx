@@ -189,8 +189,18 @@ export default function ProfilePage() {
   const handleBind = async (provider: string) => {
     try {
       const res = await oauthApi.getBindURL(provider)
-      if (res.code === 0 && res.data?.url) window.location.href = res.data.url
-      else toast.error(res.msg || '获取绑定链接失败')
+      if (res.code === 0 && res.data?.url) {
+        // 安全审计 M-2：仅允许 https:// 协议的绝对 URL 作为跳转目标，
+        // 避免被注入 javascript: / data: 等 URI 触发 XSS 或本地钓鱼。
+        const url = res.data.url
+        if (/^https:\/\//i.test(url)) {
+          window.location.href = url
+        } else {
+          toast.error('绑定链接协议不允许')
+        }
+      } else {
+        toast.error(res.msg || '获取绑定链接失败')
+      }
     } catch { toast.error('获取绑定链接失败') }
   }
 

@@ -131,26 +131,37 @@ function generateNonce(): string {
   return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('')
 }
 
-// 从rt+at+st派生签名密钥
+/*
+ * 派生请求签名密钥。
+ *
+ * 安全审计 H-1 / M-3 修复：
+ * - 旧实现从 localStorage 同时读取 refresh_token + access_token + secret_token，
+ *   XSS 一次可把三份凭据一并盗走；refresh_token 本应只在 HttpOnly Cookie 中，
+ *   这里却绕过回落到 localStorage。
+ * - 现改为仅依赖 access_token + secret_token（不再读 refresh_token），
+ *   secret_token 是本地生成、仅用于签名派生的随机 32 字节，与服务端无关；
+ *   这样即使 XSS 读到 secret_token，没有 access_token 也无法伪造签名，
+ *   HttpOnly Cookie 里的 refresh_token 保持不可触达。
+ * - 保留 SHA-256(concat) 的派生形式，避免改动签名报文格式；若后续要升级到 HKDF
+ *   需前后端同步升级，故单独列为 TODO。
+ */
 async function deriveSignKey(): Promise<CryptoKey> {
-  const refreshToken = localStorage.getItem('refresh_token') || ''
   const accessToken = localStorage.getItem('token') || ''
-  const secretToken = localStorage.getItem('secret_token') || ''
-  
-  // 如果没有secret_token，生成一个并保存
-  let st = secretToken
+  let st = localStorage.getItem('secret_token') || ''
+
+  // 如果没有 secret_token，生成一个并保存（与服务端无任何交互）
   if (!st) {
     const bytes = new Uint8Array(32)
     crypto.getRandomValues(bytes)
     st = Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('')
     localStorage.setItem('secret_token', st)
   }
-  
-  // 使用SHA-256(rt+at+st)派生密钥
-  const combined = refreshToken + accessToken + st
+
+  // SHA-256(at + st)；不再拼 refresh_token
+  const combined = accessToken + st
   const encoder = new TextEncoder()
   const hashBuffer = await crypto.subtle.digest('SHA-256', encoder.encode(combined))
-  
+
   return crypto.subtle.importKey(
     'raw',
     hashBuffer,
@@ -160,10 +171,9 @@ async function deriveSignKey(): Promise<CryptoKey> {
   )
 }
 
-// 获取签名所需的tokens用于请求头
-export function getSignTokens(): { refreshToken: string; secretToken: string } {
+// 获取签名所需的 secret_token 用于请求头（refresh_token 字段已移除，避免从 localStorage 读取）
+export function getSignTokens(): { secretToken: string } {
   return {
-    refreshToken: localStorage.getItem('refresh_token') || '',
     secretToken: localStorage.getItem('secret_token') || '',
   }
 }

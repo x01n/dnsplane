@@ -53,6 +53,13 @@ function loadScriptOnce(src: string, attr: string): Promise<void> {
   })
 }
 
+// isValidSiteKey 做 siteKey 的轻量格式校验（安全审计 M-4），
+// 防止后端被劫持后返回畸形值被第三方 captcha SDK 作为 DOM 构造参数触发 DOM Clobbering。
+// 三家服务商的 siteKey 均为字母/数字/连字符组合，长度通常 32-80 字符。
+function isValidSiteKey(s: string | undefined): s is string {
+  return typeof s === 'string' && s.length > 0 && s.length <= 128 && /^[A-Za-z0-9_-]+$/.test(s)
+}
+
 export function AuthCaptchaFields({
   enabled,
   captchaType,
@@ -62,6 +69,7 @@ export function AuthCaptchaFields({
   disabled,
 }: Props) {
   const type = !enabled ? 'none' : captchaType || 'image'
+  const safeSiteKey = isValidSiteKey(siteKey) ? siteKey : undefined
   const onChangeRef = useRef(onChange)
   onChangeRef.current = onChange
 
@@ -121,10 +129,10 @@ export function AuthCaptchaFields({
 
   // Cloudflare Turnstile
   useEffect(() => {
-    if (type !== 'turnstile' || !siteKey) return
+    if (type !== 'turnstile' || !safeSiteKey) return
     const host = widgetHostRef.current
     if (!host) return
-    host.innerHTML = ''
+    host.replaceChildren()
     widgetHandleRef.current = null
     let cancelled = false
 
@@ -143,7 +151,7 @@ export function AuthCaptchaFields({
       }
       notify('', '')
       const wid = turnstile.render(host, {
-        sitekey: siteKey,
+        sitekey: safeSiteKey,
         callback: (token: string) => notify('', token),
         'expired-callback': () => notify('', ''),
         'error-callback': () => notify('', ''),
@@ -164,16 +172,16 @@ export function AuthCaptchaFields({
         }
       }
       widgetHandleRef.current = null
-      host.innerHTML = ''
+      host.replaceChildren()
     }
-  }, [type, siteKey, refreshSignal, notify])
+  }, [type, safeSiteKey, refreshSignal, notify])
 
   // Google reCAPTCHA v2
   useEffect(() => {
-    if (type !== 'recaptcha' || !siteKey) return
+    if (type !== 'recaptcha' || !safeSiteKey) return
     const host = widgetHostRef.current
     if (!host) return
-    host.innerHTML = ''
+    host.replaceChildren()
     widgetHandleRef.current = null
     let cancelled = false
 
@@ -192,7 +200,7 @@ export function AuthCaptchaFields({
       }
       notify('', '')
       const wid = g.render(host, {
-        sitekey: siteKey,
+        sitekey: safeSiteKey,
         callback: (token: string) => notify('', token),
         'expired-callback': () => notify('', ''),
       })
@@ -202,17 +210,17 @@ export function AuthCaptchaFields({
     void run()
     return () => {
       cancelled = true
-      host.innerHTML = ''
+      host.replaceChildren()
       widgetHandleRef.current = null
     }
-  }, [type, siteKey, refreshSignal, notify])
+  }, [type, safeSiteKey, refreshSignal, notify])
 
   // hCaptcha
   useEffect(() => {
-    if (type !== 'hcaptcha' || !siteKey) return
+    if (type !== 'hcaptcha' || !safeSiteKey) return
     const host = widgetHostRef.current
     if (!host) return
-    host.innerHTML = ''
+    host.replaceChildren()
     widgetHandleRef.current = null
     let cancelled = false
 
@@ -231,7 +239,7 @@ export function AuthCaptchaFields({
       }
       notify('', '')
       const wid = h.render(host, {
-        sitekey: siteKey,
+        sitekey: safeSiteKey,
         callback: (token: string) => notify('', token),
         'error-callback': () => notify('', ''),
         'expired-callback': () => notify('', ''),
@@ -242,10 +250,10 @@ export function AuthCaptchaFields({
     void run()
     return () => {
       cancelled = true
-      host.innerHTML = ''
+      host.replaceChildren()
       widgetHandleRef.current = null
     }
-  }, [type, siteKey, refreshSignal, notify])
+  }, [type, safeSiteKey, refreshSignal, notify])
 
   if (type === 'none') return null
 
