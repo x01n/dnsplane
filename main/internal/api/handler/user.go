@@ -47,6 +47,9 @@ func generateAPIKey() string {
 }
 
 func GetUsers(c *gin.Context) {
+	if !requireAdmin(c) {
+		return
+	}
 	type usersCachePayload struct {
 		Total int             `json:"total"`
 		List  []userPublicRow `json:"list"`
@@ -85,6 +88,9 @@ type CreateUserRequest struct {
 }
 
 func CreateUser(c *gin.Context) {
+	if !requireAdmin(c) {
+		return
+	}
 	var req CreateUserRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"code": -1, "msg": "参数错误"})
@@ -136,6 +142,9 @@ func CreateUser(c *gin.Context) {
 }
 
 func UpdateUser(c *gin.Context) {
+	if !requireAdmin(c) {
+		return
+	}
 	id, _ := strconv.ParseUint(c.Param("id"), 10, 32)
 
 	var user models.User
@@ -189,6 +198,9 @@ func UpdateUser(c *gin.Context) {
 }
 
 func DeleteUser(c *gin.Context) {
+	if !requireAdmin(c) {
+		return
+	}
 	id, _ := strconv.ParseUint(c.Param("id"), 10, 32)
 
 	currentUserID := middleware.AuthUserID(c)
@@ -206,6 +218,9 @@ func DeleteUser(c *gin.Context) {
 
 // GetUserPermissions 获取用户权限列表
 func GetUserPermissions(c *gin.Context) {
+	if !requireAdmin(c) {
+		return
+	}
 	id, _ := strconv.ParseUint(c.Param("id"), 10, 32)
 
 	var perms []models.Permission
@@ -216,6 +231,9 @@ func GetUserPermissions(c *gin.Context) {
 
 // AddUserPermission 添加用户权限
 func AddUserPermission(c *gin.Context) {
+	if !requireAdmin(c) {
+		return
+	}
 	id, _ := strconv.ParseUint(c.Param("id"), 10, 32)
 
 	var req struct {
@@ -250,6 +268,9 @@ func AddUserPermission(c *gin.Context) {
 
 // UpdateUserPermission 更新用户权限
 func UpdateUserPermission(c *gin.Context) {
+	if !requireAdmin(c) {
+		return
+	}
 	id, _ := strconv.ParseUint(c.Param("id"), 10, 32)
 	permId, _ := strconv.ParseUint(c.Param("permId"), 10, 32)
 
@@ -281,6 +302,9 @@ func UpdateUserPermission(c *gin.Context) {
 
 // DeleteUserPermission 删除用户权限
 func DeleteUserPermission(c *gin.Context) {
+	if !requireAdmin(c) {
+		return
+	}
 	id, _ := strconv.ParseUint(c.Param("id"), 10, 32)
 	permId, _ := strconv.ParseUint(c.Param("permId"), 10, 32)
 
@@ -295,6 +319,9 @@ func DeleteUserPermission(c *gin.Context) {
 
 // ResetAPIKey 重新生成API Key
 func ResetAPIKey(c *gin.Context) {
+	if !requireAdmin(c) {
+		return
+	}
 	id, _ := strconv.ParseUint(c.Param("id"), 10, 32)
 
 	var user models.User

@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"main/internal/api/middleware"
 	"main/internal/cert"
 	"main/internal/cert/deploy"
 	"main/internal/database"
@@ -1112,6 +1113,12 @@ func CreateCertDeploy(c *gin.Context) {
 		return
 	}
 
+	// 安全审计 H-3：local 类型部署会以 DNSPlane 进程权限执行用户填写的 restart_cmd，
+	// 等同于服务端 RCE。限制仅管理员可创建此类型；其他类型（SSH/CDN/...）保持原开放。
+	if !checkLocalDeployAllowed(c, req.AccountID) {
+		return
+	}
+
 	configJSON, _ := json.Marshal(req.Config)
 	deploy := models.CertDeploy{
 		UserID:    currentUIDUint(c),
@@ -1130,12 +1137,35 @@ func CreateCertDeploy(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "创建成功", "data": gin.H{"id": deploy.ID}})
 }
 
+// checkLocalDeployAllowed 对 CertAccount.Type == "local" 的部署强制 checkAdmin；
+// 返回 false 时已写入"权限不足"响应，handler 应直接 return。
+func checkLocalDeployAllowed(c *gin.Context, accountID uint) bool {
+	if isAdmin(c) {
+		return true
+	}
+	var acc models.CertAccount
+	if err := database.DB.Select("type").First(&acc, accountID).Error; err != nil {
+		// 账户查不到会在后续业务逻辑里再次失败，这里直接放过让原路径报错
+		return true
+	}
+	if acc.Type == "local" {
+		middleware.ErrorResponse(c, "本地部署需要管理员权限，请改用 SSH 或其他远程部署方式")
+		return false
+	}
+	return true
+}
+
 func UpdateCertDeploy(c *gin.Context) {
 	id, _ := strconv.ParseUint(c.Param("id"), 10, 32)
 
 	var deploy models.CertDeploy
 	if err := database.DB.First(&deploy, id).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"code": -1, "msg": "部署任务不存在"})
+		return
+	}
+
+	// 安全审计 H-3：修改 local 类型部署也需要管理员
+	if !checkLocalDeployAllowed(c, deploy.AccountID) {
 		return
 	}
 

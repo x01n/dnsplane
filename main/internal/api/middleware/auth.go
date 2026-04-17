@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"main/internal/cache"
 	"main/internal/config"
 	"main/internal/database"
@@ -422,6 +423,12 @@ func RefreshAccessToken(refreshToken string) (*TokenPair, error) {
 func ParseToken(tokenString string) (*Claims, error) {
 	cfg := config.Get()
 	token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(token *jwt.Token) (interface{}, error) {
+		// 显式校验 alg 为 HMAC 系（安全审计 H-4）：
+		// 防止攻击者通过 alg=none 或未来意外引入 RS256 触发算法混淆攻击。
+		// 本系统仅签发并接受 HS256；其他任何 alg 直接拒绝。
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("unexpected JWT signing method: %v", token.Header["alg"])
+		}
 		return []byte(cfg.JWT.Secret), nil
 	})
 

@@ -84,6 +84,17 @@ func (p *LocalProvider) Deploy(ctx context.Context, fullchain, privateKey string
 			targetKeyPath = strings.ReplaceAll(targetKeyPath, "{domain}", domain)
 		}
 
+		// 路径遍历防御（安全审计 H-1）：拒绝 `..` 上溯、控制字符、非绝对路径
+		cleanCert, err := sanitizeLocalPath("cert_path", targetCertPath)
+		if err != nil {
+			return err
+		}
+		cleanKey, err := sanitizeLocalPath("key_path", targetKeyPath)
+		if err != nil {
+			return err
+		}
+		targetCertPath, targetKeyPath = cleanCert, cleanKey
+
 		p.Log("正在写入证书文件: " + targetCertPath)
 		certDir := filepath.Dir(targetCertPath)
 		if err := os.MkdirAll(certDir, 0755); err != nil {

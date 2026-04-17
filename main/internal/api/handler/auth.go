@@ -56,27 +56,35 @@ func loginFailKey(ip, username string) string {
 }
 
 // loginBlocked 返回 true 表示当前 IP+username 组合已被临时锁定。
+//
+// 读路径使用 cache.C.Get（纯文本），与 Incr 使用的计数格式兼容。
+// 原使用 GetJSON 在 cache 类型切换后会反序列化失败。
 func loginBlocked(ip, username string) bool {
 	if cache.C == nil {
 		return false
 	}
-	var n int
-	if cache.C.GetJSON(loginFailKey(ip, username), &n) && n >= loginFailThreshold {
-		return true
+	v, ok := cache.C.Get(loginFailKey(ip, username))
+	if !ok {
+		return false
 	}
-	return false
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return false
+	}
+	return n >= loginFailThreshold
 }
 
-// noteLoginFailure 累加一次失败计数（TTL 自动维持）。
+// noteLoginFailure 原子累加一次失败计数。
+//
+// 安全审计 H-2：原实现 GetJSON + 自增 + SetJSON 三步非原子，
+// 并发失败请求下存在 lost-update，实际计数远低于阈值，锁定形同虚设。
+// 改为 cache.C.Incr（Redis INCR 天然原子；memoryCache 实现走 mu.Lock），
+// 保证单次自增不被覆盖。
 func noteLoginFailure(ip, username string) {
 	if cache.C == nil {
 		return
 	}
-	key := loginFailKey(ip, username)
-	var n int
-	cache.C.GetJSON(key, &n)
-	n++
-	cache.C.SetJSON(key, n, loginFailWindow)
+	_, _ = cache.C.Incr(loginFailKey(ip, username), loginFailWindow)
 }
 
 // clearLoginFailure 登录成功或验证码通过后清零计数。
@@ -190,6 +198,9 @@ func Login(c *gin.Context) {
 	}
 
 	if user.Status != 1 {
+		// 禁用账户路径也计入失败计数（安全审计 M-5），
+		// 保持所有失败分支的锁定行为一致，避免通过失败计数覆盖缺失推断账户状态
+		noteLoginFailure(ip, req.Username)
 		logger.Info("用户登录失败: 账户已被禁用 - 用户名: %s", req.Username)
 		loginDelayJitter()
 		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "账户已被禁用"})
@@ -838,6 +849,9 @@ func ResetTOTP(c *gin.Context) {
 
 // AdminSendResetEmail 管理员发送重置邮件
 func AdminSendResetEmail(c *gin.Context) {
+	if !requireAdmin(c) {
+		return
+	}
 	userID, _ := c.Params.Get("id")
 
 	var req struct {
@@ -899,6 +913,9 @@ func AdminSendResetEmail(c *gin.Context) {
 
 // AdminResetTOTP 管理员直接重置用户TOTP
 func AdminResetTOTP(c *gin.Context) {
+	if !requireAdmin(c) {
+		return
+	}
 	userID, _ := c.Params.Get("id")
 
 	// 查找目标用户
