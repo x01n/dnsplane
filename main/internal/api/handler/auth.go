@@ -5,8 +5,8 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
-	"math/big"
 	"encoding/json"
+	"fmt"
 	"main/internal/api/middleware"
 	"main/internal/cache"
 	"main/internal/database"
@@ -16,6 +16,8 @@ import (
 	"main/internal/notify"
 	"main/internal/utils"
 	"main/internal/verify"
+	"math/big"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -43,6 +45,29 @@ func loginDelayJitter() {
 	time.Sleep(time.Duration(50+n.Int64()) * time.Millisecond)
 }
 
+// markTOTPCounterUsed 将一个 TOTP 时间窗口标记为已使用（安全审计 M-1）。
+// 返回 true 表示成功占位（首次使用）；返回 false 表示该 counter 已被使用过（重放）。
+//
+// Key 用 sha256(secret) 的前 16 字符作为稳定指纹，不暴露原始 secret；
+// TTL 设为 90s 覆盖 ±30s 验证窗口。
+//
+// 在缓存不可用时返回 true 作为服务降级（与 JTI 类似策略）。
+func markTOTPCounterUsed(secret string, counter int64) bool {
+	if cache.C == nil {
+		return true
+	}
+	fp := sha256.Sum256([]byte(secret))
+	key := "totp_used:" + hex.EncodeToString(fp[:8]) + ":" + strconv.FormatInt(counter, 10)
+	if _, ok := cache.C.Get(key); ok {
+		return false
+	}
+	if err := cache.C.Set(key, "1", 90*time.Second); err != nil {
+		// 写缓存失败视为放行，避免 cache 抖动导致合法用户被拒
+		return true
+	}
+	return true
+}
+
 // 登录暴力破解防护（安全审计 H-5）。
 // 以 IP+用户名 双维度计数，窗口 15 分钟内失败次数超过阈值即拒绝。
 // 成功登录后清除该 IP+用户名 的计数器。
@@ -51,8 +76,27 @@ const (
 	loginFailThreshold = 5
 )
 
+// bucketLoginFailIP 将 IP 归一到 /24 (IPv4) 或 /64 (IPv6) 前缀。
+//
+// 安全审计 M-7：内存缓存模式下 login_fail 键原以原始 IP+用户名 为键，
+// 攻击者用海量随机 IP 可不受控地撑爆 map。按子网前缀分桶后：
+//   - IPv4 可能的不同桶 ≤ 2^24 = 16M（实际使用中远远小于）
+//   - IPv6 按 /64 前缀归档，与单个终端 /64 段合并
+// 对合法用户影响极小：同一子网下不同用户名仍有独立计数。
+func bucketLoginFailIP(raw string) string {
+	ip := net.ParseIP(strings.TrimSpace(raw))
+	if ip == nil {
+		return raw
+	}
+	if v4 := ip.To4(); v4 != nil {
+		return fmt.Sprintf("%d.%d.%d.0/24", v4[0], v4[1], v4[2])
+	}
+	mask := net.CIDRMask(64, 128)
+	return ip.Mask(mask).String() + "/64"
+}
+
 func loginFailKey(ip, username string) string {
-	return "login_fail:" + ip + ":" + strings.ToLower(strings.TrimSpace(username))
+	return "login_fail:" + bucketLoginFailIP(ip) + ":" + strings.ToLower(strings.TrimSpace(username))
 }
 
 // loginBlocked 返回 true 表示当前 IP+username 组合已被临时锁定。
@@ -221,11 +265,21 @@ func Login(c *gin.Context) {
 			c.JSON(http.StatusOK, gin.H{"code": 2, "msg": "需要进行二步验证"})
 			return
 		}
-		if !utils.VerifyTOTPCode(user.TOTPSecret, req.TOTPCode) {
+		// 安全审计 M-1：校验码 + 单次计数器防重放。
+		// 同一 counter 已在 90s 内被使用过，直接拒绝重放。
+		ok, counter := utils.VerifyTOTPCodeWithCounter(user.TOTPSecret, req.TOTPCode)
+		if !ok {
 			noteLoginFailure(ip, req.Username)
 			logger.Info("用户登录失败: TOTP验证码错误 - 用户名: %s", req.Username)
 			loginDelayJitter()
 			c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "验证码错误"})
+			return
+		}
+		if !markTOTPCounterUsed(user.TOTPSecret, counter) {
+			noteLoginFailure(ip, req.Username)
+			logger.Warn("用户登录被拦截: TOTP 计数器 %d 已被使用，疑似重放 - 用户名: %s", counter, req.Username)
+			loginDelayJitter()
+			c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "验证码已使用，请等待下一个周期"})
 			return
 		}
 	}

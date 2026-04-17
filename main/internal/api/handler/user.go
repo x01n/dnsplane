@@ -153,6 +153,15 @@ func UpdateUser(c *gin.Context) {
 		return
 	}
 
+	// 安全审计 M-3：管理员层级约束。
+	// 非操作自己时，不允许修改等级 ≥ 自己的其他用户；防止同级管理员互删/互锁。
+	currentLevel := c.GetInt("level")
+	currentUserID := middleware.AuthUserID(c)
+	if uint(id) != currentUserID && user.Level >= currentLevel {
+		middleware.ErrorResponse(c, "无权修改同级或更高权限的用户")
+		return
+	}
+
 	var req struct {
 		Password    string `json:"password"`
 		Email       string `json:"email"`
@@ -163,6 +172,12 @@ func UpdateUser(c *gin.Context) {
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"code": -1, "msg": "参数错误"})
+		return
+	}
+
+	// 不允许把他人 level 设置到 >= 自己的值（阻断横向提权路径）
+	if uint(id) != currentUserID && req.Level >= currentLevel {
+		middleware.ErrorResponse(c, "无权将他人等级提升至同级或以上")
 		return
 	}
 
@@ -207,6 +222,15 @@ func DeleteUser(c *gin.Context) {
 	if uint(id) == currentUserID {
 		c.JSON(http.StatusBadRequest, gin.H{"code": -1, "msg": "不能删除自己"})
 		return
+	}
+
+	// 安全审计 M-3：不允许删除等级 ≥ 自己的其他管理员
+	var target models.User
+	if err := database.DB.Select("id", "level").First(&target, id).Error; err == nil {
+		if target.Level >= c.GetInt("level") {
+			middleware.ErrorResponse(c, "无权删除同级或更高权限的用户")
+			return
+		}
 	}
 
 	// 同时删除用户的权限

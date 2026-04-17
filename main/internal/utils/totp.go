@@ -63,19 +63,33 @@ func GenerateTOTPURI(config TOTPConfig) string {
 
 /* VerifyTOTPCode 验证 TOTP 验证码（允许前后 1 个时间窗口偏移） */
 func VerifyTOTPCode(secret, code string) bool {
-	// 去除空格并统一大写
+	ok, _ := VerifyTOTPCodeWithCounter(secret, code)
+	return ok
+}
+
+/*
+ * VerifyTOTPCodeWithCounter 验证 TOTP 验证码并返回匹配的时间窗口计数器（counter）。
+ *
+ * 安全审计 M-1：允许 ±30s 共 3 个有效码，若仅返回 bool 则调用方无法实现
+ * "同一 code 单次有效"的防重放。此函数额外返回 counter，供调用方把
+ * (secret_hash, counter) 作为已用标记存入缓存，同一窗口内第二次出现即拒绝。
+ *
+ * 返回 (matched, counter)：
+ *   - matched=false: code 错误，counter=0 无意义
+ *   - matched=true:  counter 为 30 秒粒度的时间步数（time.Unix()/30 的邻近值）
+ */
+func VerifyTOTPCodeWithCounter(secret, code string) (bool, int64) {
 	secret = strings.ToUpper(strings.ReplaceAll(secret, " ", ""))
 	code = strings.TrimSpace(code)
 
-	// 验证当前时间窗口和前后各一个时间窗口
 	currentTime := time.Now().Unix()
 	for _, offset := range []int64{-30, 0, 30} {
-		expectedCode := generateTOTPCode(secret, currentTime+offset)
-		if expectedCode == code {
-			return true
+		t := currentTime + offset
+		if generateTOTPCode(secret, t) == code {
+			return true, t / 30
 		}
 	}
-	return false
+	return false, 0
 }
 
 /* generateTOTPCode 根据密钥和时间戳生成 6 位 TOTP 验证码 */
