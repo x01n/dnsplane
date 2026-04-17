@@ -133,12 +133,19 @@ master:
             cat RELEASE_NOTES.md
         # 用 cnb:read-file 将 .version.env 中的 VERSION / RELEASE_TAG 导出到后续 stage 环境变量，
         # 供 git:release 的 options 字段做 ${RELEASE_TAG} 模板展开。
-        # 注意：插件参数键为 filePath（不是 file），此前误用 file 会报
-        #   Parameter check failed: cnb:read-file data must have required property 'filePath'.
+        # 关键坑点：
+        #   1. 参数键为 filePath（不是 file），此前误用 file 报
+        #      Parameter check failed: cnb:read-file data must have required property 'filePath'.
+        #   2. 必须同时声明 exports 映射（源 key → 目标环境变量名），
+        #      仅指定 filePath 不会自动注入任何 env。没有 exports 时 options 中
+        #      ${RELEASE_TAG} 为空，git:release 会输出 "tagname is empty"。
         - name: export release env
           type: cnb:read-file
           options:
             filePath: .version.env
+          exports:
+            VERSION: VERSION
+            RELEASE_TAG: RELEASE_TAG
         - name: create release
           type: git:release
           options:

@@ -10,9 +10,37 @@
 
 ---
 
-## v1.0.5 — 修复 CNB 流水线 cnb:read-file 参数名 + 新增 Chanlog.md
+## v1.0.6 — 补 cnb:read-file 的 exports 映射
 
 - **提交**：_待分配_
+- **时间**：2026-04-18
+- **类型**：🟥 Fix
+
+**[修复]**
+`.cnb.yml` 中 `cnb:read-file` stage 仅声明了 `filePath` 未声明 `exports` 映射，
+导致 `.version.env` 内的 `VERSION` / `RELEASE_TAG` 根本没有被注入环境变量。
+`git:release` 的 `options.tag: ${RELEASE_TAG}` 因而展开为空串，日志输出
+`tagname is empty` 并直接跳过创建 Release。
+
+参考 [docs.cnb.cool](https://docs.cnb.cool/zh/build/internal-steps.html)
+官方示例：`cnb:read-file` 必须同时声明 `exports:` 子字段做
+`源key: 目标ENV` 的映射；填加：
+
+```yaml
+- name: export release env
+  type: cnb:read-file
+  options:
+    filePath: .version.env
+  exports:
+    VERSION: VERSION
+    RELEASE_TAG: RELEASE_TAG
+```
+
+---
+
+## v1.0.5 — 修复 CNB 流水线 cnb:read-file 参数名 + 新增 Chanlog.md
+
+- **提交**：`be8bab4`
 - **时间**：2026-04-18
 - **类型**：🟥 Fix + 🟩 Docs
 
