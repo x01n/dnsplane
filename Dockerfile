@@ -13,9 +13,9 @@ FROM --platform=$BUILDPLATFORM golang:1.26.2-bookworm AS builder
 ARG TARGETOS
 ARG TARGETARCH
 ARG TARGETVARIANT
+ARG VERSION=dev
 WORKDIR /src/main
-COPY main/go.mod main/go.sum ./
-RUN go mod download
+# 依赖已 vendor 入库（main/vendor），无需 go mod download，也无需网络
 COPY main/ ./
 COPY --from=web /build/main/web ./web
 RUN set -eux; \
@@ -23,7 +23,9 @@ RUN set -eux; \
   if [ "${TARGETARCH}" = "arm" ] && [ -n "${TARGETVARIANT:-}" ]; then \
     export GOARM="${TARGETVARIANT#v}"; \
   fi; \
-  go build -buildvcs=false -trimpath -ldflags="-s -w" -o /dnsplane .
+  go build -mod=vendor -buildvcs=false -trimpath \
+    -ldflags="-s -w -X main.Version=${VERSION}" \
+    -o /dnsplane .
 
 FROM --platform=$TARGETPLATFORM gcr.io/distroless/static-debian12:nonroot
 WORKDIR /app

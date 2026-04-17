@@ -1,0 +1,162 @@
+# CNB CI/CD 流水线
+# 目标：push 主干/标签时自动构建 Linux amd64 + arm64 二进制，tag_push 同时推多架构 Docker 镜像到 CNB 镜像源。
+# 依赖：
+#   - main/vendor 已入库，后端 go build 使用 -mod=vendor 无需联网拉 Go 依赖
+#   - 前端由 Node 22 构建，产物经 scripts/sync-main-web.cjs 放到 main/web 供 go:embed 打包
+#   - Dockerfile 已支持 TARGETOS/TARGETARCH/TARGETVARIANT，docker buildx 多架构直接可用
+
+$:
+  # 任意分支 push：交叉编译两个架构的二进制并归档
+  push:
+    - name: build-binaries
+      runner:
+        cpus: 4
+      docker:
+        image: docker.cnb.cool/cnb/golang:1.26.2-bookworm
+      env:
+        CGO_ENABLED: "0"
+        GOFLAGS: "-mod=vendor"
+      stages:
+        - name: build-frontend
+          image: docker.cnb.cool/cnb/node:22-bookworm-slim
+          script: |
+            set -eux
+            cd web
+            npm config set fetch-retries 5
+            npm config set fetch-retry-mintimeout 20000
+            npm config set fetch-retry-maxtimeout 120000
+            npm ci
+            npm run build:ci
+        - name: build-linux-amd64
+          script: |
+            set -eux
+            mkdir -p dist
+            cd main
+            GOOS=linux GOARCH=amd64 \
+              go build -trimpath -buildvcs=false -ldflags="-s -w" \
+              -o ../dist/dnsplane-linux-amd64 .
+        - name: build-linux-arm64
+          script: |
+            set -eux
+            cd main
+            GOOS=linux GOARCH=arm64 \
+              go build -trimpath -buildvcs=false -ldflags="-s -w" \
+              -o ../dist/dnsplane-linux-arm64 .
+        - name: checksums
+          script: |
+            set -eux
+            cd dist
+            sha256sum dnsplane-linux-* > SHA256SUMS
+            ls -lh
+      artifacts:
+        - dist/
+
+  # 标签 push（例如 v1.2.3）：除了二进制，再构建并推送多架构 Docker 镜像
+  tag_push:
+    - name: release-binaries
+      runner:
+        cpus: 4
+      docker:
+        image: docker.cnb.cool/cnb/golang:1.26.2-bookworm
+      env:
+        CGO_ENABLED: "0"
+        GOFLAGS: "-mod=vendor"
+      stages:
+        - name: build-frontend
+          image: docker.cnb.cool/cnb/node:22-bookworm-slim
+          script: |
+            set -eux
+            cd web && npm ci && npm run build:ci
+        - name: build-all
+          script: |
+            set -eux
+            mkdir -p dist
+            cd main
+            for arch in amd64 arm64; do
+              GOOS=linux GOARCH=$arch \
+                go build -trimpath -buildvcs=false \
+                -ldflags="-s -w -X main.Version=${CNB_TAG_NAME:-dev}" \
+                -o "../dist/dnsplane-linux-${arch}" .
+            done
+        - name: package
+          script: |
+            set -eux
+            cd dist
+            for arch in amd64 arm64; do
+              tar -czf "dnsplane-${CNB_TAG_NAME:-dev}-linux-${arch}.tar.gz" \
+                "dnsplane-linux-${arch}"
+            done
+            sha256sum *.tar.gz > SHA256SUMS
+            ls -lh
+      artifacts:
+        - dist/
+
+    - name: release-docker
+      runner:
+        cpus: 4
+      services:
+        - docker
+      docker:
+        image: docker.cnb.cool/cnb/docker:27
+      env:
+        DOCKER_BUILDKIT: "1"
+      stages:
+        - name: login
+          # CNB 内置 $CNB_TOKEN 登录到 docker.cnb.cool；无需额外 Secrets
+          script: |
+            set -eux
+            echo "${CNB_TOKEN}" | docker login docker.cnb.cool \
+              -u "${CNB_TOKEN_USER_NAME:-cnb}" --password-stdin
+        - name: buildx-init
+          script: |
+            set -eux
+            docker buildx create --use --name multiarch --driver docker-container
+            docker buildx inspect --bootstrap
+        - name: build-and-push
+          script: |
+            set -eux
+            TAG="${CNB_TAG_NAME:-dev}"
+            IMAGE="docker.cnb.cool/neko_kernel/dnsplane"
+            docker buildx build \
+              --platform linux/amd64,linux/arm64 \
+              --tag "${IMAGE}:${TAG}" \
+              --tag "${IMAGE}:latest" \
+              --label "org.opencontainers.image.source=https://cnb.cool/Neko_Kernel/DNSPlane" \
+              --label "org.opencontainers.image.revision=${CNB_COMMIT:-}" \
+              --label "org.opencontainers.image.version=${TAG}" \
+              --cache-from type=registry,ref=${IMAGE}:buildcache \
+              --cache-to type=registry,ref=${IMAGE}:buildcache,mode=max \
+              --push \
+              .
+
+  # 手动触发：与 tag_push 等价，便于临时补发镜像
+  web_trigger:
+    - name: manual-release-docker
+      runner:
+        cpus: 4
+      services:
+        - docker
+      docker:
+        image: docker.cnb.cool/cnb/docker:27
+      env:
+        DOCKER_BUILDKIT: "1"
+      stages:
+        - name: login
+          script: |
+            set -eux
+            echo "${CNB_TOKEN}" | docker login docker.cnb.cool \
+              -u "${CNB_TOKEN_USER_NAME:-cnb}" --password-stdin
+        - name: buildx-init
+          script: |
+            set -eux
+            docker buildx create --use --name multiarch --driver docker-container
+        - name: build-and-push
+          script: |
+            set -eux
+            TAG="${CNB_BRANCH//\//-}-${CNB_COMMIT:0:7}"
+            IMAGE="docker.cnb.cool/neko_kernel/dnsplane"
+            docker buildx build \
+              --platform linux/amd64,linux/arm64 \
+              --tag "${IMAGE}:${TAG}" \
+              --push \
+              .
