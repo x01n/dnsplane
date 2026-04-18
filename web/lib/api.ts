@@ -401,11 +401,11 @@ export const domainApi = {
     api.get<{ total: number; list: DNSRecord[] }>(`/domains/${id}/records`, params),
   createRecord: (id: number | string, data: { name: string; type: string; value: string; line?: string; ttl?: number; mx?: number; remark?: string }) =>
     api.post<DNSRecord>(`/domains/${id}/records`, data),
-  updateRecord: (domainId: number, recordId: string, data: { name: string; type: string; value: string; line?: string; ttl?: number; mx?: number; remark?: string }) =>
+  updateRecord: (domainId: number | string, recordId: string, data: { name: string; type: string; value: string; line?: string; ttl?: number; mx?: number; remark?: string }) =>
     api.post<DNSRecord>(`/domains/${domainId}/records/${recordId}`, data),
-  deleteRecord: (domainId: number, recordId: string) =>
+  deleteRecord: (domainId: number | string, recordId: string) =>
     api.post(`/domains/${domainId}/records/${recordId}/delete`, {}),
-  setRecordStatus: (domainId: number, recordId: string, enable: boolean) =>
+  setRecordStatus: (domainId: number | string, recordId: string, enable: boolean) =>
     api.post(`/domains/${domainId}/records/${recordId}/status`, { enable }),
   getLines: (id: number | string) => api.get<RecordLine[]>(`/domains/${id}/lines`),
   batchAddRecords: (id: number | string, data: { records: string; type?: string; line?: string; ttl?: number }) =>
@@ -439,7 +439,7 @@ export const monitorApi = {
       `/monitor/tasks/${id}/uptime`
     ),
   getResolveStatus: (id: number | string) => api.get<unknown[]>(`/monitor/tasks/${id}/resolve-status`),
-  lookup: (domainId: number, subDomain: string) =>
+  lookup: (domainId: number | string, subDomain: string) =>
     api.post<{ domain: string; account_type: string; records: unknown[] }>('/monitor/lookup', {
       domain_id: domainId,
       sub_domain: subDomain,

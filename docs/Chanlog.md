@@ -10,9 +10,32 @@
 
 ---
 
-## v1.0.9 — 修复关 ignoreBuildErrors 后暴露的 id: number 类型不匹配
+## v1.0.10 — 修复 domainId/subId 类型，覆盖 v1.0.9 漏掉的命名
 
 - **提交**：_待分配_
+- **时间**：2026-04-18
+- **类型**：🟥 Fix（类型）
+
+**[问题]**
+v1.0.9 只覆盖 `(id: number)` 模式，但 `updateRecord/deleteRecord/setRecordStatus/lookup`
+等签名用的是 `(domainId: number, recordId: string, ...)`，命名不同。
+CI 跑到下一个文件继续报：
+```
+./app/(dashboard)/dashboard/domains/[id]/client.tsx:371:40
+Type error: Argument of type 'string' is not assignable to parameter of type 'number'.
+const res = selectedRecord
+  ? await domainApi.updateRecord(domainId, selectedRecord.RecordId, data)
+```
+
+**[修复]**
+`lib/api.ts` 中 `domainId: number` → `domainId: number | string` 共 4 处。
+`recordId: string` 不变（已是 string）。
+
+---
+
+## v1.0.9 — 修复关 ignoreBuildErrors 后暴露的 id: number 类型不匹配
+
+- **提交**：`301421f`
 - **时间**：2026-04-18
 - **类型**：🟥 Fix（类型严格化）
 
