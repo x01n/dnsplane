@@ -113,12 +113,12 @@ export default function SettingsPage() {
       const noticeDays =
         typeof config.cert_expire_notice_days === 'number' && config.cert_expire_notice_days > 0
           ? config.cert_expire_notice_days
-          : null
+          : undefined
       const noticeInterval =
         typeof config.cert_expire_notice_interval_days === 'number' &&
         config.cert_expire_notice_interval_days > 0
           ? config.cert_expire_notice_interval_days
-          : null
+          : undefined
       const res = await systemApi.updateConfig({
         ...config,
         cert_expire_notice_days: noticeDays,
@@ -404,7 +404,7 @@ export default function SettingsPage() {
                     type="number"
                     placeholder="与「自动续期提前天数」相同"
                     min={1}
-                    value={config.cert_expire_notice_days != null && config.cert_expire_notice_days > 0 ? String(config.cert_expire_notice_days) : ''}
+                    value={config.cert_expire_notice_days != null && Number(config.cert_expire_notice_days) > 0 ? String(config.cert_expire_notice_days) : ''}
                     onChange={(e) => {
                       const raw = e.target.value.trim()
                       if (raw === '') {
@@ -427,7 +427,7 @@ export default function SettingsPage() {
                     min={1}
                     value={
                       config.cert_expire_notice_interval_days != null &&
-                      config.cert_expire_notice_interval_days > 0
+                      Number(config.cert_expire_notice_interval_days) > 0
                         ? String(config.cert_expire_notice_interval_days)
                         : ''
                     }

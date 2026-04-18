@@ -10,9 +10,47 @@
 
 ---
 
-## v1.0.10 — 修复 domainId/subId 类型，覆盖 v1.0.9 漏掉的命名
+## v1.0.11 — 199 个 TS 类型错误清零，本地 build 跑通
 
 - **提交**：_待分配_
+- **时间**：2026-04-18
+- **类型**：🟥 Fix（类型严格化）
+
+**[问题]**
+v1.0.10 后 `npx tsc --noEmit` 报 **199 个**类型错误，全部由 v1.0.7 关闭
+`ignoreBuildErrors` 之前长期积累的隐藏问题（`lib/api.ts` 接口字段缺失、API
+方法未声明、字段类型不一致）。
+
+**[修复] lib/api.ts 大刀阔斧补全**
+- `Domain`：补 `perm_sub`
+- `WhoisInfo`：补 `created_date / expiry_date` 别名
+- `MonitorTask`：补 ~20 字段（`backup_values / backup_health / main_health / record_type / record_line / proxy_* / expect_* / max_redirects / notify_* / auto_restore / fault_time / recover_time / last_error / allow_insecure_tls`）
+- `MonitorOverview`：补 `task_count / active_count / healthy_count / faulty_count / avg_uptime`
+- `SystemConfig`：补 50+ 系统设置键（OAuth 全套 / Discord / Bark / WechatWork / 站点 / 证书提醒 / 域名提醒 / 注册开关 / 邮件模板），加 `[key: string]: any` 索引签名兼容未来追加
+- `CronConfig`：补 `cron_schedule / cron_optimize / cron_cert / cron_expire`
+- 新增 `TaskStatus`、`authControlApi`（含 get/update/getConfig/updateConfig 别名）
+- `logApi.clean(days)`、`totpApi.disable(password, code)`、`totpApi.regenerateRecovery(password, code)`
+- `authApi.getBehavioralCaptcha / verifyBehavioralCaptcha / getGoCaptcha / verifyGoCaptcha`
+- `systemApi.testDiscord / testBark / testWechat`
+
+**[业务代码修复]**
+- `monitor/page.tsx`：`task.auto_restore` / `task.notify_enabled` 加 `?? false` 默认值；`<Button onClick={openSmartAdd}>` → `onClick={() => openSmartAdd()}` 解决签名不兼容；`fault_time / recover_time` 是 epoch 秒数，传给 `formatDate(new Date(x*1000))`
+- `request-logs/page.tsx`：`JSON.parse(selectedLog.body)` → `JSON.parse(selectedLog.body || '""')` 防 undefined
+- `settings/page.tsx`：`null` → `undefined`、`> number` 比较加 `Number()` 强制
+- `auth-control-settings.tsx`：`Record<string, unknown>` → `Record<string, string>` 用 `String(v)` 转换
+
+**[验证]**
+- `npx tsc --noEmit` → **0 errors**
+- `npm run build:ci` → **build success**，所有 19 个路由预渲染通过
+
+> 这是 v1.0.7 关掉 `ignoreBuildErrors` 后第三次（也是最大）一次清扫。
+> 至此 TS 严格模式真正落地。
+
+---
+
+## v1.0.10 — 修复 domainId/subId 类型，覆盖 v1.0.9 漏掉的命名
+
+- **提交**：`74432ec`
 - **时间**：2026-04-18
 - **类型**：🟥 Fix（类型）
 

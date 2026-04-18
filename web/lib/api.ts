@@ -358,6 +358,47 @@ export const authApi = {
       redirect?: string
       user: User
     }>('/auth/magic-link/totp', { preauth_token, totp_code }),
+  // 行为/拼图验证码（mojocn/base64Captcha + go-captcha 系列）
+  // 验证 answer 形态依赖具体验证码类型（点选/拖拽/旋转/算术），统一为 unknown
+  getBehavioralCaptcha: () =>
+    api.get<{ captcha_id: string; image_base64: string; thumb_base64?: string }>(
+      '/auth/captcha/behavioral'
+    ),
+  verifyBehavioralCaptcha: (data: {
+    captcha_id: string
+    answer: unknown
+    captcha_type?: string
+  }) => api.post<{ verify_token: string }>('/auth/captcha/behavioral/verify', data),
+  getGoCaptcha: () =>
+    api.get<{ captcha_id: string; image_base64: string; thumb_base64?: string }>(
+      '/auth/captcha/go'
+    ),
+  verifyGoCaptcha: (data: {
+    captcha_id: string
+    answer: unknown
+    captcha_type?: string
+  }) => api.post<{ verify_token: string }>('/auth/captcha/go/verify', data),
+}
+
+// 系统访问控制配置（白名单/限流/CAPTCHA 触发条件）
+// 兼容历史命名：get/update 与 getConfig/updateConfig 同义
+export const authControlApi = {
+  get: () => api.get<Record<string, unknown>>('/system/auth-control'),
+  update: (data: Record<string, unknown>) =>
+    api.post('/system/auth-control', data),
+  getConfig: () => api.get<Record<string, unknown>>('/system/auth-control'),
+  updateConfig: (data: Record<string, unknown>) =>
+    api.post('/system/auth-control', data),
+}
+
+/** 系统任务/Cron 状态信息（开放结构，schedule/optimize 等子任务字段动态注入） */
+export interface TaskStatus {
+  running: boolean
+  last_run?: string
+  next_run?: string
+  error?: string
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  [key: string]: any
 }
 
 // Account APIs
@@ -555,6 +596,8 @@ export const logApi = {
     date_from?: string
     date_to?: string
   }) => api.get<OperationLogListData>('/logs', params),
+  /** 清理旧操作日志，days 表示保留多少天 */
+  clean: (days: number) => api.post<{ deleted?: number }>('/logs/clean', { days }),
 }
 
 export interface SystemInfo {
@@ -584,6 +627,9 @@ export const systemApi = {
   testMail: () => api.post('/system/mail/test'),
   testTelegram: () => api.post('/system/telegram/test'),
   testWebhook: () => api.post('/system/webhook/test'),
+  testDiscord: () => api.post('/system/discord/test'),
+  testBark: () => api.post('/system/bark/test'),
+  testWechat: () => api.post('/system/wechat/test'),
   /** 与 handler.TestProxy JSON 一致：host、pass（非 server/password） */
   testProxy: (data: {
     host: string
@@ -610,7 +656,12 @@ export const totpApi = {
   getStatus: () => api.get<{ enabled: boolean }>('/user/totp/status'),
   enable: () => api.post<{ secret: string; qrcode: string; uri?: string }>('/user/totp/enable'),
   verify: (code: string) => api.post('/user/totp/verify', { code }),
-  disable: () => api.post('/user/totp/disable'),
+  /** 关闭 TOTP（需提供密码 + 6 位动态码二次确认） */
+  disable: (password?: string, code?: string) =>
+    api.post('/user/totp/disable', { password, code }),
+  /** 重新生成 TOTP 恢复码列表（需提供密码 + 动态码二次确认） */
+  regenerateRecovery: (password?: string, code?: string) =>
+    api.post<{ recovery_codes: string[] }>('/user/totp/recovery/regenerate', { password, code }),
 }
 
 // OAuth（账户绑定；登录跳转使用 /api/auth/oauth/:provider/login）
@@ -752,6 +803,7 @@ export interface Domain {
   account_name?: string
   type_name?: string
   icon?: string
+  perm_sub?: string
 }
 
 export interface DomainItem {
@@ -786,6 +838,9 @@ export interface WhoisInfo {
   registrar?: string
   creation_date?: string
   expiration_date?: string
+  /** 后端返回字段别名（部分接口走 created_date / expiry_date 命名） */
+  created_date?: string
+  expiry_date?: string
   updated_date?: string
   name_servers?: string[]
   status?: string[]
@@ -817,9 +872,14 @@ export interface MonitorTask {
   did: number
   rr: string
   record_id: string
+  record_type?: string
+  record_line?: string
   type: number
   main_value: string
   backup_value?: string
+  /** 多备用值，逗号分隔；非空时优先于 backup_value（与后端 DMTask.BackupValues 对齐） */
+  backup_values?: string
+  backup_type?: string
   check_type: number
   check_url?: string
   tcp_port?: number
@@ -835,9 +895,29 @@ export interface MonitorTask {
   switch_time: number
   err_count: number
   status: number
+  /** 主源最新一次健康状态（DMTask.MainHealth） */
+  main_health?: boolean
+  /** 备用源健康状态汇总：JSON 数组字符串如 '[true,false]'（DMCheckLog 关联，运行时注入） */
+  backup_health?: string
   active: boolean
   record_info?: string
   domain?: string
+  expect_status?: string
+  expect_keyword?: string
+  max_redirects?: number
+  proxy_type?: string
+  proxy_host?: string
+  proxy_port?: number
+  proxy_username?: string
+  proxy_password?: string
+  notify_enabled?: boolean
+  notify_channels?: string
+  auto_restore?: boolean
+  allow_insecure_tls?: boolean
+  /** 故障/恢复时间戳与最新错误（运行时聚合字段） */
+  fault_time?: number
+  recover_time?: number
+  last_error?: string
 }
 
 export interface MonitorLog {
@@ -855,6 +935,12 @@ export interface MonitorOverview {
   run_error?: string
   switch_count: number
   fail_count: number
+  /** 任务计数与健康汇总（前端面板字段） */
+  task_count?: number
+  active_count?: number
+  healthy_count?: number
+  faulty_count?: number
+  avg_uptime?: number
 }
 
 export interface CertAccount {
@@ -985,33 +1071,115 @@ export interface OperationLog {
   username?: string
 }
 
+/*
+ * SystemConfig：系统设置键值袋。
+ * 后端 SysConfig 表是 (key, value) 的开放结构，前端 settings 页大量字段
+ * 只在需要时才接入。这里既列出已知键以提供 IDE 提示，也开放索引签名
+ * 兼容未来追加项；新增字段无需先改这里再改 settings 页。
+ */
 export interface SystemConfig {
+  // 验证码
   captcha_enabled?: boolean
   captcha_type?: string
+  captcha_site_key?: string
+  captcha_secret_key?: string
+  turnstile_site_key?: string
+  turnstile_secret_key?: string
+  login_captcha?: boolean
+  // 站点
+  site_name?: string
+  site_url?: string
+  // 证书提醒
+  cert_expire_days?: number
+  cert_expire_notice_enabled?: boolean
+  cert_expire_notice_days?: string | number
+  cert_expire_notice_interval_days?: string | number
+  // 邮件
   mail_enabled?: boolean
   mail_type?: number
   mail_host?: string
   mail_port?: number
+  mail_secure?: string
+  mail_auth?: string
   mail_user?: string
+  mail_username?: string
   mail_password?: string
   mail_from?: string
+  mail_from_name?: string
   mail_recv?: string
+  mail_subject_template?: string
+  mail_body_template?: string
+  // Telegram
   tgbot_enabled?: boolean
   tgbot_token?: string
   tgbot_chatid?: string
+  // Webhook 通用
   webhook_enabled?: boolean
   webhook_url?: string
+  // Discord
+  discord_enabled?: boolean
+  discord_webhook?: string
+  // Bark
+  bark_enabled?: boolean
+  bark_server?: string
+  bark_key?: string
+  // 企业微信
+  wechat_enabled?: boolean
+  wechat_webhook?: string
+  // 代理
   proxy_enabled?: boolean
   proxy_server?: string
   proxy_port?: number
   proxy_type?: string
   proxy_user?: string
   proxy_password?: string
+  // GitHub OAuth（旧版）
+  github_mode?: string
+  github_client_id?: string
+  github_client_secret?: string
+  github_app_id?: string
+  github_app_private_key?: string
+  // OAuth 服务商
+  oauth_google_client_id?: string
+  oauth_google_client_secret?: string
+  oauth_wechat_app_id?: string
+  oauth_wechat_app_secret?: string
+  oauth_dingtalk_app_key?: string
+  oauth_dingtalk_app_secret?: string
+  oauth_custom_name?: string
+  oauth_custom_client_id?: string
+  oauth_custom_client_secret?: string
+  oauth_custom_authorize_url?: string
+  oauth_custom_token_url?: string
+  oauth_custom_userinfo_url?: string
+  oauth_custom_scopes?: string
+  // 域名过期提醒
+  domain_expire_notice_enabled?: boolean
+  domain_expire_days?: number | string
+  // 证书部署/续期通知
+  cert_deploy_notice_enabled?: boolean
+  cert_deploy_success_notice_enabled?: boolean
+  cert_renew_fail_notice_enabled?: boolean
+  // 注册开关
+  register_enabled?: boolean
+  password_register_enabled?: boolean
+  magic_link_login_enabled?: boolean
+  // 任意未列出键值（与后端 SysConfig 开放结构一致）
+  // 用 any 而非 unknown 以方便 React JSX 直接使用 value={config.foo}
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  [key: string]: any
 }
 
 export interface CronConfig {
-  type: number
+  type?: number
   key?: string
+  /** Cron 任务调度表达式分项配置 */
+  cron_schedule?: string
+  cron_optimize?: string
+  cron_cert?: string
+  cron_expire?: string
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  [key: string]: any
 }
 
 export interface DashboardStats {

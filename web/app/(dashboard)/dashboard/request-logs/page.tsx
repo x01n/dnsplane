@@ -285,7 +285,7 @@ export default function RequestLogsPage() {
                       ) : (
                         (() => {
                           try {
-                            return JSON.stringify(JSON.parse(selectedLog.body), null, 2)
+                            return JSON.stringify(JSON.parse(selectedLog.body || '""'), null, 2)
                           } catch {
                             return selectedLog.body || "-"
                           }
@@ -302,7 +302,7 @@ export default function RequestLogsPage() {
                   <pre className="text-xs bg-muted p-4 rounded overflow-auto max-h-96">
                     {(() => {
                       try {
-                        return JSON.stringify(JSON.parse(selectedLog.response), null, 2)
+                        return JSON.stringify(JSON.parse(selectedLog.response || '""'), null, 2)
                       } catch {
                         return selectedLog.response || "-"
                       }
