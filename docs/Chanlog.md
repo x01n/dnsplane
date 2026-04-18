@@ -10,9 +10,39 @@
 
 ---
 
-## v1.0.7 — 第四轮深度审计：cert 全线 IDOR / SystemConfig 提权 / 通知 SSRF / 邮件 CRLF + 前端类型守卫与并发安全
+## v1.0.8 — 修复 CNB SCA 扫描发现的依赖 CVE + CI build 错误
 
 - **提交**：_待分配_
+- **时间**：2026-04-18
+- **类型**：🟥 Fix（依赖安全 + 构建）
+
+**[CI 修复]**
+v1.0.7 移除 `next.config.ts` 的 `ignoreBuildErrors` 后立即暴露隐藏类型错误：
+`app/(dashboard)/dashboard/cert/page.tsx:608` 调用 `api.getToken()` 但
+未在文件顶部 import `api`，CI build 失败：`Cannot find name 'api'`。
+补 import：`import { api, certApi, ... } from '@/lib/api'`。
+
+**[依赖 CVE 修复]** CNB 软件成分分析（SCA）扫描及 npm audit 报：
+
+| 漏洞 | 影响 | 修复 |
+|---|---|---|
+| **CVE-2026-23864** React Server Components DoS | react@19.2.3 | 升 react / react-dom → **19.2.4** |
+| **GHSA-q4gf-8mx6-v5v3** Next.js DoS via Server Components（high） | next@16.0.0-beta.0 ~ 16.2.2 | 升 next / eslint-config-next → **16.2.4** |
+
+**验证结果**
+- `npm audit --omit=dev` → **0 vulnerabilities**
+- `govulncheck ./... -mode=source` → **No vulnerabilities found**
+
+> 注：项目 `next.config.ts` 设 `output: 'export'` 走静态导出，运行时
+> 不暴露 Server Function / Server Components 端点，原本不直接受影响；
+> 但 SCA 工具基于 dependency 版本判定，即便运行时不触发，依赖版本号本身
+> 仍会被全网公开扫描结果列为高危条目。统一升到补丁版本以消除显示。
+
+---
+
+## v1.0.7 — 第四轮深度审计：cert 全线 IDOR / SystemConfig 提权 / 通知 SSRF / 邮件 CRLF + 前端类型守卫与并发安全
+
+- **提交**：`b664c13`
 - **时间**：2026-04-18
 - **类型**：🟥 Fix（关键安全）
 

@@ -15,7 +15,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { Switch } from '@/components/ui/switch'
 import { Checkbox } from '@/components/ui/checkbox'
 import { toast } from 'sonner'
-import { certApi, CertOrder, CertAccount, CertProviderConfig, ProviderConfigField } from '@/lib/api'
+import { api, certApi, CertOrder, CertAccount, CertProviderConfig, ProviderConfigField } from '@/lib/api'
 import {
   isDeployFieldVisible,
   mergeProviderFieldDefaults,
