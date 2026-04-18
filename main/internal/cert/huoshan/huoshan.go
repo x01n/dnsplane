@@ -504,10 +504,10 @@ func (p *Provider) request(ctx context.Context, method, action string, queryPara
 		// Try to find error message
 		if metadata, ok := result["ResponseMetadata"].(map[string]interface{}); ok {
 			if errInfo, ok := metadata["Error"].(map[string]interface{}); ok {
-				return nil, fmt.Errorf("api error: %s - %s", getString(errInfo, "Code"), getString(errInfo, "Message"))
+				return nil, fmt.Errorf("API 返回错误: %s - %s", getString(errInfo, "Code"), getString(errInfo, "Message"))
 			}
 		}
-		return nil, fmt.Errorf("api error: %s", string(respBody))
+		return nil, fmt.Errorf("API 返回错误: %s", string(respBody))
 	}
 
 	return result, nil

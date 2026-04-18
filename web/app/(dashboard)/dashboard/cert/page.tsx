@@ -15,7 +15,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { Switch } from '@/components/ui/switch'
 import { Checkbox } from '@/components/ui/checkbox'
 import { toast } from 'sonner'
-import { certApi, CertOrder, CertAccount, CertProviderConfig, ProviderConfigField } from '@/lib/api'
+import { api, certApi, CertOrder, CertAccount, CertProviderConfig, ProviderConfigField } from '@/lib/api'
 import {
   isDeployFieldVisible,
   mergeProviderFieldDefaults,
@@ -602,20 +602,21 @@ export default function CertPage() {
 
   const handleDownload = async (order: CertOrder, format: string) => {
     try {
-      const token = localStorage.getItem('token')
-      const response = await fetch(`/api/cert/orders/${order.id}/download?type=${format}`, {
-        credentials: 'same-origin',
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
+      // 安全审计 M-1：不再裸读 localStorage.token 再手拼 Bearer header；
+      // 统一走 ApiClient，与所有业务接口共享 Authorization、CSRF、401 自动刷新逻辑。
+      // format 使用 URLSearchParams 构造，防止特殊字符破坏 URL。
+      const accessToken = api.getToken() || ''
+      const query = new URLSearchParams({ type: format }).toString()
+      const response = await fetch(`/api/cert/orders/${order.id}/download?${query}`, {
+        credentials: 'include',
+        headers: accessToken ? { 'Authorization': `Bearer ${accessToken}` } : {},
       })
-      
       if (!response.ok) {
         if (response.status === 401) {
           toast.error('登录已过期，请重新登录')
           return
         }
-        const data = await response.json()
+        const data = await response.json().catch(() => ({ msg: '下载失败' }))
         toast.error(data.msg || '下载失败')
         return
       }
@@ -630,7 +631,8 @@ export default function CertPage() {
         }
       }
 
-      // 创建blob并下载
+      // 创建 blob 并下载；revokeObjectURL 放在 setTimeout 中执行（安全审计 L-3），
+      // 避免与 a.click() 的异步下载产生竞争导致部分浏览器下载失败。
       const blob = await response.blob()
       const url = window.URL.createObjectURL(blob)
       const a = document.createElement('a')
@@ -638,8 +640,8 @@ export default function CertPage() {
       a.download = filename
       document.body.appendChild(a)
       a.click()
-      window.URL.revokeObjectURL(url)
       document.body.removeChild(a)
+      setTimeout(() => window.URL.revokeObjectURL(url), 1000)
     } catch {
       toast.error('下载失败')
     }

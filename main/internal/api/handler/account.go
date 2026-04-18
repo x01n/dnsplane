@@ -36,6 +36,18 @@ func checkAdmin(c *gin.Context) bool {
 	return false
 }
 
+// requireAdmin 管理员门卫：非管理员直接写入"权限不足"响应并返回 false，
+// handler 应 `if !requireAdmin(c) { return }`。
+// 对应安全审计 C-1：/api/users/* 等用户管理接口此前完全无管理员校验，
+// 普通用户可直接调接口将自己升级为 level=2 实现本地提权。
+func requireAdmin(c *gin.Context) bool {
+	if !checkAdmin(c) {
+		middleware.ErrorResponse(c, "权限不足，仅管理员可操作")
+		return false
+	}
+	return true
+}
+
 /* isAdmin 返回当前用户是否管理员 */
 func isAdmin(c *gin.Context) bool {
 	return c.GetInt("level") >= 2

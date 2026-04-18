@@ -89,8 +89,13 @@ function MagicLoginTotpPage() {
                 refresh_token: res.data.refresh_token,
               })
               toast.success(res.msg || '登录成功')
-              const target = res.data.redirect || '/dashboard/'
-              router.push(target.endsWith('/') ? target : `${target}/`)
+              // 安全审计 H-2：对服务端返回的 redirect 做严格白名单——只允许站内相对路径，
+              // 防止攻击者通过后端注入或 MITM 返回外部链接造成 Open Redirect。
+              const raw = res.data.redirect
+              const safe = typeof raw === 'string' && raw.startsWith('/') && !raw.startsWith('//')
+                ? raw
+                : '/dashboard/'
+              router.push(safe.endsWith('/') ? safe : `${safe}/`)
             } else {
               toast.error(res.msg || '验证失败')
               bumpError()

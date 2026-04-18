@@ -55,9 +55,23 @@ func NewEmailNotifier(config EmailConfig) *EmailNotifier {
 }
 
 func (n *EmailNotifier) Send(ctx context.Context, title, content string) error {
+	// 邮件头 CRLF 注入防御（安全审计 R-4）
+	if err := SanitizeMailHeader("Subject", title); err != nil {
+		return err
+	}
+	if err := SanitizeMailHeader("From", n.config.From); err != nil {
+		return err
+	}
+	if err := SanitizeMailHeader("FromName", n.config.FromName); err != nil {
+		return err
+	}
+
 	to := strings.Split(n.config.To, ",")
 	for i := range to {
 		to[i] = strings.TrimSpace(to[i])
+		if err := SanitizeMailHeader("To", to[i]); err != nil {
+			return err
+		}
 	}
 
 	// 构建发件人头部
@@ -308,6 +322,10 @@ func NewWebhookNotifier(config WebhookConfig) *WebhookNotifier {
 }
 
 func (n *WebhookNotifier) Send(ctx context.Context, title, content string) error {
+	// 出站 URL SSRF 防御（安全审计 R-5）
+	if err := ValidateOutboundURL(n.config.URL); err != nil {
+		return err
+	}
 	body := n.config.Template
 	if body == "" {
 		payload := map[string]string{
@@ -397,6 +415,10 @@ func NewDiscordNotifier(config DiscordConfig) *DiscordNotifier {
 }
 
 func (n *DiscordNotifier) Send(ctx context.Context, title, content string) error {
+	// 出站 URL SSRF 防御（安全审计 R-5）
+	if err := ValidateOutboundURL(n.config.WebhookURL); err != nil {
+		return err
+	}
 	payload := map[string]interface{}{
 		"embeds": []map[string]interface{}{
 			{
@@ -450,6 +472,10 @@ func NewBarkNotifier(config BarkConfig) *BarkNotifier {
 }
 
 func (n *BarkNotifier) Send(ctx context.Context, title, content string) error {
+	// 出站 URL SSRF 防御（安全审计 R-5）：先校验 ServerURL，再拼最终路径
+	if err := ValidateOutboundURL(n.config.ServerURL); err != nil {
+		return err
+	}
 	url := fmt.Sprintf("%s/%s/%s/%s", strings.TrimSuffix(n.config.ServerURL, "/"), n.config.DeviceKey, title, content)
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
@@ -488,6 +514,10 @@ func NewWechatWorkNotifier(config WechatWorkConfig) *WechatWorkNotifier {
 }
 
 func (n *WechatWorkNotifier) Send(ctx context.Context, title, content string) error {
+	// 出站 URL SSRF 防御（安全审计 R-5）
+	if err := ValidateOutboundURL(n.config.WebhookURL); err != nil {
+		return err
+	}
 	payload := map[string]interface{}{
 		"msgtype": "markdown",
 		"markdown": map[string]string{

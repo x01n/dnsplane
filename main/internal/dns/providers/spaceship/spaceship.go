@@ -384,7 +384,7 @@ func (p *Provider) request(ctx context.Context, method, path string, params url.
 
 	if resp.StatusCode >= 400 {
 		p.lastError = string(respBody)
-		return fmt.Errorf("api error: %s", p.lastError)
+		return fmt.Errorf("API 返回错误: %s", p.lastError)
 	}
 
 	if result != nil {

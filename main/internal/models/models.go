@@ -13,7 +13,9 @@ type User struct {
 	Password    string         `gorm:"size:80;not null" json:"-"`
 	Email       string         `gorm:"size:100" json:"email"` // 用于接收重置邮件
 	IsAPI       bool           `gorm:"default:false" json:"is_api"`
-	APIKey      string         `gorm:"size:32" json:"api_key,omitempty"`
+	// size:64 对应安全审计 L-4：generateAPIKey 升级到 32 字节（hex 后 64 字符）。
+	// GORM AutoMigrate 会自动把 varchar(32) 列扩展到 64，无需手工迁移。
+	APIKey      string         `gorm:"size:64" json:"api_key,omitempty"`
 	Level       int            `gorm:"default:0" json:"level"`       // 0: normal, 1: admin
 	Status      int            `gorm:"default:1" json:"status"`      // 0: disabled, 1: enabled
 	Permissions string         `gorm:"type:text" json:"permissions"` // 功能权限JSON
@@ -161,6 +163,9 @@ type DMTask struct {
 	NotifyEnabled  bool   `gorm:"default:false" json:"notify_enabled"`
 	NotifyChannels string `gorm:"type:text" json:"notify_channels"` // JSON 数组字符串，如 ["mail","webhook"]
 	AutoRestore    bool   `gorm:"default:false" json:"auto_restore"`
+	// AllowInsecureTLS 允许 HTTPS 探测跳过证书校验（自签 / 内网场景下手动勾选）；
+	// 默认 false 对应安全审计 H-3，拒绝静默放过证书错误。
+	AllowInsecureTLS bool `gorm:"default:false" json:"allow_insecure_tls"`
 }
 
 // DMCheckLog 容灾监控探测历史

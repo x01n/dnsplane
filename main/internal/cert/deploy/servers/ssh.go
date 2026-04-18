@@ -2,9 +2,11 @@ package servers
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"main/internal/cert/deploy/base"
+	"main/internal/logger"
 	"net"
 	"strings"
 	"time"
@@ -81,7 +83,7 @@ func (p *SSHProvider) connect() (*ssh.Client, error) {
 	config := &ssh.ClientConfig{
 		User:            username,
 		Auth:            auth,
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		HostKeyCallback: buildHostKeyCallback(host, p.GetString("host_key")),
 		Timeout:         10 * time.Second,
 	}
 
@@ -92,6 +94,47 @@ func (p *SSHProvider) connect() (*ssh.Client, error) {
 	}
 
 	return client, nil
+}
+
+// buildHostKeyCallback 根据 host_key 配置返回 SSH 主机密钥校验回调。
+//
+// 修复项（安全审计 H-2）：
+//   - 原实现固定使用 ssh.InsecureIgnoreHostKey()，对所有 SSH 目标永不校验主机密钥；
+//     攻击者可在网络链路上实施 MITM，截获上传的 fullchain + privateKey。
+//   - 现在支持在 CertDeploy.Config 中填写 host_key 字段（支持两种格式）：
+//       1) known_hosts 整行（OpenSSH 格式，如 "host ssh-ed25519 AAAAC3..."）
+//       2) "algo base64" 两段式（如 "ssh-ed25519 AAAAC3..."）
+//   - 未配置 host_key 时回退到不校验但打 Warn 日志，保留与历史部署任务的兼容性；
+//     建议运维尽快为每个目标录入 host_key。
+func buildHostKeyCallback(host, hostKey string) ssh.HostKeyCallback {
+	hostKey = strings.TrimSpace(hostKey)
+	if hostKey == "" {
+		logger.Warn("[ssh] 部署目标 %s 未配置 host_key，当前跳过主机密钥校验（MITM 风险）。请在部署配置中填入 known_hosts 行。", host)
+		return ssh.InsecureIgnoreHostKey()
+	}
+	pubKey, err := parseHostKey(hostKey)
+	if err != nil {
+		logger.Warn("[ssh] host_key 解析失败，退回跳过校验: %v", err)
+		return ssh.InsecureIgnoreHostKey()
+	}
+	return ssh.FixedHostKey(pubKey)
+}
+
+func parseHostKey(raw string) (ssh.PublicKey, error) {
+	// 尝试 known_hosts 整行格式
+	if _, _, pub, _, _, err := ssh.ParseKnownHosts([]byte(raw + "\n")); err == nil && pub != nil {
+		return pub, nil
+	}
+	// 尝试 "algo base64" 两段式
+	parts := strings.Fields(raw)
+	if len(parts) < 2 {
+		return nil, fmt.Errorf("host_key 格式无法识别（期望 known_hosts 行或 \"algo base64\"）")
+	}
+	data, err := base64.StdEncoding.DecodeString(parts[1])
+	if err != nil {
+		return nil, fmt.Errorf("base64 解码失败: %w", err)
+	}
+	return ssh.ParsePublicKey(data)
 }
 
 func (p *SSHProvider) Deploy(ctx context.Context, fullchain, privateKey string, config map[string]interface{}) error {
@@ -138,6 +181,17 @@ func (p *SSHProvider) Deploy(ctx context.Context, fullchain, privateKey string, 
 			targetCertPath = strings.ReplaceAll(targetCertPath, "{domain}", domain)
 			targetKeyPath = strings.ReplaceAll(targetKeyPath, "{domain}", domain)
 		}
+
+		// 远端路径遍历防御（安全审计 H-1）
+		cleanCert, err := sanitizeRemotePath("cert_path", targetCertPath)
+		if err != nil {
+			return err
+		}
+		cleanKey, err := sanitizeRemotePath("key_path", targetKeyPath)
+		if err != nil {
+			return err
+		}
+		targetCertPath, targetKeyPath = cleanCert, cleanKey
 
 		p.Log("正在上传证书文件: " + targetCertPath)
 		if err := p.uploadFile(client, targetCertPath, fullchain, 0644); err != nil {

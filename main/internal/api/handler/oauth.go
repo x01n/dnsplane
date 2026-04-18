@@ -8,10 +8,10 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"main/internal/api/middleware"
+	"main/internal/cache"
 	"main/internal/database"
 	"main/internal/dbcache"
 	"main/internal/logger"
@@ -22,17 +22,17 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// OAuth state 缓存
-var (
-	oauthStateMu    sync.Mutex
-	oauthStateCache = map[string]oauthStateEntry{}
-)
+// OAuth state 缓存（安全审计 M-4）：
+//   原实现使用进程内 map + 懒清理，多实例部署下 state 丢失导致登录失败，
+//   且攻击者大量触发 OAuthLogin 可造成内存爆表 DoS。
+//   改用统一的 cache.C（Redis 或内存）+ TTL 自动过期，多实例安全且不积压。
+const oauthStatePrefix = "oauth_state:"
+const oauthStateTTL = 5 * time.Minute
 
 type oauthStateEntry struct {
-	Expiry   time.Time
-	Provider string
-	BindUID  uint   // >0 表示这是绑定操作（已登录用户绑定第三方账号）
-	Mode     string // "login" 或 "bind"
+	Provider string `json:"provider"`
+	BindUID  uint   `json:"bind_uid"` // >0 表示这是绑定操作（已登录用户绑定第三方账号）
+	Mode     string `json:"mode"`     // "login" 或 "bind"
 }
 
 func generateState() string {
@@ -41,15 +41,25 @@ func generateState() string {
 	return hex.EncodeToString(b)
 }
 
-func cleanupOAuthStates() {
-	oauthStateMu.Lock()
-	defer oauthStateMu.Unlock()
-	now := time.Now()
-	for k, v := range oauthStateCache {
-		if now.After(v.Expiry) {
-			delete(oauthStateCache, k)
-		}
+// saveOAuthState 将 state 写入 cache；失败返回 error，调用方需拦截。
+func saveOAuthState(state string, entry oauthStateEntry) error {
+	if cache.C == nil {
+		return fmt.Errorf("cache 未初始化")
 	}
+	return cache.C.SetJSON(oauthStatePrefix+state, entry, oauthStateTTL)
+}
+
+// consumeOAuthState 读取并立刻删除（一次性使用）；返回 ok=false 表示不存在或已过期。
+func consumeOAuthState(state string) (oauthStateEntry, bool) {
+	var entry oauthStateEntry
+	if cache.C == nil {
+		return entry, false
+	}
+	if !cache.C.GetJSON(oauthStatePrefix+state, &entry) {
+		return entry, false
+	}
+	cache.C.Delete(oauthStatePrefix + state)
+	return entry, true
 }
 
 // GetOAuthProviders 获取已启用的 OAuth 提供商列表（公开API，不需要认证）
@@ -72,16 +82,12 @@ func OAuthLogin(c *gin.Context) {
 		return
 	}
 
-	cleanupOAuthStates()
-
 	state := generateState()
-	oauthStateMu.Lock()
-	oauthStateCache[state] = oauthStateEntry{
-		Expiry:   time.Now().Add(5 * time.Minute),
-		Provider: providerName,
-		Mode:     "login",
+	if err := saveOAuthState(state, oauthStateEntry{Provider: providerName, Mode: "login"}); err != nil {
+		logger.Error("保存 OAuth state 失败: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"code": -1, "msg": "oauth state 保存失败"})
+		return
 	}
-	oauthStateMu.Unlock()
 
 	redirectURI := getOAuthCallbackURI(providerName)
 	authURL := provider.AuthorizeURL(state, redirectURI)
@@ -109,15 +115,9 @@ func OAuthCallback(c *gin.Context) {
 		return
 	}
 
-	// 验证 state
-	oauthStateMu.Lock()
-	entry, exists := oauthStateCache[state]
-	if exists {
-		delete(oauthStateCache, state)
-	}
-	oauthStateMu.Unlock()
-
-	if !exists || time.Now().After(entry.Expiry) || entry.Provider != providerName {
+	// 验证 state（一次性使用；过期由 cache TTL 保证）
+	entry, exists := consumeOAuthState(state)
+	if !exists || entry.Provider != providerName {
 		c.Redirect(http.StatusTemporaryRedirect, siteURL+"/login/?error=invalid_state")
 		return
 	}
@@ -336,16 +336,15 @@ func GetOAuthBindURL(c *gin.Context) {
 		return
 	}
 
-	cleanupOAuthStates()
 	state := generateState()
-	oauthStateMu.Lock()
-	oauthStateCache[state] = oauthStateEntry{
-		Expiry:   time.Now().Add(5 * time.Minute),
+	if err := saveOAuthState(state, oauthStateEntry{
 		Provider: req.Provider,
 		BindUID:  userID,
 		Mode:     "bind",
+	}); err != nil {
+		middleware.ErrorResponse(c, "oauth state 保存失败")
+		return
 	}
-	oauthStateMu.Unlock()
 
 	redirectURI := getOAuthCallbackURI(req.Provider)
 	authURL := provider.AuthorizeURL(state, redirectURI)

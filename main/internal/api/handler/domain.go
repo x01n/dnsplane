@@ -1058,13 +1058,21 @@ func SetRecordStatus(c *gin.Context) {
 		return
 	}
 
+	// 安全审计 R-3：原实现遗漏权限校验，与 CreateRecord/UpdateRecord/DeleteRecord 不一致；
+	// 拥有任意域名读权限的用户可对全站任何记录调启停 → DoS。补齐与同文件其他 mutation 一致的检查。
+	userID := c.GetString("user_id")
+	userLevel := c.GetInt("level")
+	if !middleware.CheckDomainPermission(userID, userLevel, req.DomainID) {
+		middleware.ErrorResponse(c, "无权操作该域名")
+		return
+	}
+
 	provider := getProviderByDomain(c, &domain)
 	if provider == nil {
 		return
 	}
 
 	/* 提取上下文信息后异步执行 */
-	userID := c.GetString("user_id")
 	username := c.GetString("username")
 	ip := c.ClientIP()
 	ua := c.Request.UserAgent()

@@ -3,8 +3,10 @@ package handler
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"main/internal/api/middleware"
 	"main/internal/cache"
 	"main/internal/database"
@@ -14,6 +16,8 @@ import (
 	"main/internal/notify"
 	"main/internal/utils"
 	"main/internal/verify"
+	"math/big"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -25,6 +29,115 @@ import (
 )
 
 var store = base64Captcha.DefaultMemStore
+
+// bcryptCost 密码哈希成本因子（安全审计 M-6：DefaultCost=10 → 12，匹配 OWASP 2024 建议）。
+// 每提升 1 档，哈希耗时约翻倍；12 档在普通 CPU 上约 250ms，用户登录无感。
+const bcryptCost = 12
+
+// loginDelayJitter 登录失败分支的随机抖动延迟（安全审计 L-2 缓解）。
+// 让"密码错误"、"TOTP 错"、"账户禁用"、"未找到用户"等路径耗时趋同，
+// 降低攻击者通过响应时序推断账号是否存在 / 是否启用 TOTP 的可行性。
+func loginDelayJitter() {
+	n, err := rand.Int(rand.Reader, big.NewInt(100))
+	if err != nil {
+		n = big.NewInt(50)
+	}
+	time.Sleep(time.Duration(50+n.Int64()) * time.Millisecond)
+}
+
+// markTOTPCounterUsed 将一个 TOTP 时间窗口标记为已使用（安全审计 M-1）。
+// 返回 true 表示成功占位（首次使用）；返回 false 表示该 counter 已被使用过（重放）。
+//
+// Key 用 sha256(secret) 的前 16 字符作为稳定指纹，不暴露原始 secret；
+// TTL 设为 90s 覆盖 ±30s 验证窗口。
+//
+// 在缓存不可用时返回 true 作为服务降级（与 JTI 类似策略）。
+func markTOTPCounterUsed(secret string, counter int64) bool {
+	if cache.C == nil {
+		return true
+	}
+	fp := sha256.Sum256([]byte(secret))
+	key := "totp_used:" + hex.EncodeToString(fp[:8]) + ":" + strconv.FormatInt(counter, 10)
+	if _, ok := cache.C.Get(key); ok {
+		return false
+	}
+	if err := cache.C.Set(key, "1", 90*time.Second); err != nil {
+		// 写缓存失败视为放行，避免 cache 抖动导致合法用户被拒
+		return true
+	}
+	return true
+}
+
+// 登录暴力破解防护（安全审计 H-5）。
+// 以 IP+用户名 双维度计数，窗口 15 分钟内失败次数超过阈值即拒绝。
+// 成功登录后清除该 IP+用户名 的计数器。
+const (
+	loginFailWindow    = 15 * time.Minute
+	loginFailThreshold = 5
+)
+
+// bucketLoginFailIP 将 IP 归一到 /24 (IPv4) 或 /64 (IPv6) 前缀。
+//
+// 安全审计 M-7：内存缓存模式下 login_fail 键原以原始 IP+用户名 为键，
+// 攻击者用海量随机 IP 可不受控地撑爆 map。按子网前缀分桶后：
+//   - IPv4 可能的不同桶 ≤ 2^24 = 16M（实际使用中远远小于）
+//   - IPv6 按 /64 前缀归档，与单个终端 /64 段合并
+// 对合法用户影响极小：同一子网下不同用户名仍有独立计数。
+func bucketLoginFailIP(raw string) string {
+	ip := net.ParseIP(strings.TrimSpace(raw))
+	if ip == nil {
+		return raw
+	}
+	if v4 := ip.To4(); v4 != nil {
+		return fmt.Sprintf("%d.%d.%d.0/24", v4[0], v4[1], v4[2])
+	}
+	mask := net.CIDRMask(64, 128)
+	return ip.Mask(mask).String() + "/64"
+}
+
+func loginFailKey(ip, username string) string {
+	return "login_fail:" + bucketLoginFailIP(ip) + ":" + strings.ToLower(strings.TrimSpace(username))
+}
+
+// loginBlocked 返回 true 表示当前 IP+username 组合已被临时锁定。
+//
+// 读路径使用 cache.C.Get（纯文本），与 Incr 使用的计数格式兼容。
+// 原使用 GetJSON 在 cache 类型切换后会反序列化失败。
+func loginBlocked(ip, username string) bool {
+	if cache.C == nil {
+		return false
+	}
+	v, ok := cache.C.Get(loginFailKey(ip, username))
+	if !ok {
+		return false
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return false
+	}
+	return n >= loginFailThreshold
+}
+
+// noteLoginFailure 原子累加一次失败计数。
+//
+// 安全审计 H-2：原实现 GetJSON + 自增 + SetJSON 三步非原子，
+// 并发失败请求下存在 lost-update，实际计数远低于阈值，锁定形同虚设。
+// 改为 cache.C.Incr（Redis INCR 天然原子；memoryCache 实现走 mu.Lock），
+// 保证单次自增不被覆盖。
+func noteLoginFailure(ip, username string) {
+	if cache.C == nil {
+		return
+	}
+	_, _ = cache.C.Incr(loginFailKey(ip, username), loginFailWindow)
+}
+
+// clearLoginFailure 登录成功或验证码通过后清零计数。
+func clearLoginFailure(ip, username string) {
+	if cache.C == nil {
+		return
+	}
+	cache.C.Delete(loginFailKey(ip, username))
+}
 
 type LoginRequest struct {
 	Username    string `json:"username" binding:"required"`
@@ -89,6 +202,16 @@ func Login(c *gin.Context) {
 		return
 	}
 
+	ip := c.ClientIP()
+
+	// 暴力破解锁定检查（安全审计 H-5），失败 N 次后 TTL 内强制拒绝
+	if loginBlocked(ip, req.Username) {
+		logger.Warn("用户登录被锁定: IP=%s 用户名=%s", ip, req.Username)
+		loginDelayJitter()
+		c.JSON(http.StatusTooManyRequests, gin.H{"code": -1, "msg": "登录失败次数过多，请 15 分钟后再试"})
+		return
+	}
+
 	// Check if captcha is enabled
 	var captchaConfig models.SysConfig
 	needCaptcha := true
@@ -111,19 +234,27 @@ func Login(c *gin.Context) {
 
 	var user models.User
 	if err := database.DB.Where("username = ?", req.Username).First(&user).Error; err != nil {
+		noteLoginFailure(ip, req.Username)
 		logger.Info("用户登录失败: 用户名或密码错误 - 用户名: %s", req.Username)
+		loginDelayJitter()
 		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "用户名或密码错误"})
 		return
 	}
 
 	if user.Status != 1 {
+		// 禁用账户路径也计入失败计数（安全审计 M-5），
+		// 保持所有失败分支的锁定行为一致，避免通过失败计数覆盖缺失推断账户状态
+		noteLoginFailure(ip, req.Username)
 		logger.Info("用户登录失败: 账户已被禁用 - 用户名: %s", req.Username)
+		loginDelayJitter()
 		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "账户已被禁用"})
 		return
 	}
 
 	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(req.Password)); err != nil {
+		noteLoginFailure(ip, req.Username)
 		logger.Info("用户登录失败: 用户名或密码错误 - 用户名: %s", req.Username)
+		loginDelayJitter()
 		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "用户名或密码错误"})
 		return
 	}
@@ -134,12 +265,27 @@ func Login(c *gin.Context) {
 			c.JSON(http.StatusOK, gin.H{"code": 2, "msg": "需要进行二步验证"})
 			return
 		}
-		if !utils.VerifyTOTPCode(user.TOTPSecret, req.TOTPCode) {
+		// 安全审计 M-1：校验码 + 单次计数器防重放。
+		// 同一 counter 已在 90s 内被使用过，直接拒绝重放。
+		ok, counter := utils.VerifyTOTPCodeWithCounter(user.TOTPSecret, req.TOTPCode)
+		if !ok {
+			noteLoginFailure(ip, req.Username)
 			logger.Info("用户登录失败: TOTP验证码错误 - 用户名: %s", req.Username)
+			loginDelayJitter()
 			c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "验证码错误"})
 			return
 		}
+		if !markTOTPCounterUsed(user.TOTPSecret, counter) {
+			noteLoginFailure(ip, req.Username)
+			logger.Warn("用户登录被拦截: TOTP 计数器 %d 已被使用，疑似重放 - 用户名: %s", counter, req.Username)
+			loginDelayJitter()
+			c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "验证码已使用，请等待下一个周期"})
+			return
+		}
 	}
+
+	// 登录成功后清除该 IP+用户名 的失败计数
+	clearLoginFailure(ip, req.Username)
 
 	tokenPair, err := middleware.GenerateTokenPair(strconv.FormatUint(uint64(user.ID), 10), user.Username, user.Level)
 	if err != nil {
@@ -253,7 +399,7 @@ func GetUserInfo(c *gin.Context) {
 
 type ChangePasswordRequest struct {
 	OldPassword string `json:"old_password" binding:"required"`
-	NewPassword string `json:"new_password" binding:"required,min=6"`
+	NewPassword string `json:"new_password" binding:"required,min=8"`
 }
 
 func ChangePassword(c *gin.Context) {
@@ -276,7 +422,13 @@ func ChangePassword(c *gin.Context) {
 		return
 	}
 
-	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.NewPassword), bcrypt.DefaultCost)
+	// 强密码复杂度校验（安全审计 H-4：min=8 + 大小写 + 数字）
+	if msg := utils.ValidatePasswordStrength(req.NewPassword); msg != "" {
+		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": msg})
+		return
+	}
+
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.NewPassword), bcryptCost)
 	if err != nil {
 		logger.Error("用户修改密码失败: 密码加密失败 - 用户ID: %d, 错误: %v", userID, err)
 		c.JSON(http.StatusInternalServerError, gin.H{"code": -1, "msg": "密码加密失败"})
@@ -300,14 +452,20 @@ func Install(c *gin.Context) {
 
 	var req struct {
 		Username string `json:"username" binding:"required"`
-		Password string `json:"password" binding:"required,min=6"`
+		Password string `json:"password" binding:"required,min=8"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"code": -1, "msg": "参数错误"})
 		return
 	}
 
-	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+	// 强密码复杂度校验（安全审计 H-4）
+	if msg := utils.ValidatePasswordStrength(req.Password); msg != "" {
+		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": msg})
+		return
+	}
+
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcryptCost)
 	if err != nil {
 		logger.Error("系统安装失败: 密码加密失败 - 错误: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"code": -1, "msg": "密码加密失败"})
@@ -487,11 +645,24 @@ func DisableTOTP(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "TOTP已禁用"})
 }
 
-// generateResetToken 生成重置Token
+// generateResetToken 生成发给用户的原始重置 Token（经邮件发送）。
 func generateResetToken() string {
 	bytes := make([]byte, 32)
 	rand.Read(bytes)
 	return hex.EncodeToString(bytes)
+}
+
+// hashResetToken 将用户可见的重置 Token 映射为落库 SHA-256 指纹。
+//
+// 设计动机（对应安全审计 H-6）：
+//   - GORM 的 Updates(map[...]interface{}) 不触发 BeforeSave 钩子，
+//     导致 User.ResetToken 的 AES-GCM 加密被绕过，明文落库；
+//   - 改为落库时存 sha256(token)，明文仅在邮件中存在；
+//     数据库被读取也只能拿到不可逆摘要，攻击者无法用于后续 /reset 接口；
+//   - 查询时对用户提交的 token 同样 SHA-256 后比较，无需可逆解密，天然避开 GORM 钩子坑。
+func hashResetToken(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:])
 }
 
 // getEmailConfig 获取邮件配置
@@ -540,10 +711,20 @@ func getSiteURL() string {
 	return "http://localhost:8080"
 }
 
+// 安全审计 R-7：邮件发送 goroutine 限流。
+//
+// ForgotPassword/ForgotTOTP/RequestMagicLink/SendAuthCode 是公开接口，
+// 即便 verify.AllowPublicEmailRequest 限了 IP/邮箱粒度，攻击者用大量邮箱+多 IP
+// 仍可在短时间内堆积大量 SMTP goroutine（每个 dial 超时可达 12s）。
+// 信号量将同时进行的邮件发送数限制在 32，超额请求阻塞排队，邮件库内存/FD 占用可控。
+var mailSendSem = make(chan struct{}, 32)
+
 // enqueueNotifyMail 异步发信，HTTP 立即返回；失败仅记日志（与公开接口模糊成功口径一致）
 func enqueueNotifyMail(task string, cfg notify.EmailConfig, subject, body string) {
 	ec := cfg
 	utils.SafeGoWithName(task, func() {
+		mailSendSem <- struct{}{}        // 信号量获取（达上限即阻塞）
+		defer func() { <-mailSendSem }() // 释放
 		n := notify.NewEmailNotifier(ec)
 		if err := n.Send(context.Background(), subject, body); err != nil {
 			logger.Error("%s: %v", task, err)
@@ -580,8 +761,9 @@ func ForgotPassword(c *gin.Context) {
 
 	token := generateResetToken()
 	expireTime := time.Now().Add(30 * time.Minute)
+	// 落库指纹而非明文（详见 hashResetToken 注释）
 	database.DB.Model(&user).Updates(map[string]interface{}{
-		"reset_token":  token,
+		"reset_token":  hashResetToken(token),
 		"reset_type":   "password",
 		"reset_expire": expireTime,
 	})
@@ -599,16 +781,16 @@ func ForgotPassword(c *gin.Context) {
 func ResetPassword(c *gin.Context) {
 	var req struct {
 		Token    string `json:"token" binding:"required"`
-		Password string `json:"password" binding:"required,min=6"`
+		Password string `json:"password" binding:"required,min=8"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"code": -1, "msg": "参数错误"})
 		return
 	}
 
-	// 查找用户
+	// 查找用户（用 token 的 SHA-256 指纹匹配，与落库值保持一致）
 	var user models.User
-	if err := database.DB.Where("reset_token = ? AND reset_type = ?", req.Token, "password").First(&user).Error; err != nil {
+	if err := database.DB.Where("reset_token = ? AND reset_type = ?", hashResetToken(req.Token), "password").First(&user).Error; err != nil {
 		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "无效的重置链接"})
 		return
 	}
@@ -619,8 +801,14 @@ func ResetPassword(c *gin.Context) {
 		return
 	}
 
+	// 强密码复杂度校验（安全审计 H-4）
+	if msg := utils.ValidatePasswordStrength(req.Password); msg != "" {
+		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": msg})
+		return
+	}
+
 	// 加密新密码
-	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcryptCost)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": -1, "msg": "密码加密失败"})
 		return
@@ -673,7 +861,7 @@ func ForgotTOTP(c *gin.Context) {
 	token := generateResetToken()
 	expireTime := time.Now().Add(30 * time.Minute)
 	database.DB.Model(&user).Updates(map[string]interface{}{
-		"reset_token":  token,
+		"reset_token":  hashResetToken(token),
 		"reset_type":   "totp",
 		"reset_expire": expireTime,
 	})
@@ -699,7 +887,7 @@ func ResetTOTP(c *gin.Context) {
 
 	// 查找用户
 	var user models.User
-	if err := database.DB.Where("reset_token = ? AND reset_type = ?", req.Token, "totp").First(&user).Error; err != nil {
+	if err := database.DB.Where("reset_token = ? AND reset_type = ?", hashResetToken(req.Token), "totp").First(&user).Error; err != nil {
 		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "无效的重置链接"})
 		return
 	}
@@ -725,6 +913,9 @@ func ResetTOTP(c *gin.Context) {
 
 // AdminSendResetEmail 管理员发送重置邮件
 func AdminSendResetEmail(c *gin.Context) {
+	if !requireAdmin(c) {
+		return
+	}
 	userID, _ := c.Params.Get("id")
 
 	var req struct {
@@ -759,9 +950,9 @@ func AdminSendResetEmail(c *gin.Context) {
 	token := generateResetToken()
 	expireTime := time.Now().Add(60 * time.Minute) // 管理员发送的链接有效期更长
 
-	// 保存Token
+	// 保存 Token 的 SHA-256 指纹（详见 hashResetToken 注释）
 	database.DB.Model(&user).Updates(map[string]interface{}{
-		"reset_token":  token,
+		"reset_token":  hashResetToken(token),
 		"reset_type":   req.Type,
 		"reset_expire": expireTime,
 	})
@@ -786,6 +977,9 @@ func AdminSendResetEmail(c *gin.Context) {
 
 // AdminResetTOTP 管理员直接重置用户TOTP
 func AdminResetTOTP(c *gin.Context) {
+	if !requireAdmin(c) {
+		return
+	}
 	userID, _ := c.Params.Get("id")
 
 	// 查找目标用户
@@ -1079,7 +1273,7 @@ func SendAuthCode(c *gin.Context) {
 func Register(c *gin.Context) {
 	var req struct {
 		Username string `json:"username" binding:"required"`
-		Password string `json:"password" binding:"required,min=6"`
+		Password string `json:"password" binding:"required,min=8"`
 		Email    string `json:"email" binding:"required,email"`
 		Code     string `json:"code" binding:"required"`
 	}
@@ -1113,6 +1307,11 @@ func Register(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": err.Error()})
 		return
 	}
+	// 强密码复杂度校验（安全审计 H-4）
+	if msg := utils.ValidatePasswordStrength(req.Password); msg != "" {
+		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": msg})
+		return
+	}
 	var cnt int64
 	database.DB.Model(&models.User{}).Where("username = ?", username).Count(&cnt)
 	if cnt > 0 {
@@ -1124,7 +1323,7 @@ func Register(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "该邮箱已被注册"})
 		return
 	}
-	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcryptCost)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": -1, "msg": "密码加密失败"})
 		return

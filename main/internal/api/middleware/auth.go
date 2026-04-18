@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"main/internal/cache"
 	"main/internal/config"
 	"main/internal/database"
@@ -343,20 +344,27 @@ func StoreRefreshJTI(userID, jti string) {
  * validateAndRevokeRefreshJTI 验证 refresh token 的 JTI 是否为当前有效值
  * 验证通过后立即删除（一次性使用），防止 token 重用攻击
  * 返回 true 表示 JTI 有效
+ *
+ * 安全审计 L-1：旧实现在缓存无记录时一律放行（为兼容历史 token 签发的场景），
+ * 放大了 Refresh Token Replay 攻击窗口。收紧策略：缓存未初始化视为服务降级，仍放行；
+ * 一旦缓存就绪但该用户的 JTI 条目缺失（TTL 过期或 Redis 丢失），直接拒绝，
+ * 强制用户重新登录，避免旧 refresh token 被复用。
  */
 func validateAndRevokeRefreshJTI(userID, jti string) bool {
 	if cache.C == nil {
-		return true // 无缓存时跳过 JTI 检查
+		return true // 缓存未就绪：服务降级放行（不拒绝正常用户）
 	}
 	key := RefreshJTIPrefix + userID
 	storedJTI, ok := cache.C.Get(key)
 	if !ok {
-		return true // 无记录时允许（兼容旧 token）
+		// 缓存就绪但条目缺失：可能 TTL 过期或攻击者重放旧 token，一律拒绝
+		logger.Warn("[Auth] refresh token 未找到有效 JTI 记录，拒绝刷新 (user=%s)", userID)
+		return false
 	}
 	if storedJTI != jti {
 		// JTI 不匹配：可能是 token 重用攻击，吊销该用户所有 refresh token
 		cache.C.Delete(key)
-		logger.Warn("[Auth] refresh token JTI 不匹配，可能存在 token 重用攻击 (user=%s)", userID)
+		logger.Warn("[Auth] refresh token JTI 不匹配，疑似重用攻击 (user=%s)", userID)
 		return false
 	}
 	// 验证通过，删除旧 JTI（新的会在生成新 token 后存入）
@@ -415,6 +423,12 @@ func RefreshAccessToken(refreshToken string) (*TokenPair, error) {
 func ParseToken(tokenString string) (*Claims, error) {
 	cfg := config.Get()
 	token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(token *jwt.Token) (interface{}, error) {
+		// 显式校验 alg 为 HMAC 系（安全审计 H-4）：
+		// 防止攻击者通过 alg=none 或未来意外引入 RS256 触发算法混淆攻击。
+		// 本系统仅签发并接受 HS256；其他任何 alg 直接拒绝。
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("unexpected JWT signing method: %v", token.Header["alg"])
+		}
 		return []byte(cfg.JWT.Secret), nil
 	})
 
@@ -473,6 +487,25 @@ func SecurityHeaders() gin.HandlerFunc {
 		c.Header("X-XSS-Protection", "1; mode=block")
 		c.Header("Referrer-Policy", "strict-origin-when-cross-origin")
 		c.Header("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+		/*
+		 * Content-Security-Policy（安全审计 M-8）：
+		 * - default-src 'self'：脚本/样式/字体/图片默认仅允许同源
+		 * - 'unsafe-inline' 的样式/脚本放行是 Next.js 静态导出的必需妥协（内联 CSS、运行时 hydration）
+		 * - img-src 额外允许 data: 以支持 base64 验证码
+		 * - connect-src 'self' 对应前端只向同源 /api 发请求（与 CORS 策略一致）
+		 * - object-src 'none' + base-uri 'self' 阻断插件与 base 劫持
+		 * - frame-ancestors 对齐 X-Frame-Options=SAMEORIGIN
+		 */
+		c.Header("Content-Security-Policy",
+			"default-src 'self'; "+
+				"script-src 'self' 'unsafe-inline' 'unsafe-eval'; "+
+				"style-src 'self' 'unsafe-inline'; "+
+				"img-src 'self' data: blob:; "+
+				"font-src 'self' data:; "+
+				"connect-src 'self'; "+
+				"object-src 'none'; "+
+				"base-uri 'self'; "+
+				"frame-ancestors 'self'")
 		/* 直连或反代 HTTPS 时提示浏览器仅走 HTTPS（不默认 includeSubDomains，避免误伤兄弟域名） */
 		if isSecureRequest(c) {
 			c.Header("Strict-Transport-Security", "max-age=31536000")
@@ -495,7 +528,7 @@ func CORS() gin.HandlerFunc {
 			c.Header("Access-Control-Allow-Credentials", "true")
 		}
 		c.Header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-		c.Header("Access-Control-Allow-Headers", "Origin, Content-Type, Authorization, X-Refresh-Token, X-Secret-Token")
+		c.Header("Access-Control-Allow-Headers", "Origin, Content-Type, Authorization, X-Refresh-Token, X-Secret-Token, X-CSRF-Token")
 		c.Header("Access-Control-Expose-Headers", "X-Token-Expiring, X-Request-ID, X-Error-ID")
 
 		if c.Request.Method == "OPTIONS" {

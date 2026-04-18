@@ -104,6 +104,17 @@ func (p *FTPProvider) Deploy(ctx context.Context, fullchain, privateKey string, 
 			targetKeyPath = strings.ReplaceAll(targetKeyPath, "{domain}", domain)
 		}
 
+		// FTP 远端路径遍历防御（安全审计 H-1）
+		cleanCert, err := sanitizeRemotePath("cert_path", targetCertPath)
+		if err != nil {
+			return err
+		}
+		cleanKey, err := sanitizeRemotePath("key_path", targetKeyPath)
+		if err != nil {
+			return err
+		}
+		targetCertPath, targetKeyPath = cleanCert, cleanKey
+
 		p.Log("正在上传证书文件: " + targetCertPath)
 		if err := p.uploadFile(conn, targetCertPath, fullchain); err != nil {
 			return fmt.Errorf("上传证书失败: %w", err)

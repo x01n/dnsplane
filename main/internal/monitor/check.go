@@ -34,6 +34,11 @@ type HTTPCheckOptions struct {
 	ProxyPassword string
 	/* UseEnvProxy: UseProxy=true 且未填代理主机时走 HTTP_PROXY 等环境变量 */
 	UseEnvProxy bool
+	/*
+	 * InsecureSkipTLS: 是否跳过 HTTPS 证书校验（默认 false=校验）。
+	 * 仅在探测自签或内网证书时手动开启；默认安全对应安全审计 H-3 的修复。
+	 */
+	InsecureSkipTLS bool
 }
 
 type CheckResult struct {
@@ -218,8 +223,10 @@ func CheckHTTP(ctx context.Context, rawURL string, timeout int, opts *HTTPCheckO
 	}
 
 	baseDialer := &net.Dialer{Timeout: time.Duration(timeout) * time.Second}
+	// 默认开启 TLS 校验（安全审计 H-3）；仅当监控任务显式勾选"允许自签证书"时退让。
+	tlsCfg := &tls.Config{InsecureSkipVerify: opts.InsecureSkipTLS}
 	transport := &http.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		TLSClientConfig: tlsCfg,
 		MaxIdleConns:    10,
 		IdleConnTimeout: 30 * time.Second,
 	}

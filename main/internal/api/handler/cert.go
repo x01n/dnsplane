@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"main/internal/api/middleware"
 	"main/internal/cert"
 	"main/internal/cert/deploy"
 	"main/internal/database"
@@ -67,7 +68,10 @@ type certAccountListRow struct {
 
 func GetCertAccounts(c *gin.Context) {
 	isDeploy := c.Query("deploy") == "1"
-	cacheKey := dbcache.KeyCertAccountsList(isDeploy, true, 0)
+	// 安全审计 R-1：列表必须按 UID 过滤；非管理员只看自己的，避免账户名/类型枚举泄露。
+	// 注意 cacheKey 也按 UID 维度区分，防止管理员命中后污染普通用户视图。
+	uid := currentUIDUint(c)
+	cacheKey := dbcache.KeyCertAccountsList(isDeploy, isAdmin(c), uid)
 
 	var rows []certAccountListRow
 	if err := dbcache.GetOrSetJSON(c.Request.Context(), cacheKey, dbcache.DefaultTTL, func() (interface{}, error) {
@@ -78,6 +82,7 @@ func GetCertAccounts(c *gin.Context) {
 		} else {
 			q = q.Where("is_deploy = ?", false)
 		}
+		q = scopeCertAccountQuery(c, q)
 		if err := q.Find(&accounts).Error; err != nil {
 			return nil, err
 		}
@@ -130,6 +135,8 @@ func CreateCertAccount(c *gin.Context) {
 
 	configJSON, _ := json.Marshal(req.Config)
 	account := models.CertAccount{
+		// 安全审计 R-1：始终绑定到当前用户，防止注入第三方 UID
+		UserID:   currentUIDUint(c),
 		Type:     req.Type,
 		Name:     req.Name,
 		Config:   string(configJSON),
@@ -149,9 +156,9 @@ func CreateCertAccount(c *gin.Context) {
 func UpdateCertAccount(c *gin.Context) {
 	id, _ := strconv.ParseUint(c.Param("id"), 10, 32)
 
-	var account models.CertAccount
-	if err := database.DB.First(&account, id).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"code": -1, "msg": "账户不存在"})
+	// 安全审计 R-1：先做 ownership 校验
+	account, ok := requireCertAccountOwner(c, uint(id))
+	if !ok {
 		return
 	}
 
@@ -168,13 +175,17 @@ func UpdateCertAccount(c *gin.Context) {
 		"remark": req.Remark,
 	}
 
-	database.DB.Model(&account).Updates(updates)
+	database.DB.Model(account).Updates(updates)
 	dbcache.BustCertAccountsList()
 	c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "更新成功"})
 }
 
 func DeleteCertAccount(c *gin.Context) {
 	id, _ := strconv.ParseUint(c.Param("id"), 10, 32)
+	// 安全审计 R-1
+	if _, ok := requireCertAccountOwner(c, uint(id)); !ok {
+		return
+	}
 	database.DB.Delete(&models.CertAccount{}, id)
 	dbcache.BustCertAccountsList()
 	c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "删除成功"})
@@ -187,10 +198,14 @@ func GetCertOrders(c *gin.Context) {
 	}
 	var dbOrders []OrderResult
 
-	database.DB.Table("cert_orders").
+	// 安全审计 R-1：按 UID 过滤，非管理员只看自己关联账户的订单
+	q := database.DB.Table("cert_orders").
 		Select("cert_orders.*, cert_accounts.name as account_name").
-		Joins("LEFT JOIN cert_accounts ON cert_orders.aid = cert_accounts.id").
-		Find(&dbOrders)
+		Joins("LEFT JOIN cert_accounts ON cert_orders.aid = cert_accounts.id")
+	if !isAdmin(c) {
+		q = q.Where("cert_accounts.uid = ?", currentUIDUint(c))
+	}
+	q.Find(&dbOrders)
 
 	type OrderResponse struct {
 		OrderResult
@@ -320,6 +335,11 @@ func CreateCertOrder(c *gin.Context) {
 		return
 	}
 
+	// 安全审计 R-1：AccountID 必须属于当前用户，防止借他人账户签发
+	if _, ok := requireCertAccountOwner(c, req.AccountID); !ok {
+		return
+	}
+
 	normDomains := make([]string, len(req.Domains))
 	for i, d := range req.Domains {
 		normDomains[i] = strings.TrimSpace(d)
@@ -407,11 +427,14 @@ func CreateCertOrder(c *gin.Context) {
 func ProcessCertOrder(c *gin.Context) {
 	id, _ := strconv.ParseUint(c.Param("id"), 10, 32)
 
-	var order models.CertOrder
-	if err := database.DB.First(&order, id).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"code": -1, "msg": "订单不存在"})
+	// 安全审计 R-1 + R-6：先做 ownership 校验，再做状态机原子化（CAS：仅当 status != 1 时占位）。
+	// 如果 status 已是 1（处理中），CAS 受影响行数为 0，直接拒绝重复提交，
+	// 避免攻击者短时间内对同一 orderID N 次 process 触发 N 个 ACME goroutine 烧 LE 配额。
+	orderPtr, ok := requireCertOrderOwner(c, uint(id))
+	if !ok {
 		return
 	}
+	order := *orderPtr
 
 	// 获取订单的域名列表
 	var certDomains []models.CertDomain
@@ -475,9 +498,16 @@ func ProcessCertOrder(c *gin.Context) {
 
 	appendOrderLog(&order, "正在创建证书订单...")
 
-	// 更新状态为处理中
+	// 安全审计 R-6：CAS 状态占位，避免并发重复签发烧 Let's Encrypt 配额。
+	// 仅当当前 status != 1 时才能切换到处理中；若已被并发请求抢占则直接拒绝。
+	res := database.DB.Model(&models.CertOrder{}).
+		Where("id = ? AND status != ?", order.ID, 1).
+		Update("status", 1)
+	if res.RowsAffected == 0 {
+		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "订单正在处理中，请勿重复提交"})
+		return
+	}
 	order.Status = 1
-	database.DB.Save(&order)
 
 	// 异步处理证书申请
 	go processCertOrderAsync(&order, provider, domains, &account)
@@ -543,8 +573,15 @@ func TriggerCertOrderProcessing(orderID uint) {
 		appendOrderLog(&order, msg)
 	})
 	appendOrderLog(&order, "正在创建证书订单...")
+	// 安全审计 R-6：自动续期路径同样走 CAS，防止与手动 ProcessCertOrder 重叠
+	res := database.DB.Model(&models.CertOrder{}).
+		Where("id = ? AND status != ?", order.ID, 1).
+		Update("status", 1)
+	if res.RowsAffected == 0 {
+		logger.Warn("[Cert] 自动续期被并发抢占，跳过 (orderID=%d)", order.ID)
+		return
+	}
 	order.Status = 1
-	database.DB.Save(&order)
 	go processCertOrderAsync(&order, provider, domains, &account)
 }
 
@@ -906,6 +943,10 @@ func addDNSRecord(ctx context.Context, order *models.CertOrder, mainDomain, reco
 
 func DeleteCertOrder(c *gin.Context) {
 	id, _ := strconv.ParseUint(c.Param("id"), 10, 32)
+	// 安全审计 R-1
+	if _, ok := requireCertOrderOwner(c, uint(id)); !ok {
+		return
+	}
 	database.DB.Where("oid = ?", id).Delete(&models.CertDomain{})
 	database.DB.Delete(&models.CertOrder{}, id)
 	c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "删除成功"})
@@ -914,11 +955,12 @@ func DeleteCertOrder(c *gin.Context) {
 func GetCertOrderLog(c *gin.Context) {
 	id, _ := strconv.ParseUint(c.Param("id"), 10, 32)
 
-	var order models.CertOrder
-	if err := database.DB.First(&order, id).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"code": -1, "msg": "订单不存在"})
+	// 安全审计 R-1
+	orderPtr, ok := requireCertOrderOwner(c, uint(id))
+	if !ok {
 		return
 	}
+	order := *orderPtr
 
 	// 返回订单的日志信息，包括错误信息和DNS验证信息
 	logInfo := ""
@@ -941,11 +983,12 @@ func GetCertOrderLog(c *gin.Context) {
 func GetCertOrderDetail(c *gin.Context) {
 	id, _ := strconv.ParseUint(c.Param("id"), 10, 32)
 
-	var order models.CertOrder
-	if err := database.DB.First(&order, id).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"code": -1, "msg": "订单不存在"})
+	// 安全审计 R-1
+	orderPtr, ok := requireCertOrderOwner(c, uint(id))
+	if !ok {
 		return
 	}
+	order := *orderPtr
 
 	// 获取域名列表
 	var domains []models.CertDomain
@@ -980,11 +1023,12 @@ func DownloadCertOrder(c *gin.Context) {
 	id, _ := strconv.ParseUint(c.Param("id"), 10, 32)
 	fileType := c.Query("type")
 
-	var order models.CertOrder
-	if err := database.DB.First(&order, id).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"code": -1, "msg": "订单不存在"})
+	// 安全审计 R-1（最关键修复）：原实现允许任何登录用户下载他人证书私钥
+	orderPtr, ok := requireCertOrderOwner(c, uint(id))
+	if !ok {
 		return
 	}
+	order := *orderPtr
 
 	if order.FullChain == "" || order.PrivateKey == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"code": -1, "msg": "证书尚未签发"})
@@ -1050,11 +1094,12 @@ func DownloadCertOrder(c *gin.Context) {
 func ToggleCertOrderAuto(c *gin.Context) {
 	id, _ := strconv.ParseUint(c.Param("id"), 10, 32)
 
-	var order models.CertOrder
-	if err := database.DB.First(&order, id).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"code": -1, "msg": "订单不存在"})
+	// 安全审计 R-1
+	orderPtr, ok := requireCertOrderOwner(c, uint(id))
+	if !ok {
 		return
 	}
+	order := *orderPtr
 
 	order.IsAuto = !order.IsAuto
 	database.DB.Save(&order)
@@ -1112,6 +1157,12 @@ func CreateCertDeploy(c *gin.Context) {
 		return
 	}
 
+	// 安全审计 H-3：local 类型部署会以 DNSPlane 进程权限执行用户填写的 restart_cmd，
+	// 等同于服务端 RCE。限制仅管理员可创建此类型；其他类型（SSH/CDN/...）保持原开放。
+	if !checkLocalDeployAllowed(c, req.AccountID) {
+		return
+	}
+
 	configJSON, _ := json.Marshal(req.Config)
 	deploy := models.CertDeploy{
 		UserID:    currentUIDUint(c),
@@ -1130,12 +1181,35 @@ func CreateCertDeploy(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "创建成功", "data": gin.H{"id": deploy.ID}})
 }
 
+// checkLocalDeployAllowed 对 CertAccount.Type == "local" 的部署强制 checkAdmin；
+// 返回 false 时已写入"权限不足"响应，handler 应直接 return。
+func checkLocalDeployAllowed(c *gin.Context, accountID uint) bool {
+	if isAdmin(c) {
+		return true
+	}
+	var acc models.CertAccount
+	if err := database.DB.Select("type").First(&acc, accountID).Error; err != nil {
+		// 账户查不到会在后续业务逻辑里再次失败，这里直接放过让原路径报错
+		return true
+	}
+	if acc.Type == "local" {
+		middleware.ErrorResponse(c, "本地部署需要管理员权限，请改用 SSH 或其他远程部署方式")
+		return false
+	}
+	return true
+}
+
 func UpdateCertDeploy(c *gin.Context) {
 	id, _ := strconv.ParseUint(c.Param("id"), 10, 32)
 
 	var deploy models.CertDeploy
 	if err := database.DB.First(&deploy, id).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"code": -1, "msg": "部署任务不存在"})
+		return
+	}
+
+	// 安全审计 H-3：修改 local 类型部署也需要管理员
+	if !checkLocalDeployAllowed(c, deploy.AccountID) {
 		return
 	}
 

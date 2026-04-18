@@ -179,7 +179,7 @@ func (p *Provider) CreateOrder(ctx context.Context, domains []string, order *cer
 	}
 
 	if _, err := p.request(ctx, params); err != nil {
-		return nil, fmt.Errorf("ComplementCSRInfo failed: %w", err)
+		return nil, fmt.Errorf("补全 CSR 信息失败: %w", err)
 	}
 
 	time.Sleep(3 * time.Second)
@@ -191,7 +191,7 @@ func (p *Provider) CreateOrder(ctx context.Context, domains []string, order *cer
 	}
 	authResp, err := p.request(ctx, authParams)
 	if err != nil {
-		return nil, fmt.Errorf("GetDVAuthInfo failed: %w", err)
+		return nil, fmt.Errorf("获取 DV 认证信息失败: %w", err)
 	}
 
 	dnsRecords := make(map[string][]cert.DNSRecord)
@@ -448,7 +448,7 @@ func (p *Provider) request(ctx context.Context, params map[string]interface{}) (
 	}
 
 	msg := getString(result, "Message")
-	return nil, fmt.Errorf("api error: %s", msg)
+	return nil, fmt.Errorf("API 返回错误: %s", msg)
 }
 
 func (p *Provider) defaultAPIUrl() string {

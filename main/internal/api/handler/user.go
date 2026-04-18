@@ -9,6 +9,7 @@ import (
 	"main/internal/database"
 	"main/internal/dbcache"
 	"main/internal/models"
+	"main/internal/utils"
 	"net/http"
 	"strconv"
 	"time"
@@ -33,14 +34,22 @@ type userPublicRow struct {
 	LastTime    *time.Time `json:"last_time"`
 }
 
-// generateAPIKey 生成随机API Key
+// generateAPIKey 生成随机 API Key。
+//
+// 安全审计 L-4：从 16 字节 (128bit) 提升至 32 字节 (256bit)。
+// API Key 同时充当 HMAC-SHA256 的签名密钥（见 apikey.go），
+// HMAC 密钥的有效强度 = min(key_len, hash_output_len)；32 字节可完全利用 SHA-256 的安全边界。
+// 输出为 64 位 hex 字符串，与原 32 位 hex 相比 URL 长度仅翻倍，无运行期负担。
 func generateAPIKey() string {
-	bytes := make([]byte, 16)
+	bytes := make([]byte, 32)
 	rand.Read(bytes)
 	return hex.EncodeToString(bytes)
 }
 
 func GetUsers(c *gin.Context) {
+	if !requireAdmin(c) {
+		return
+	}
 	type usersCachePayload struct {
 		Total int             `json:"total"`
 		List  []userPublicRow `json:"list"`
@@ -71,7 +80,7 @@ func GetUsers(c *gin.Context) {
 
 type CreateUserRequest struct {
 	Username    string `json:"username" binding:"required"`
-	Password    string `json:"password" binding:"required,min=6"`
+	Password    string `json:"password" binding:"required,min=8"`
 	Email       string `json:"email"`
 	Level       int    `json:"level"`
 	IsAPI       bool   `json:"is_api"`
@@ -79,6 +88,9 @@ type CreateUserRequest struct {
 }
 
 func CreateUser(c *gin.Context) {
+	if !requireAdmin(c) {
+		return
+	}
 	var req CreateUserRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"code": -1, "msg": "参数错误"})
@@ -92,7 +104,13 @@ func CreateUser(c *gin.Context) {
 		return
 	}
 
-	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+	// 强密码复杂度校验（安全审计 H-4）
+	if msg := utils.ValidatePasswordStrength(req.Password); msg != "" {
+		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": msg})
+		return
+	}
+
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcryptCost)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": -1, "msg": "密码加密失败"})
 		return
@@ -124,11 +142,23 @@ func CreateUser(c *gin.Context) {
 }
 
 func UpdateUser(c *gin.Context) {
+	if !requireAdmin(c) {
+		return
+	}
 	id, _ := strconv.ParseUint(c.Param("id"), 10, 32)
 
 	var user models.User
 	if err := database.DB.First(&user, id).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"code": -1, "msg": "用户不存在"})
+		return
+	}
+
+	// 安全审计 M-3：管理员层级约束。
+	// 非操作自己时，不允许修改等级 ≥ 自己的其他用户；防止同级管理员互删/互锁。
+	currentLevel := c.GetInt("level")
+	currentUserID := middleware.AuthUserID(c)
+	if uint(id) != currentUserID && user.Level >= currentLevel {
+		middleware.ErrorResponse(c, "无权修改同级或更高权限的用户")
 		return
 	}
 
@@ -145,6 +175,12 @@ func UpdateUser(c *gin.Context) {
 		return
 	}
 
+	// 不允许把他人 level 设置到 >= 自己的值（阻断横向提权路径）
+	if uint(id) != currentUserID && req.Level >= currentLevel {
+		middleware.ErrorResponse(c, "无权将他人等级提升至同级或以上")
+		return
+	}
+
 	updates := map[string]interface{}{
 		"email":       req.Email,
 		"level":       req.Level,
@@ -154,7 +190,7 @@ func UpdateUser(c *gin.Context) {
 	}
 
 	if req.Password != "" {
-		hashedPassword, _ := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+		hashedPassword, _ := bcrypt.GenerateFromPassword([]byte(req.Password), bcryptCost)
 		updates["password"] = string(hashedPassword)
 	}
 
@@ -177,12 +213,24 @@ func UpdateUser(c *gin.Context) {
 }
 
 func DeleteUser(c *gin.Context) {
+	if !requireAdmin(c) {
+		return
+	}
 	id, _ := strconv.ParseUint(c.Param("id"), 10, 32)
 
 	currentUserID := middleware.AuthUserID(c)
 	if uint(id) == currentUserID {
 		c.JSON(http.StatusBadRequest, gin.H{"code": -1, "msg": "不能删除自己"})
 		return
+	}
+
+	// 安全审计 M-3：不允许删除等级 ≥ 自己的其他管理员
+	var target models.User
+	if err := database.DB.Select("id", "level").First(&target, id).Error; err == nil {
+		if target.Level >= c.GetInt("level") {
+			middleware.ErrorResponse(c, "无权删除同级或更高权限的用户")
+			return
+		}
 	}
 
 	// 同时删除用户的权限
@@ -194,6 +242,9 @@ func DeleteUser(c *gin.Context) {
 
 // GetUserPermissions 获取用户权限列表
 func GetUserPermissions(c *gin.Context) {
+	if !requireAdmin(c) {
+		return
+	}
 	id, _ := strconv.ParseUint(c.Param("id"), 10, 32)
 
 	var perms []models.Permission
@@ -204,6 +255,9 @@ func GetUserPermissions(c *gin.Context) {
 
 // AddUserPermission 添加用户权限
 func AddUserPermission(c *gin.Context) {
+	if !requireAdmin(c) {
+		return
+	}
 	id, _ := strconv.ParseUint(c.Param("id"), 10, 32)
 
 	var req struct {
@@ -238,6 +292,9 @@ func AddUserPermission(c *gin.Context) {
 
 // UpdateUserPermission 更新用户权限
 func UpdateUserPermission(c *gin.Context) {
+	if !requireAdmin(c) {
+		return
+	}
 	id, _ := strconv.ParseUint(c.Param("id"), 10, 32)
 	permId, _ := strconv.ParseUint(c.Param("permId"), 10, 32)
 
@@ -269,6 +326,9 @@ func UpdateUserPermission(c *gin.Context) {
 
 // DeleteUserPermission 删除用户权限
 func DeleteUserPermission(c *gin.Context) {
+	if !requireAdmin(c) {
+		return
+	}
 	id, _ := strconv.ParseUint(c.Param("id"), 10, 32)
 	permId, _ := strconv.ParseUint(c.Param("permId"), 10, 32)
 
@@ -283,6 +343,9 @@ func DeleteUserPermission(c *gin.Context) {
 
 // ResetAPIKey 重新生成API Key
 func ResetAPIKey(c *gin.Context) {
+	if !requireAdmin(c) {
+		return
+	}
 	id, _ := strconv.ParseUint(c.Param("id"), 10, 32)
 
 	var user models.User
@@ -468,6 +531,11 @@ func GetLogDetail(c *gin.Context) {
 }
 
 func GetSystemConfig(c *gin.Context) {
+	// 安全审计 R-2：原实现无任何鉴权，普通用户可读取 mail_password / tgbot_token /
+	// webhook_url / oauth_*_secret / turnstile_secret_key 等全部敏感凭据。
+	if !requireAdmin(c) {
+		return
+	}
 	var configs []models.SysConfig
 	database.DB.Find(&configs)
 
@@ -511,6 +579,11 @@ func sysConfigJSONValueToDB(v interface{}) string {
 }
 
 func UpdateSystemConfig(c *gin.Context) {
+	// 安全审计 R-2：原实现无任何鉴权，普通用户可改 site_url 钓鱼 magic-link、
+	// 关闭 login_captcha、改 webhook_url 触发 SSRF 等。
+	if !requireAdmin(c) {
+		return
+	}
 	var req map[string]interface{}
 	if d := middleware.GetDecryptedData(c); d != nil {
 		req = d

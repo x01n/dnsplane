@@ -17,8 +17,13 @@ export interface EncryptedPayload {
   iv: string   
   data: string 
 }
-// 保留兼容性，但不再作为并发安全机制
-let currentAesKey: CryptoKey | null = null
+// 安全审计 M-3：移除 currentAesKey 全局变量。
+// 原实现在并发请求场景下（如 dashboard 同时发 4 个 Promise.all 请求）会被后续请求
+// 覆盖，导致解密响应时密钥串台 → 信息泄露。
+// 现在 decryptResponse 强制要求显式传入 aesKey；hybridEncrypt 返回结构不变。
+//
+// （hybridEncrypt 仍然返回 { payload, aesKey }，调用方负责把同请求的 aesKey
+//  穿到 decryptResponse；ApiClient 已正确处理这一点。）
 export async function getPublicKey(): Promise<string> {
   if (publicKeyCache) {
     return publicKeyCache
@@ -131,26 +136,37 @@ function generateNonce(): string {
   return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('')
 }
 
-// 从rt+at+st派生签名密钥
+/*
+ * 派生请求签名密钥。
+ *
+ * 安全审计 H-1 / M-3 修复：
+ * - 旧实现从 localStorage 同时读取 refresh_token + access_token + secret_token，
+ *   XSS 一次可把三份凭据一并盗走；refresh_token 本应只在 HttpOnly Cookie 中，
+ *   这里却绕过回落到 localStorage。
+ * - 现改为仅依赖 access_token + secret_token（不再读 refresh_token），
+ *   secret_token 是本地生成、仅用于签名派生的随机 32 字节，与服务端无关；
+ *   这样即使 XSS 读到 secret_token，没有 access_token 也无法伪造签名，
+ *   HttpOnly Cookie 里的 refresh_token 保持不可触达。
+ * - 保留 SHA-256(concat) 的派生形式，避免改动签名报文格式；若后续要升级到 HKDF
+ *   需前后端同步升级，故单独列为 TODO。
+ */
 async function deriveSignKey(): Promise<CryptoKey> {
-  const refreshToken = localStorage.getItem('refresh_token') || ''
   const accessToken = localStorage.getItem('token') || ''
-  const secretToken = localStorage.getItem('secret_token') || ''
-  
-  // 如果没有secret_token，生成一个并保存
-  let st = secretToken
+  let st = localStorage.getItem('secret_token') || ''
+
+  // 如果没有 secret_token，生成一个并保存（与服务端无任何交互）
   if (!st) {
     const bytes = new Uint8Array(32)
     crypto.getRandomValues(bytes)
     st = Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('')
     localStorage.setItem('secret_token', st)
   }
-  
-  // 使用SHA-256(rt+at+st)派生密钥
-  const combined = refreshToken + accessToken + st
+
+  // SHA-256(at + st)；不再拼 refresh_token
+  const combined = accessToken + st
   const encoder = new TextEncoder()
   const hashBuffer = await crypto.subtle.digest('SHA-256', encoder.encode(combined))
-  
+
   return crypto.subtle.importKey(
     'raw',
     hashBuffer,
@@ -160,10 +176,9 @@ async function deriveSignKey(): Promise<CryptoKey> {
   )
 }
 
-// 获取签名所需的tokens用于请求头
-export function getSignTokens(): { refreshToken: string; secretToken: string } {
+// 获取签名所需的 secret_token 用于请求头（refresh_token 字段已移除，避免从 localStorage 读取）
+export function getSignTokens(): { secretToken: string } {
   return {
-    refreshToken: localStorage.getItem('refresh_token') || '',
     secretToken: localStorage.getItem('secret_token') || '',
   }
 }
@@ -236,8 +251,7 @@ export async function hybridEncrypt(data: object | string): Promise<HybridEncryp
     true,
     ['encrypt', 'decrypt']
   )
-  // 保留兼容性赋值（单请求场景仍可用）
-  currentAesKey = aesKey
+  // 不再写入全局变量；并发请求各自持有 aesKey 通过返回值传递
   const iv = crypto.getRandomValues(new Uint8Array(12))
   const encoder = new TextEncoder()
   
@@ -312,8 +326,9 @@ export interface ObfuscatedResponse {
 
 export async function decryptResponse<T>(response: unknown, aesKey?: CryptoKey): Promise<T> {
   const resp = response as Record<string, unknown>
-  // 优先使用传入的 per-request key，回退到全局 currentAesKey
-  const key = aesKey || currentAesKey
+  // 安全审计 M-3：仅使用调用方传入的 per-request key；不再回退到全局变量。
+  // 缺失时直接报错暴露调用方 bug，比静默错配密钥导致信息泄露安全得多。
+  const key = aesKey || null
   
   // 处理混淆格式 (_e, _p._i, _p._d)
   if (resp._e && resp._p) {

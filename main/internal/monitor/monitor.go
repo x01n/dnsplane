@@ -9,6 +9,7 @@ import (
 	"main/internal/logger"
 	"main/internal/models"
 	"main/internal/notify"
+	"main/internal/utils"
 	"net"
 	"strconv"
 	"strings"
@@ -147,7 +148,9 @@ func (m *Monitor) dispatchTasks() {
 		nextTime := now + int64(task.Frequency)
 		database.DB.Model(&models.DMTask{}).Where("id = ?", task.ID).
 			Update("check_next_time", nextTime)
-		go m.processTaskAsync(task)
+		// SafeGo 统一兜底 panic（安全审计 L-5）；t 本地化避免循环变量被下一轮覆盖
+		t := task
+		utils.SafeGoWithName(fmt.Sprintf("monitor-task-%d", t.ID), func() { m.processTaskAsync(t) })
 	}
 }
 
@@ -333,6 +336,9 @@ func (m *Monitor) checkAddress(ctx context.Context, task models.DMTask, addr str
 		if url == "" {
 			url = "http://" + addr
 		}
+		if err := validateCheckURL(url); err != nil {
+			return &CheckResult{Success: false, Error: err.Error()}
+		}
 		hostIP := ""
 		if task.CDN {
 			hostIP = addr
@@ -343,6 +349,9 @@ func (m *Monitor) checkAddress(ctx context.Context, task models.DMTask, addr str
 		url := task.CheckURL
 		if url == "" {
 			url = "https://" + addr
+		}
+		if err := validateCheckURL(url); err != nil {
+			return &CheckResult{Success: false, Error: err.Error()}
 		}
 		hostIP := ""
 		if task.CDN {
@@ -368,8 +377,9 @@ func httpCheckOptionsFromTask(task models.DMTask, hostIP string) *HTTPCheckOptio
 		ProxyHost:     strings.TrimSpace(task.ProxyHost),
 		ProxyPort:     task.ProxyPort,
 		ProxyUsername: task.ProxyUsername,
-		ProxyPassword: task.ProxyPassword,
-		UseEnvProxy:   task.UseProxy && !useField,
+		ProxyPassword:   task.ProxyPassword,
+		UseEnvProxy:     task.UseProxy && !useField,
+		InsecureSkipTLS: task.AllowInsecureTLS,
 	}
 }
 

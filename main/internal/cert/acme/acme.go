@@ -456,7 +456,7 @@ func (c *ACMEClient) getJWK() (map[string]interface{}, error) {
 			"e":   base64.RawURLEncoding.EncodeToString(big.NewInt(int64(key.E)).Bytes()),
 		}, nil
 	default:
-		return nil, fmt.Errorf("unsupported key type")
+		return nil, fmt.Errorf("不支持的密钥类型")
 	}
 }
 
@@ -480,7 +480,7 @@ func (c *ACMEClient) sign(data []byte) ([]byte, error) {
 	case *rsa.PrivateKey:
 		return rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, hash[:])
 	default:
-		return nil, fmt.Errorf("unsupported key type")
+		return nil, fmt.Errorf("不支持的密钥类型")
 	}
 }
 

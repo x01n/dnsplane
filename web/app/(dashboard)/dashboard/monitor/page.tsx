@@ -372,8 +372,8 @@ export default function MonitorPage() {
       proxy_port: task.proxy_port || 0,
       proxy_username: task.proxy_username || '',
       proxy_password: task.proxy_password || '',
-      auto_restore: task.auto_restore,
-      notify_enabled: task.notify_enabled,
+      auto_restore: task.auto_restore ?? false,
+      notify_enabled: task.notify_enabled ?? false,
     })
     setEditDialogOpen(true)
   }
@@ -746,7 +746,7 @@ export default function MonitorPage() {
             刷新
           </Button>
           {canManageMonitor && (
-            <Button size="sm" onClick={openSmartAdd}>
+            <Button size="sm" onClick={() => openSmartAdd()}>
               <Plus className="h-4 w-4 mr-2" />
               添加任务
             </Button>
@@ -887,7 +887,7 @@ export default function MonitorPage() {
                 {canManageMonitor ? '点击「添加任务」创建第一个容灾监控任务' : '当前账号无监控写权限，如需创建请联系管理员'}
               </p>
               {canManageMonitor && (
-                <Button onClick={openSmartAdd}>
+                <Button onClick={() => openSmartAdd()}>
                   <Plus className="h-4 w-4 mr-2" />
                   添加任务
                 </Button>
@@ -1158,13 +1158,13 @@ export default function MonitorPage() {
                           {detailTask?.fault_time && (
                             <div>
                               <p className="text-xs text-muted-foreground">故障时间</p>
-                              <p className="font-medium text-sm text-red-600">{formatDate(detailTask.fault_time)}</p>
+                              <p className="font-medium text-sm text-red-600">{formatDate(new Date(detailTask.fault_time * 1000))}</p>
                             </div>
                           )}
                           {detailTask?.recover_time && (
                             <div>
                               <p className="text-xs text-muted-foreground">恢复时间</p>
-                              <p className="font-medium text-sm text-green-600">{formatDate(detailTask.recover_time)}</p>
+                              <p className="font-medium text-sm text-green-600">{formatDate(new Date(detailTask.recover_time * 1000))}</p>
                             </div>
                           )}
                           {detailTask?.last_error && (

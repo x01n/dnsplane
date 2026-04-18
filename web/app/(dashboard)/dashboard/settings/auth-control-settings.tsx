@@ -29,7 +29,12 @@ export default function AuthControlSettings() {
         oauthApi.getProviders(),
       ])
       if (configRes.code === 0 && configRes.data) {
-        setConfig(configRes.data)
+        // 后端返回 Record<string, unknown>；本地 state 是 Record<string, string>，统一转字符串
+        const stringified: Record<string, string> = {}
+        Object.entries(configRes.data).forEach(([k, v]) => {
+          stringified[k] = v == null ? '' : String(v)
+        })
+        setConfig(stringified)
       }
       /* providers 可能直接返回数组或者在 data 字段 */
       if (Array.isArray(providerRes)) {

@@ -315,16 +315,23 @@ export function AccountForm({ type, providers, onSubmit, backUrl, title, descrip
       return (
         <div className={cn(sizeClass, 'rounded-lg overflow-hidden flex-shrink-0 bg-white dark:bg-gray-800 p-1')}>
           {/* eslint-disable-next-line @next/next/no-img-element -- 提供商静态图标 URL */}
-          <img 
-            src={style.image} 
-            alt={providerType} 
+          <img
+            src={style.image}
+            alt={providerType}
             className="w-full h-full object-contain"
             onError={(e) => {
-              // 图片加载失败时显示文字图标
+              // 图片加载失败时降级为文字图标（安全审计 M-2：改用 textContent 构建 DOM，杜绝 innerHTML 注入面）
               const target = e.target as HTMLImageElement
+              const parent = target.parentElement
+              if (!parent) return
               target.style.display = 'none'
-              target.parentElement!.innerHTML = `<span class="${textSize} font-bold" style="color: ${style.color}">${style.icon}</span>`
-              target.parentElement!.classList.add('flex', 'items-center', 'justify-center', style.bgColor)
+              parent.replaceChildren()
+              const span = document.createElement('span')
+              span.className = `${textSize} font-bold`
+              span.style.color = style.color
+              span.textContent = style.icon
+              parent.appendChild(span)
+              parent.classList.add('flex', 'items-center', 'justify-center', style.bgColor)
             }}
           />
         </div>

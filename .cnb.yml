@@ -1,0 +1,360 @@
+# CNB CI/CD 流水线
+# 参考：https://cnb.cool/examples/ecosystem/golang-build
+#       https://cnb.cool/examples/ecosystem/docker-buildx-multi-platform-example
+#
+# 触发与产出：
+#   master push ：
+#     - 交叉编译 Linux amd64/arm64 二进制 → tar.gz 归档
+#     - 多架构 Docker 镜像 → 推 `${REPO}:v<VERSION>` 与 `${REPO}:latest`
+#     - 生成 changelog，git:release 以 overlying=true 更新 `v<VERSION>` 发布
+#     - cnbcool/attachments 上传 tarball + SHA256SUMS 作为 Release 附件
+#   tag_push (vX.Y.Z) ：
+#     - 同 master.push 但 tag 来自推送的 git tag，用于正式版本发布
+#   web_trigger ：
+#     - 手动触发一次性构建 docker 镜像（debug / rebuild 用）
+#
+# 版本号来源：仓库根 VERSION 文件（每次 push 时若 VERSION 未变，则基于该版本号
+# upsert Release；docker image tag 也基于同一版本，保证前后端一致）
+#
+# CNB 内置环境变量：
+#   CNB_DOCKER_REGISTRY     CNB 制品库域名（如 docker.cnb.cool）
+#   CNB_REPO_SLUG_LOWERCASE owner/repo（小写）
+#   CNB_TOKEN / CNB_TOKEN_USER_NAME  用于登录制品库
+#   CNB_BRANCH              分支名；tag_push 事件下其值为 tag 名
+#   CNB_COMMIT              当前 commit sha
+#
+# 依赖约定：
+#   main/vendor 已入库 → go build -mod=vendor 离线编译
+#   web/ 前端由每条 pipeline 的 frontend 阶段独立构建；Dockerfile 内置前端构建
+
+master:
+  push:
+    # pipeline A：读 VERSION → 构建二进制 → changelog → git:release (upsert) → 上传附件
+    - docker:
+        image: docker.io/library/golang:1.26.2-bookworm
+      env:
+        CGO_ENABLED: "0"
+        GOFLAGS: "-mod=vendor"
+      stages:
+        - name: read version
+          script: |
+            set -eu
+            VERSION=$(tr -d '[:space:]' < VERSION)
+            if [ -z "${VERSION}" ]; then
+              echo "VERSION 文件为空或不存在，使用 CNB_COMMIT 作为兜底版本号"
+              VERSION="${CNB_COMMIT}"
+            fi
+            echo "VERSION=${VERSION}" > .version.env
+            echo "RELEASE_TAG=v${VERSION}" >> .version.env
+            echo "[version] VERSION=${VERSION} RELEASE_TAG=v${VERSION}"
+        - name: build frontend
+          image: docker.io/library/node:22-bookworm-slim
+          script: |
+            set -eux
+            cd web
+            npm config set fetch-retries 5
+            npm config set fetch-retry-mintimeout 20000
+            npm config set fetch-retry-maxtimeout 120000
+            npm ci
+            npm run build:ci
+        - name: build all arches
+          script: |
+            set -eux
+            . ./.version.env
+            mkdir -p dist
+            cd main
+            for arch in amd64 arm64; do
+              GOOS=linux GOARCH=$arch go build -trimpath -buildvcs=false \
+                -ldflags="-s -w -X main.Version=${RELEASE_TAG}" \
+                -o "../dist/dnsplane-linux-${arch}" .
+            done
+        - name: package tarballs
+          script: |
+            set -eux
+            . ./.version.env
+            cd dist
+            for arch in amd64 arm64; do
+              tar -czf "dnsplane-${RELEASE_TAG}-linux-${arch}.tar.gz" "dnsplane-linux-${arch}"
+            done
+            sha256sum *.tar.gz > SHA256SUMS
+            ls -lh
+        - name: changelog
+          script: |
+            set -eu
+            . ./.version.env
+            # 以最近一个 tag 为基线；没有则列全部提交
+            PREV_TAG=$(git describe --tags --abbrev=0 2>/dev/null || true)
+            if [ -n "${PREV_TAG}" ] && [ "${PREV_TAG}" != "${RELEASE_TAG}" ]; then
+              RANGE="${PREV_TAG}..HEAD"
+              TITLE="变更日志（${PREV_TAG} → ${RELEASE_TAG}）"
+            else
+              RANGE="HEAD"
+              TITLE="变更日志（${RELEASE_TAG}）"
+            fi
+            {
+              echo "## ${TITLE}"
+              echo ""
+              git log --no-merges --pretty=format:"- %s (%h)" "${RANGE}" 2>/dev/null | head -200
+              echo ""
+            } > CHANGELOG_PARTIAL.md
+            echo "[changelog] PREV_TAG=${PREV_TAG:-<none>}  RANGE=${RANGE}"
+            cat CHANGELOG_PARTIAL.md
+        - name: compose release notes
+          script: |
+            set -eu
+            . ./.version.env
+            IMAGE="${CNB_DOCKER_REGISTRY}/${CNB_REPO_SLUG_LOWERCASE}"
+            {
+              cat CHANGELOG_PARTIAL.md
+              echo ""
+              echo "## 📦 Artifacts"
+              echo ""
+              echo "### Binaries"
+              echo ""
+              echo "- \`dnsplane-${RELEASE_TAG}-linux-amd64.tar.gz\`"
+              echo "- \`dnsplane-${RELEASE_TAG}-linux-arm64.tar.gz\`"
+              echo ""
+              echo "### Docker Image"
+              echo ""
+              echo '```bash'
+              echo "docker pull ${IMAGE}:${RELEASE_TAG}"
+              echo "docker pull ${IMAGE}:latest"
+              echo '```'
+              echo ""
+              echo "支持架构：linux/amd64, linux/arm64"
+              echo ""
+              echo "### SHA-256"
+              echo ""
+              echo '```'
+              cat dist/SHA256SUMS
+              echo '```'
+            } > RELEASE_NOTES.md
+            echo "--- RELEASE_NOTES.md ---"
+            cat RELEASE_NOTES.md
+        # 用 cnb:read-file 将 .version.env 中的 VERSION / RELEASE_TAG 导出到后续 stage 环境变量，
+        # 供 git:release 的 options 字段做 ${RELEASE_TAG} 模板展开。
+        # 关键坑点：
+        #   1. 参数键为 filePath（不是 file），此前误用 file 报
+        #      Parameter check failed: cnb:read-file data must have required property 'filePath'.
+        #   2. 必须同时声明 exports 映射（源 key → 目标环境变量名），
+        #      仅指定 filePath 不会自动注入任何 env。没有 exports 时 options 中
+        #      ${RELEASE_TAG} 为空，git:release 会输出 "tagname is empty"。
+        - name: export release env
+          type: cnb:read-file
+          options:
+            filePath: .version.env
+          exports:
+            VERSION: VERSION
+            RELEASE_TAG: RELEASE_TAG
+        - name: create release
+          type: git:release
+          options:
+            tag: ${RELEASE_TAG}
+            title: ${RELEASE_TAG}
+            descriptionFromFile: RELEASE_NOTES.md
+            overlying: true   # upsert：已存在则更新描述，不重建
+            latest: true
+        - name: upload release attachments
+          image: cnbcool/attachments:latest
+          settings:
+            attachments:
+              - ./dist/*.tar.gz
+              - ./dist/SHA256SUMS
+
+    # pipeline B：多架构 Docker 镜像——每次 master.push 都更新 :v<VERSION> + :latest
+    - services:
+        - name: docker
+          options:
+            rootlessBuildkitd:
+              enabled: true
+      stages:
+        - name: read version
+          script: |
+            set -eu
+            VERSION=$(tr -d '[:space:]' < VERSION 2>/dev/null || echo "")
+            if [ -z "${VERSION}" ]; then VERSION="${CNB_COMMIT}"; fi
+            echo "VERSION=${VERSION}" > .version.env
+            echo "RELEASE_TAG=v${VERSION}" >> .version.env
+        - name: docker login
+          script: |
+            set -eux
+            echo "${CNB_TOKEN}" | docker login \
+              -u "${CNB_TOKEN_USER_NAME}" --password-stdin \
+              "${CNB_DOCKER_REGISTRY}"
+        - name: buildx multi-arch build and push
+          script: |
+            set -eux
+            . ./.version.env
+            IMAGE="${CNB_DOCKER_REGISTRY}/${CNB_REPO_SLUG_LOWERCASE}"
+            docker buildx build \
+              --platform linux/amd64,linux/arm64 \
+              --build-arg VERSION="${RELEASE_TAG}" \
+              --tag "${IMAGE}:${RELEASE_TAG}" \
+              --tag "${IMAGE}:latest" \
+              --label "org.opencontainers.image.source=https://cnb.cool/${CNB_REPO_SLUG_LOWERCASE}" \
+              --label "org.opencontainers.image.version=${RELEASE_TAG}" \
+              --label "org.opencontainers.image.revision=${CNB_COMMIT}" \
+              --push \
+              .
+
+$:
+  tag_push:
+    # pipeline A：二进制编译 + changelog + release + 附件
+    - docker:
+        image: docker.io/library/golang:1.26.2-bookworm
+      env:
+        CGO_ENABLED: "0"
+        GOFLAGS: "-mod=vendor"
+      stages:
+        - name: build frontend
+          image: docker.io/library/node:22-bookworm-slim
+          script: |
+            set -eux
+            cd web && npm ci && npm run build:ci
+        - name: build all arches
+          script: |
+            set -eux
+            mkdir -p dist
+            cd main
+            for arch in amd64 arm64; do
+              GOOS=linux GOARCH=$arch go build -trimpath -buildvcs=false \
+                -ldflags="-s -w -X main.Version=${CNB_BRANCH}" \
+                -o "../dist/dnsplane-linux-${arch}" .
+            done
+        - name: package tarballs
+          script: |
+            set -eux
+            cd dist
+            for arch in amd64 arm64; do
+              tar -czf "dnsplane-${CNB_BRANCH}-linux-${arch}.tar.gz" \
+                "dnsplane-linux-${arch}"
+            done
+            sha256sum *.tar.gz > SHA256SUMS
+            ls -lh
+        # 自实现 changelog 生成，替代 cnbcool/changelog。
+        # 原因：cnbcool/changelog 内部强依赖 `git describe --tags --abbrev=0 ${TAG}^`
+        #       找上一个 tag；首次发布或基准 tag 不是 HEAD 祖先时会 fatal 退出，
+        #       直接拖垮整条流水线。此处用 try/catch 逻辑优雅降级：
+        #       - 有上游 tag   → 生成 PREV_TAG..CURRENT_TAG 之间的提交列表
+        #       - 无上游 tag   → 列出从仓库初始到当前 tag 的全部提交（首次发布）
+        - name: changelog
+          script: |
+            set -eu
+            PREV_TAG=$(git describe --tags --abbrev=0 "${CNB_BRANCH}^" 2>/dev/null || true)
+            if [ -n "${PREV_TAG}" ]; then
+              RANGE="${PREV_TAG}..${CNB_BRANCH}"
+              TITLE="变更日志（${PREV_TAG} → ${CNB_BRANCH}）"
+            else
+              RANGE="${CNB_BRANCH}"
+              TITLE="变更日志（首次发布）"
+            fi
+            {
+              echo "## ${TITLE}"
+              echo ""
+              if ! git log --no-merges --pretty=format:"- %s (%h)" "${RANGE}" 2>/dev/null | head -200; then
+                echo "- 无法枚举提交历史，见仓库 Git log"
+              fi
+              echo ""
+            } > CHANGELOG_PARTIAL.md
+            echo "[changelog] PREV_TAG=${PREV_TAG:-<none>}  RANGE=${RANGE}"
+            echo "--- CHANGELOG_PARTIAL.md ---"
+            cat CHANGELOG_PARTIAL.md
+        - name: compose release notes
+          script: |
+            set -eu
+            IMAGE="${CNB_DOCKER_REGISTRY}/${CNB_REPO_SLUG_LOWERCASE}:${CNB_BRANCH}"
+            {
+              cat CHANGELOG_PARTIAL.md
+              echo ""
+              echo "## 📦 Artifacts"
+              echo ""
+              echo "### Binaries"
+              echo ""
+              echo "- \`dnsplane-${CNB_BRANCH}-linux-amd64.tar.gz\`"
+              echo "- \`dnsplane-${CNB_BRANCH}-linux-arm64.tar.gz\`"
+              echo ""
+              echo "### Docker Image"
+              echo ""
+              echo '```bash'
+              echo "docker pull ${IMAGE}"
+              echo "docker pull ${CNB_DOCKER_REGISTRY}/${CNB_REPO_SLUG_LOWERCASE}:latest"
+              echo '```'
+              echo ""
+              echo "支持架构：linux/amd64, linux/arm64"
+              echo ""
+              echo "### SHA-256"
+              echo ""
+              echo '```'
+              cat dist/SHA256SUMS
+              echo '```'
+            } > RELEASE_NOTES.md
+            echo "--- RELEASE_NOTES.md ---"
+            cat RELEASE_NOTES.md
+        - name: create release
+          type: git:release
+          options:
+            title: ${CNB_BRANCH}
+            descriptionFromFile: RELEASE_NOTES.md
+            latest: true
+        - name: upload release attachments
+          image: cnbcool/attachments:latest
+          settings:
+            attachments:
+              - ./dist/dnsplane-${CNB_BRANCH}-linux-amd64.tar.gz
+              - ./dist/dnsplane-${CNB_BRANCH}-linux-arm64.tar.gz
+              - ./dist/SHA256SUMS
+
+    # pipeline B：多架构 Docker 镜像构建与推送（与 A 并行）
+    - services:
+        - name: docker
+          options:
+            rootlessBuildkitd:
+              enabled: true
+      stages:
+        - name: docker login
+          script: |
+            set -eux
+            echo "${CNB_TOKEN}" | docker login \
+              -u "${CNB_TOKEN_USER_NAME}" --password-stdin \
+              "${CNB_DOCKER_REGISTRY}"
+        - name: buildx multi-arch build and push
+          script: |
+            set -eux
+            IMAGE="${CNB_DOCKER_REGISTRY}/${CNB_REPO_SLUG_LOWERCASE}"
+            docker buildx build \
+              --platform linux/amd64,linux/arm64 \
+              --build-arg VERSION="${CNB_BRANCH}" \
+              --tag "${IMAGE}:${CNB_BRANCH}" \
+              --tag "${IMAGE}:latest" \
+              --label "org.opencontainers.image.source=https://cnb.cool/${CNB_REPO_SLUG_LOWERCASE}" \
+              --label "org.opencontainers.image.version=${CNB_BRANCH}" \
+              --label "org.opencontainers.image.revision=${CNB_COMMIT}" \
+              --push \
+              .
+
+  # 手动触发：为当前 commit 生成一个多架构 Docker 镜像（tag 为分支+短 sha），便于临时出图
+  web_trigger:
+    - services:
+        - name: docker
+          options:
+            rootlessBuildkitd:
+              enabled: true
+      stages:
+        - name: docker login
+          script: |
+            set -eux
+            echo "${CNB_TOKEN}" | docker login \
+              -u "${CNB_TOKEN_USER_NAME}" --password-stdin \
+              "${CNB_DOCKER_REGISTRY}"
+        - name: buildx multi-arch build and push
+          script: |
+            set -eux
+            IMAGE="${CNB_DOCKER_REGISTRY}/${CNB_REPO_SLUG_LOWERCASE}"
+            SHORT_SHA="$(echo "${CNB_COMMIT}" | cut -c1-7)"
+            TAG="manual-${CNB_BRANCH//\//-}-${SHORT_SHA}"
+            docker buildx build \
+              --platform linux/amd64,linux/arm64 \
+              --build-arg VERSION="${TAG}" \
+              --tag "${IMAGE}:${TAG}" \
+              --push \
+              .

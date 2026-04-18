@@ -6,8 +6,12 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 )
+
+// 历史默认值，首次启动检测到这个值必须替换为随机串
+const legacyDefaultJWTSecret = "dnsplane-secret-key-change-me"
 
 type Config struct {
 	Server     ServerConfig     `json:"server"`
@@ -16,6 +20,12 @@ type Config struct {
 	Proxy      ProxyConfig      `json:"proxy"`
 	LogCleanup LogCleanupConfig `json:"log_cleanup"`
 	Redis      RedisConfig      `json:"redis"`
+	Security   SecurityConfig   `json:"security"`
+}
+
+// SecurityConfig 存储字段级加密主密钥；允许从环境变量 DNSPLANE_MASTER_KEY 覆盖
+type SecurityConfig struct {
+	MasterKey string `json:"master_key"`
 }
 
 type RedisConfig struct {
@@ -109,14 +119,41 @@ func Load(path string) (*Config, error) {
 			data, err = os.ReadFile(path)
 			if err != nil {
 				if os.IsNotExist(err) {
-					// 配置文件不存在，生成随机JWT密钥并创建默认配置
+					// 配置文件不存在，生成随机 JWT 密钥与字段加密主密钥，创建默认配置
 					cfg.JWT.Secret = generateRandomSecret(32)
+					cfg.Security.MasterKey = generateRandomSecret(32)
 					err = saveConfig(path, cfg)
 					return
 				}
 				return
 			}
 			err = json.Unmarshal(data, cfg)
+			if err != nil {
+				return
+			}
+		}
+
+		// 环境变量优先：DNSPLANE_JWT_SECRET / DNSPLANE_MASTER_KEY 用于容器化部署
+		if v := strings.TrimSpace(os.Getenv("DNSPLANE_JWT_SECRET")); v != "" {
+			cfg.JWT.Secret = v
+		}
+		if v := strings.TrimSpace(os.Getenv("DNSPLANE_MASTER_KEY")); v != "" {
+			cfg.Security.MasterKey = v
+		}
+
+		// 历史默认 secret 或空值自动替换并回写，防止生产环境使用公开默认值
+		dirty := false
+		if s := strings.TrimSpace(cfg.JWT.Secret); s == "" || s == legacyDefaultJWTSecret {
+			cfg.JWT.Secret = generateRandomSecret(32)
+			dirty = true
+		}
+		if strings.TrimSpace(cfg.Security.MasterKey) == "" {
+			cfg.Security.MasterKey = generateRandomSecret(32)
+			dirty = true
+		}
+		if dirty && path != "" {
+			// 回写失败不阻断启动，只影响下次重启再次生成
+			_ = saveConfig(path, cfg)
 		}
 	})
 	return cfg, err
@@ -133,7 +170,8 @@ func generateRandomSecret(length int) string {
 func saveConfig(path string, cfg *Config) error {
 	dir := filepath.Dir(path)
 	if dir != "" && dir != "." {
-		if err := os.MkdirAll(dir, 0755); err != nil {
+		// 0700：仅 owner 可访问配置目录（含密钥）
+		if err := os.MkdirAll(dir, 0700); err != nil {
 			return err
 		}
 	}
@@ -141,7 +179,8 @@ func saveConfig(path string, cfg *Config) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0644)
+	// 0600：仅 owner 可读写，防止同机其他用户读取 JWT secret / master_key / DB 密码（安全审计 M-5）
+	return os.WriteFile(path, data, 0600)
 }
 
 func Get() *Config {
@@ -156,5 +195,6 @@ func Save(path string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0644)
+	// 0600：仅 owner 可读写，防止同机其他用户读取 JWT secret / master_key / DB 密码（安全审计 M-5）
+	return os.WriteFile(path, data, 0600)
 }

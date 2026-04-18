@@ -101,13 +101,15 @@ export default function DashboardLayout({
   }, [pathname])
 
   useEffect(() => {
-    /* 兼容旧版 OAuth 重定向：?token=&refresh_token= 写入本地后立即从地址栏移除，避免泄露到 Referer */
+    /*
+     * 安全审计 H-4：移除从 URL 查询串 (?token=&refresh_token=) 读取凭据的兼容路径。
+     * 原实现会使 token 进入浏览器历史、Referer、服务端/代理访问日志，攻击面过大。
+     * OAuth 回调已统一走 URL fragment（#access_token=...），由 consumeOAuthTokensFromUrl 处理。
+     * 如仍检测到遗留查询串，直接删除不做写入。
+     */
     if (typeof window !== 'undefined') {
       const u = new URL(window.location.href)
-      const t = u.searchParams.get('token')
-      const r = u.searchParams.get('refresh_token')
-      if (t && r) {
-        api.setTokens({ token: t, refresh_token: r })
+      if (u.searchParams.has('token') || u.searchParams.has('refresh_token')) {
         u.searchParams.delete('token')
         u.searchParams.delete('refresh_token')
         const q = u.searchParams.toString()

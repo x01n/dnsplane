@@ -9,15 +9,57 @@ export interface ApiResponse<T = unknown> {
   data?: T
 }
 
+/** 读取 document.cookie 中指定 name 的值；SSR 下返回空串 */
+function readCookie(name: string): string {
+  if (typeof document === 'undefined') return ''
+  const prefix = name + '='
+  for (const part of document.cookie.split(';')) {
+    const seg = part.trim()
+    if (seg.startsWith(prefix)) return decodeURIComponent(seg.slice(prefix.length))
+  }
+  return ''
+}
+
 class ApiClient {
   private token: string | null = null
   /** 并发 401 时合并为单次 refresh，避免 JTI 轮转导致多次刷新互相踩掉 */
   private refreshInFlight: Promise<boolean> | null = null
+  /** CSRF 令牌预取合并，避免首屏多个并发请求各自 bootstrap */
+  private csrfInFlight: Promise<string> | null = null
 
   constructor() {
     if (typeof window !== 'undefined') {
       this.token = localStorage.getItem('token')
     }
+  }
+
+  /**
+   * 获取 CSRF 令牌：优先读 cookie；不存在则 GET /api/csrf bootstrap。
+   * 后端 double-submit cookie 策略要求请求头与 _csrf cookie 同值。
+   */
+  private async ensureCSRFToken(): Promise<string> {
+    let tok = readCookie('_csrf')
+    if (tok) return tok
+    if (this.csrfInFlight) return this.csrfInFlight
+    this.csrfInFlight = (async () => {
+      try {
+        const res = await fetch(`${API_BASE}/csrf`, {
+          method: 'GET',
+          credentials: 'include',
+        })
+        if (res.ok) {
+          const j = (await res.json()) as ApiResponse<{ token: string }>
+          if (j.code === 0 && j.data?.token) return j.data.token
+        }
+      } catch {
+        /* 网络错误时返回空值，让本次请求按原逻辑去失败，下次会重试 */
+      } finally {
+        this.csrfInFlight = null
+      }
+      return readCookie('_csrf')
+    })()
+    tok = await this.csrfInFlight
+    return tok
   }
 
   setToken(token: string | null) {
@@ -27,17 +69,23 @@ class ApiClient {
         localStorage.setItem('token', token)
       } else {
         localStorage.removeItem('token')
+        // 清理历史版本残留的 refresh_token（安全审计 M-1：该字段已不再写入 localStorage）
         localStorage.removeItem('refresh_token')
       }
     }
   }
 
-  /** 与 OAuth/注册一致：access 给 Authorization，refresh 供 /api/auth/refresh 等使用 */
-  setTokens(tokens: { token: string; refresh_token: string }) {
+  /**
+   * 与 OAuth/注册一致：access 给 Authorization，refresh 仅靠 HttpOnly Cookie `_rt` 下发。
+   * 安全审计 M-1：refresh_token 曾同时写入 localStorage，XSS 场景可被一次性窃取；
+   * 改为只存服务端 HttpOnly Cookie，前端不再持有明文。
+   */
+  setTokens(tokens: { token: string; refresh_token?: string }) {
     this.token = tokens.token
     if (typeof window !== 'undefined') {
       localStorage.setItem('token', tokens.token)
-      localStorage.setItem('refresh_token', tokens.refresh_token)
+      // 显式移除历史残留
+      localStorage.removeItem('refresh_token')
     }
   }
 
@@ -65,13 +113,12 @@ class ApiClient {
     }
     this.refreshInFlight = (async () => {
       try {
-        const rt =
-          typeof window !== 'undefined' ? localStorage.getItem('refresh_token') || '' : ''
+        // refresh token 仅走 HttpOnly Cookie `_rt`（安全审计 M-1），不再从 localStorage 读明文
         const res = await fetch(`${API_BASE}/auth/refresh`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           credentials: 'include',
-          body: JSON.stringify(rt ? { refresh_token: rt } : {}),
+          body: JSON.stringify({}),
         })
         if (!res.ok) {
           return false
@@ -118,6 +165,12 @@ class ApiClient {
 
     if (this.token) {
       headers['Authorization'] = `Bearer ${this.token}`
+    }
+
+    // 非 GET 请求带上 double-submit CSRF 令牌，与服务端 _csrf cookie 同值
+    if (method !== 'GET' && method !== 'HEAD') {
+      const csrf = await this.ensureCSRFToken()
+      if (csrf) headers['X-CSRF-Token'] = csrf
     }
 
     const config: RequestInit = {
@@ -305,6 +358,47 @@ export const authApi = {
       redirect?: string
       user: User
     }>('/auth/magic-link/totp', { preauth_token, totp_code }),
+  // 行为/拼图验证码（mojocn/base64Captcha + go-captcha 系列）
+  // 验证 answer 形态依赖具体验证码类型（点选/拖拽/旋转/算术），统一为 unknown
+  getBehavioralCaptcha: () =>
+    api.get<{ captcha_id: string; image_base64: string; thumb_base64?: string }>(
+      '/auth/captcha/behavioral'
+    ),
+  verifyBehavioralCaptcha: (data: {
+    captcha_id: string
+    answer: unknown
+    captcha_type?: string
+  }) => api.post<{ verify_token: string }>('/auth/captcha/behavioral/verify', data),
+  getGoCaptcha: () =>
+    api.get<{ captcha_id: string; image_base64: string; thumb_base64?: string }>(
+      '/auth/captcha/go'
+    ),
+  verifyGoCaptcha: (data: {
+    captcha_id: string
+    answer: unknown
+    captcha_type?: string
+  }) => api.post<{ verify_token: string }>('/auth/captcha/go/verify', data),
+}
+
+// 系统访问控制配置（白名单/限流/CAPTCHA 触发条件）
+// 兼容历史命名：get/update 与 getConfig/updateConfig 同义
+export const authControlApi = {
+  get: () => api.get<Record<string, unknown>>('/system/auth-control'),
+  update: (data: Record<string, unknown>) =>
+    api.post('/system/auth-control', data),
+  getConfig: () => api.get<Record<string, unknown>>('/system/auth-control'),
+  updateConfig: (data: Record<string, unknown>) =>
+    api.post('/system/auth-control', data),
+}
+
+/** 系统任务/Cron 状态信息（开放结构，schedule/optimize 等子任务字段动态注入） */
+export interface TaskStatus {
+  running: boolean
+  last_run?: string
+  next_run?: string
+  error?: string
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  [key: string]: any
 }
 
 // Account APIs
@@ -312,10 +406,10 @@ export const accountApi = {
   list: (params?: { page?: number; page_size?: number; keyword?: string }) =>
     api.get<{ total: number; list: Account[] }>('/accounts', params),
   create: (data: Partial<Account>) => api.post<Account>('/accounts', data),
-  update: (id: number, data: Partial<Account>) => api.post<Account>(`/accounts/${id}`, data),
-  delete: (id: number) => api.post(`/accounts/${id}/delete`, {}),
-  check: (id: number) => api.post(`/accounts/${id}/check`),
-  getDomainList: (id: number, params?: { keyword?: string; page?: number; page_size?: number }) =>
+  update: (id: number | string, data: Partial<Account>) => api.post<Account>(`/accounts/${id}`, data),
+  delete: (id: number | string) => api.post(`/accounts/${id}/delete`, {}),
+  check: (id: number | string) => api.post(`/accounts/${id}/check`),
+  getDomainList: (id: number | string, params?: { keyword?: string; page?: number; page_size?: number }) =>
     api.get<{ total: number; list: DomainItem[] }>(`/accounts/${id}/domains`, params),
 }
 
@@ -328,8 +422,8 @@ export const domainApi = {
     api.post<Domain>('/domains', data),
   sync: (data: { aid: number; domains: { name: string; id: string; record_count: number }[] }) =>
     api.post('/domains/sync', data),
-  update: (id: number, data: Partial<Domain>) => api.post<Domain>(`/domains/${id}`, data),
-  delete: (id: number) => api.post(`/domains/${id}/delete`, {}),
+  update: (id: number | string, data: Partial<Domain>) => api.post<Domain>(`/domains/${id}`, data),
+  delete: (id: number | string) => api.post(`/domains/${id}/delete`, {}),
   /** 后端 BatchDomainActionRequest.ids 为 []string，此处统一转字符串 */
   batchAction: (data: {
     ids: (number | string)[]
@@ -341,30 +435,30 @@ export const domainApi = {
       ...data,
       ids: data.ids.map((id) => String(id)),
     }),
-  updateExpire: (id: number) => api.post(`/domains/${id}/update-expire`),
+  updateExpire: (id: number | string) => api.post(`/domains/${id}/update-expire`),
   batchUpdateExpire: (ids: number[]) =>
     api.post('/domains/batch/update-expire', { ids: ids.map((id) => String(id)) }),
-  getRecords: (id: number, params?: { page?: number; page_size?: number; keyword?: string; type?: string; line?: string }) =>
+  getRecords: (id: number | string, params?: { page?: number; page_size?: number; keyword?: string; type?: string; line?: string }) =>
     api.get<{ total: number; list: DNSRecord[] }>(`/domains/${id}/records`, params),
-  createRecord: (id: number, data: { name: string; type: string; value: string; line?: string; ttl?: number; mx?: number; remark?: string }) =>
+  createRecord: (id: number | string, data: { name: string; type: string; value: string; line?: string; ttl?: number; mx?: number; remark?: string }) =>
     api.post<DNSRecord>(`/domains/${id}/records`, data),
-  updateRecord: (domainId: number, recordId: string, data: { name: string; type: string; value: string; line?: string; ttl?: number; mx?: number; remark?: string }) =>
+  updateRecord: (domainId: number | string, recordId: string, data: { name: string; type: string; value: string; line?: string; ttl?: number; mx?: number; remark?: string }) =>
     api.post<DNSRecord>(`/domains/${domainId}/records/${recordId}`, data),
-  deleteRecord: (domainId: number, recordId: string) =>
+  deleteRecord: (domainId: number | string, recordId: string) =>
     api.post(`/domains/${domainId}/records/${recordId}/delete`, {}),
-  setRecordStatus: (domainId: number, recordId: string, enable: boolean) =>
+  setRecordStatus: (domainId: number | string, recordId: string, enable: boolean) =>
     api.post(`/domains/${domainId}/records/${recordId}/status`, { enable }),
-  getLines: (id: number) => api.get<RecordLine[]>(`/domains/${id}/lines`),
-  batchAddRecords: (id: number, data: { records: string; type?: string; line?: string; ttl?: number }) =>
+  getLines: (id: number | string) => api.get<RecordLine[]>(`/domains/${id}/lines`),
+  batchAddRecords: (id: number | string, data: { records: string; type?: string; line?: string; ttl?: number }) =>
     api.post(`/domains/${id}/records/batch`, data),
-  batchEditRecords: (id: number, data: { record_ids: string[]; action: string; [key: string]: unknown }) =>
+  batchEditRecords: (id: number | string, data: { record_ids: string[]; action: string; [key: string]: unknown }) =>
     api.post(`/domains/${id}/records/batch/edit`, data),
-  batchActionRecords: (id: number, data: { record_ids: string[]; action: string }) =>
+  batchActionRecords: (id: number | string, data: { record_ids: string[]; action: string }) =>
     api.post(`/domains/${id}/records/batch/action`, data),
-  queryWhois: (id: number) => api.post<WhoisInfo>(`/domains/${id}/whois`),
-  getLogs: (id: number, params?: { page?: number; page_size?: number }) =>
+  queryWhois: (id: number | string) => api.post<WhoisInfo>(`/domains/${id}/whois`),
+  getLogs: (id: number | string, params?: { page?: number; page_size?: number }) =>
     api.get<{ total: number; list: DomainLog[] }>(`/domains/${id}/logs`, params),
-  getQuickLoginURL: (id: number) => api.get<{ url: string }>(`/domains/${id}/loginurl`),
+  getQuickLoginURL: (id: number | string) => api.get<{ url: string }>(`/domains/${id}/loginurl`),
 }
 
 // Monitor APIs
@@ -372,21 +466,21 @@ export const monitorApi = {
   list: (params?: { page?: number; page_size?: number; keyword?: string; status?: number }) =>
     api.get<{ total: number; list: MonitorTask[] }>('/monitor/tasks', params),
   create: (data: Partial<MonitorTask>) => api.post<MonitorTask>('/monitor/tasks', data),
-  update: (id: number, data: Partial<MonitorTask>) => api.post<MonitorTask>(`/monitor/tasks/${id}`, data),
-  delete: (id: number) => api.post(`/monitor/tasks/${id}/delete`, {}),
-  toggle: (id: number, active: boolean) => api.post(`/monitor/tasks/${id}/toggle`, { active }),
-  switch: (id: number) => api.post(`/monitor/tasks/${id}/switch`, {}),
-  getLogs: (id: number, params?: { page?: number; page_size?: number; action?: number }) =>
+  update: (id: number | string, data: Partial<MonitorTask>) => api.post<MonitorTask>(`/monitor/tasks/${id}`, data),
+  delete: (id: number | string) => api.post(`/monitor/tasks/${id}/delete`, {}),
+  toggle: (id: number | string, active: boolean) => api.post(`/monitor/tasks/${id}/toggle`, { active }),
+  switch: (id: number | string) => api.post(`/monitor/tasks/${id}/switch`, {}),
+  getLogs: (id: number | string, params?: { page?: number; page_size?: number; action?: number }) =>
     api.get<{ total: number; list: MonitorLog[] }>(`/monitor/tasks/${id}/logs`, params),
   /** 探测历史（用于列表迷你条、详情图表），数据来自 LogDB 的 dm_check_logs */
-  getHistory: (id: number, period: '1h' | '24h' | '7d' | '30d' = '24h') =>
+  getHistory: (id: number | string, period: '1h' | '24h' | '7d' | '30d' = '24h') =>
     api.get<MonitorCheckPoint[]>(`/monitor/tasks/${id}/history`, { period }),
-  getUptime: (id: number) =>
+  getUptime: (id: number | string) =>
     api.get<Record<string, { total: number; success: number; uptime: number; avg_duration: number }>>(
       `/monitor/tasks/${id}/uptime`
     ),
-  getResolveStatus: (id: number) => api.get<unknown[]>(`/monitor/tasks/${id}/resolve-status`),
-  lookup: (domainId: number, subDomain: string) =>
+  getResolveStatus: (id: number | string) => api.get<unknown[]>(`/monitor/tasks/${id}/resolve-status`),
+  lookup: (domainId: number | string, subDomain: string) =>
     api.post<{ domain: string; account_type: string; records: unknown[] }>('/monitor/lookup', {
       domain_id: domainId,
       sub_domain: subDomain,
@@ -410,8 +504,8 @@ export const certApi = {
     return api.get<CertAccount[]>('/cert/accounts', query)
   },
   createAccount: (data: Partial<CertAccount>) => api.post<CertAccount>('/cert/accounts', data),
-  updateAccount: (id: number, data: Partial<CertAccount>) => api.post<CertAccount>(`/cert/accounts/${id}`, data),
-  deleteAccount: (id: number) => api.post(`/cert/accounts/${id}/delete`, {}),
+  updateAccount: (id: number | string, data: Partial<CertAccount>) => api.post<CertAccount>(`/cert/accounts/${id}`, data),
+  deleteAccount: (id: number | string) => api.post(`/cert/accounts/${id}/delete`, {}),
   
   // Orders
   getOrders: (params?: { page?: number; page_size?: number; keyword?: string; aid?: number; status?: number }) =>
@@ -425,29 +519,29 @@ export const certApi = {
     /** ACME：dns-01 | http-01；通配符仅 dns-01；纯 IP 无需指定 */
     challenge_type?: string
   }) => api.post<CertOrder>('/cert/orders', data),
-  processOrder: (id: number, reset?: boolean) => api.post(`/cert/orders/${id}/process`, { reset }),
-  deleteOrder: (id: number) => api.post(`/cert/orders/${id}/delete`, {}),
-  getOrderLog: (id: number) => api.get<{ log: string }>(`/cert/orders/${id}/log`),
-  getOrderDetail: (id: number) => api.get<CertOrder>(`/cert/orders/${id}/detail`),
-  downloadOrder: (id: number, format: string) => api.get<{ content: string }>(`/cert/orders/${id}/download`, { format }),
-  toggleOrderAuto: (id: number, is_auto: boolean) => api.post(`/cert/orders/${id}/auto`, { is_auto }),
+  processOrder: (id: number | string, reset?: boolean) => api.post(`/cert/orders/${id}/process`, { reset }),
+  deleteOrder: (id: number | string) => api.post(`/cert/orders/${id}/delete`, {}),
+  getOrderLog: (id: number | string) => api.get<{ log: string }>(`/cert/orders/${id}/log`),
+  getOrderDetail: (id: number | string) => api.get<CertOrder>(`/cert/orders/${id}/detail`),
+  downloadOrder: (id: number | string, format: string) => api.get<{ content: string }>(`/cert/orders/${id}/download`, { format }),
+  toggleOrderAuto: (id: number | string, is_auto: boolean) => api.post(`/cert/orders/${id}/auto`, { is_auto }),
   
   // Deploys
   getDeploys: (params?: { page?: number; page_size?: number; keyword?: string; aid?: number; status?: number }) =>
     api.get<{ total: number; list: CertDeploy[] }>('/cert/deploys', params),
   createDeploy: (data: { account_id: number; order_id: number; config?: Record<string, string>; remark?: string }) => 
     api.post<CertDeploy>('/cert/deploys', data),
-  updateDeploy: (id: number, data: Partial<CertDeploy> | { account_id?: number; order_id?: number; config?: Record<string, string>; remark?: string; active?: boolean }) => 
+  updateDeploy: (id: number | string, data: Partial<CertDeploy> | { account_id?: number; order_id?: number; config?: Record<string, string>; remark?: string; active?: boolean }) => 
     api.post<CertDeploy>(`/cert/deploys/${id}`, data),
-  deleteDeploy: (id: number) => api.post(`/cert/deploys/${id}/delete`, {}),
-  processDeploy: (id: number, reset?: boolean) => api.post(`/cert/deploys/${id}/process`, { reset }),
+  deleteDeploy: (id: number | string) => api.post(`/cert/deploys/${id}/delete`, {}),
+  processDeploy: (id: number | string, reset?: boolean) => api.post(`/cert/deploys/${id}/process`, { reset }),
   
   // CNAMEs
   getCNAMEs: (params?: { page?: number; page_size?: number }) =>
     api.get<{ total: number; list: CertCNAME[] }>('/cert/cnames', params),
   createCNAME: (data: Partial<CertCNAME>) => api.post<CertCNAME>('/cert/cnames', data),
-  deleteCNAME: (id: number) => api.post(`/cert/cnames/${id}/delete`, {}),
-  verifyCNAME: (id: number) => api.post<{ status: number }>(`/cert/cnames/${id}/verify`),
+  deleteCNAME: (id: number | string) => api.post(`/cert/cnames/${id}/delete`, {}),
+  verifyCNAME: (id: number | string) => api.post<{ status: number }>(`/cert/cnames/${id}/verify`),
   
   // Providers - 返回 {cert: {...}, deploy: {...}} 格式
   getProviders: () => api.get<{ cert: Record<string, CertProviderConfig>; deploy: Record<string, CertProviderConfig> }>('/cert/providers'),
@@ -459,18 +553,18 @@ export const userApi = {
     api.get<{ total: number; list: User[] }>('/users', params),
   create: (data: Partial<User> & { password: string; permissions?: string[] }) =>
     api.post<User>('/users', data),
-  update: (id: number, data: Partial<User> & { password?: string; permissions?: string[] }) =>
+  update: (id: number | string, data: Partial<User> & { password?: string; permissions?: string[] }) =>
     api.post<User>(`/users/${id}`, data),
-  delete: (id: number) => api.post(`/users/${id}/delete`, {}),
-  getPermissions: (id: number) => api.get<UserPermission[]>(`/users/${id}/permissions`),
-  addPermission: (id: number, data: Partial<UserPermission>) => api.post(`/users/${id}/permissions`, data),
-  updatePermission: (id: number, permId: number, data: Partial<UserPermission>) => 
+  delete: (id: number | string) => api.post(`/users/${id}/delete`, {}),
+  getPermissions: (id: number | string) => api.get<UserPermission[]>(`/users/${id}/permissions`),
+  addPermission: (id: number | string, data: Partial<UserPermission>) => api.post(`/users/${id}/permissions`, data),
+  updatePermission: (id: number | string, permId: number | string, data: Partial<UserPermission>) => 
     api.post(`/users/${id}/permissions/${permId}`, data),
-  deletePermission: (id: number, permId: number) =>
+  deletePermission: (id: number | string, permId: number | string) =>
     api.post(`/users/${id}/permissions/${permId}/delete`, {}),
-  resetAPIKey: (id: number) => api.post<{ api_key: string }>(`/users/${id}/reset-apikey`),
-  sendResetEmail: (id: number, type: 'password' | 'totp') => api.post(`/users/${id}/send-reset`, { type }),
-  adminResetTOTP: (id: number) => api.post(`/users/${id}/reset-totp`),
+  resetAPIKey: (id: number | string) => api.post<{ api_key: string }>(`/users/${id}/reset-apikey`),
+  sendResetEmail: (id: number | string, type: 'password' | 'totp') => api.post(`/users/${id}/send-reset`, { type }),
+  adminResetTOTP: (id: number | string) => api.post(`/users/${id}/reset-totp`),
 }
 
 /** GET /logs 返回；兼容旧版 records 字段 */
@@ -502,6 +596,8 @@ export const logApi = {
     date_from?: string
     date_to?: string
   }) => api.get<OperationLogListData>('/logs', params),
+  /** 清理旧操作日志，days 表示保留多少天 */
+  clean: (days: number) => api.post<{ deleted?: number }>('/logs/clean', { days }),
 }
 
 export interface SystemInfo {
@@ -531,6 +627,9 @@ export const systemApi = {
   testMail: () => api.post('/system/mail/test'),
   testTelegram: () => api.post('/system/telegram/test'),
   testWebhook: () => api.post('/system/webhook/test'),
+  testDiscord: () => api.post('/system/discord/test'),
+  testBark: () => api.post('/system/bark/test'),
+  testWechat: () => api.post('/system/wechat/test'),
   /** 与 handler.TestProxy JSON 一致：host、pass（非 server/password） */
   testProxy: (data: {
     host: string
@@ -557,7 +656,12 @@ export const totpApi = {
   getStatus: () => api.get<{ enabled: boolean }>('/user/totp/status'),
   enable: () => api.post<{ secret: string; qrcode: string; uri?: string }>('/user/totp/enable'),
   verify: (code: string) => api.post('/user/totp/verify', { code }),
-  disable: () => api.post('/user/totp/disable'),
+  /** 关闭 TOTP（需提供密码 + 6 位动态码二次确认） */
+  disable: (password?: string, code?: string) =>
+    api.post('/user/totp/disable', { password, code }),
+  /** 重新生成 TOTP 恢复码列表（需提供密码 + 动态码二次确认） */
+  regenerateRecovery: (password?: string, code?: string) =>
+    api.post<{ recovery_codes: string[] }>('/user/totp/recovery/regenerate', { password, code }),
 }
 
 // OAuth（账户绑定；登录跳转使用 /api/auth/oauth/:provider/login）
@@ -699,6 +803,7 @@ export interface Domain {
   account_name?: string
   type_name?: string
   icon?: string
+  perm_sub?: string
 }
 
 export interface DomainItem {
@@ -733,6 +838,9 @@ export interface WhoisInfo {
   registrar?: string
   creation_date?: string
   expiration_date?: string
+  /** 后端返回字段别名（部分接口走 created_date / expiry_date 命名） */
+  created_date?: string
+  expiry_date?: string
   updated_date?: string
   name_servers?: string[]
   status?: string[]
@@ -764,9 +872,14 @@ export interface MonitorTask {
   did: number
   rr: string
   record_id: string
+  record_type?: string
+  record_line?: string
   type: number
   main_value: string
   backup_value?: string
+  /** 多备用值，逗号分隔；非空时优先于 backup_value（与后端 DMTask.BackupValues 对齐） */
+  backup_values?: string
+  backup_type?: string
   check_type: number
   check_url?: string
   tcp_port?: number
@@ -782,9 +895,29 @@ export interface MonitorTask {
   switch_time: number
   err_count: number
   status: number
+  /** 主源最新一次健康状态（DMTask.MainHealth） */
+  main_health?: boolean
+  /** 备用源健康状态汇总：JSON 数组字符串如 '[true,false]'（DMCheckLog 关联，运行时注入） */
+  backup_health?: string
   active: boolean
   record_info?: string
   domain?: string
+  expect_status?: string
+  expect_keyword?: string
+  max_redirects?: number
+  proxy_type?: string
+  proxy_host?: string
+  proxy_port?: number
+  proxy_username?: string
+  proxy_password?: string
+  notify_enabled?: boolean
+  notify_channels?: string
+  auto_restore?: boolean
+  allow_insecure_tls?: boolean
+  /** 故障/恢复时间戳与最新错误（运行时聚合字段） */
+  fault_time?: number
+  recover_time?: number
+  last_error?: string
 }
 
 export interface MonitorLog {
@@ -802,6 +935,12 @@ export interface MonitorOverview {
   run_error?: string
   switch_count: number
   fail_count: number
+  /** 任务计数与健康汇总（前端面板字段） */
+  task_count?: number
+  active_count?: number
+  healthy_count?: number
+  faulty_count?: number
+  avg_uptime?: number
 }
 
 export interface CertAccount {
@@ -932,33 +1071,115 @@ export interface OperationLog {
   username?: string
 }
 
+/*
+ * SystemConfig：系统设置键值袋。
+ * 后端 SysConfig 表是 (key, value) 的开放结构，前端 settings 页大量字段
+ * 只在需要时才接入。这里既列出已知键以提供 IDE 提示，也开放索引签名
+ * 兼容未来追加项；新增字段无需先改这里再改 settings 页。
+ */
 export interface SystemConfig {
+  // 验证码
   captcha_enabled?: boolean
   captcha_type?: string
+  captcha_site_key?: string
+  captcha_secret_key?: string
+  turnstile_site_key?: string
+  turnstile_secret_key?: string
+  login_captcha?: boolean
+  // 站点
+  site_name?: string
+  site_url?: string
+  // 证书提醒
+  cert_expire_days?: number
+  cert_expire_notice_enabled?: boolean
+  cert_expire_notice_days?: string | number
+  cert_expire_notice_interval_days?: string | number
+  // 邮件
   mail_enabled?: boolean
   mail_type?: number
   mail_host?: string
   mail_port?: number
+  mail_secure?: string
+  mail_auth?: string
   mail_user?: string
+  mail_username?: string
   mail_password?: string
   mail_from?: string
+  mail_from_name?: string
   mail_recv?: string
+  mail_subject_template?: string
+  mail_body_template?: string
+  // Telegram
   tgbot_enabled?: boolean
   tgbot_token?: string
   tgbot_chatid?: string
+  // Webhook 通用
   webhook_enabled?: boolean
   webhook_url?: string
+  // Discord
+  discord_enabled?: boolean
+  discord_webhook?: string
+  // Bark
+  bark_enabled?: boolean
+  bark_server?: string
+  bark_key?: string
+  // 企业微信
+  wechat_enabled?: boolean
+  wechat_webhook?: string
+  // 代理
   proxy_enabled?: boolean
   proxy_server?: string
   proxy_port?: number
   proxy_type?: string
   proxy_user?: string
   proxy_password?: string
+  // GitHub OAuth（旧版）
+  github_mode?: string
+  github_client_id?: string
+  github_client_secret?: string
+  github_app_id?: string
+  github_app_private_key?: string
+  // OAuth 服务商
+  oauth_google_client_id?: string
+  oauth_google_client_secret?: string
+  oauth_wechat_app_id?: string
+  oauth_wechat_app_secret?: string
+  oauth_dingtalk_app_key?: string
+  oauth_dingtalk_app_secret?: string
+  oauth_custom_name?: string
+  oauth_custom_client_id?: string
+  oauth_custom_client_secret?: string
+  oauth_custom_authorize_url?: string
+  oauth_custom_token_url?: string
+  oauth_custom_userinfo_url?: string
+  oauth_custom_scopes?: string
+  // 域名过期提醒
+  domain_expire_notice_enabled?: boolean
+  domain_expire_days?: number | string
+  // 证书部署/续期通知
+  cert_deploy_notice_enabled?: boolean
+  cert_deploy_success_notice_enabled?: boolean
+  cert_renew_fail_notice_enabled?: boolean
+  // 注册开关
+  register_enabled?: boolean
+  password_register_enabled?: boolean
+  magic_link_login_enabled?: boolean
+  // 任意未列出键值（与后端 SysConfig 开放结构一致）
+  // 用 any 而非 unknown 以方便 React JSX 直接使用 value={config.foo}
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  [key: string]: any
 }
 
 export interface CronConfig {
-  type: number
+  type?: number
   key?: string
+  /** Cron 任务调度表达式分项配置 */
+  cron_schedule?: string
+  cron_optimize?: string
+  cron_cert?: string
+  cron_expire?: string
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  [key: string]: any
 }
 
 export interface DashboardStats {

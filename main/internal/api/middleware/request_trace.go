@@ -129,7 +129,8 @@ func RequestTrace() gin.HandlerFunc {
 		if h := c.Request.Host; h != "" {
 			headers["Host"] = h
 		}
-		headersJSON, _ := json.Marshal(headers)
+		// 敏感 header 掩码：Authorization / Cookie / X-Refresh-Token 等不落库明文
+		headersJSONStr := SanitizeHeadersForLog(headers)
 
 		captureBuf := &bytes.Buffer{}
 		c.Writer = &respCaptureWriter{ResponseWriter: c.Writer, buf: captureBuf, lim: maxSuccessResponseCapture}
@@ -180,6 +181,8 @@ func RequestTrace() gin.HandlerFunc {
 				}
 			}
 		}
+		// 敏感字段脱敏：password / token / access_key 等统一替换为 ***REDACTED***
+		bodyStr = SanitizeBodyForLog(bodyStr, c.Request.Header.Get("Content-Type"))
 		if len(bodyStr) > maxRequestLogBodyLen {
 			bodyStr = truncateString(bodyStr, maxRequestLogBodyLen)
 		}
@@ -198,6 +201,8 @@ func RequestTrace() gin.HandlerFunc {
 				responseStr = truncateString(capturedResp, maxSuccessResponseCapture)
 			}
 		}
+		// 响应体里可能回显 token（如登录 204、refresh），同样脱敏
+		responseStr = SanitizeBodyForLog(responseStr, c.Writer.Header().Get("Content-Type"))
 
 		// 获取数据库查询记录
 		var dbQueriesJSON string
@@ -229,7 +234,7 @@ func RequestTrace() gin.HandlerFunc {
 			Path:        c.Request.URL.Path,
 			Query:       c.Request.URL.RawQuery,
 			Body:        bodyStr,
-			Headers:     string(headersJSON),
+			Headers:     headersJSONStr,
 			IP:          c.ClientIP(),
 			UserAgent:   truncateString(c.Request.UserAgent(), 500),
 			StatusCode:  statusCode,

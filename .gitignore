@@ -32,3 +32,6 @@ main/data/
 main/docs/
 main/web/
 main/main
+
+# CNB token (never commit)
+.cnb-token.local

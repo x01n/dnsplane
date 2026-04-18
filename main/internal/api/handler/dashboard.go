@@ -8,6 +8,7 @@ import (
 	"os"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -307,6 +308,23 @@ func TestProxy(c *gin.Context) {
 	if req.Type == "" || req.Host == "" || req.Port == 0 {
 		middleware.ErrorResponse(c, "参数错误")
 		return
+	}
+
+	// 拒绝指向私网/回环/链路本地的代理目标（安全审计 M-6），
+	// 防止管理员误触发 SSRF 穿入云厂商 IMDS 或内网服务
+	if ip := net.ParseIP(req.Host); ip != nil {
+		if ip.IsLoopback() || ip.IsUnspecified() || ip.IsLinkLocalUnicast() ||
+			ip.IsLinkLocalMulticast() || ip.IsPrivate() {
+			middleware.ErrorResponse(c, "代理地址不能指向内网或保留地址")
+			return
+		}
+	} else {
+		lower := strings.ToLower(strings.TrimSpace(req.Host))
+		if lower == "localhost" || strings.HasSuffix(lower, ".localhost") ||
+			strings.HasSuffix(lower, ".internal") || strings.HasSuffix(lower, ".local") {
+			middleware.ErrorResponse(c, "代理地址不能指向内网域名")
+			return
+		}
 	}
 
 	// 构建代理URL
