@@ -24,7 +24,6 @@ var (
 	RequestDB *gorm.DB // 请求日志数据库 (RequestLog)
 )
 
-// IsSQLite 主库是否为 SQLite（用于拼接/函数方言差异）
 func IsSQLite() bool {
 	if DB == nil {
 		return false
@@ -32,7 +31,6 @@ func IsSQLite() bool {
 	return DB.Dialector.Name() == "sqlite"
 }
 
-// optimizeSQLite 对SQLite数据库进行性能优化
 func optimizeSQLite(db *gorm.DB) {
 	sqlDB, err := db.DB()
 	if err != nil {
@@ -43,11 +41,9 @@ func optimizeSQLite(db *gorm.DB) {
 	sqlDB.Exec("PRAGMA cache_size=-64000") // 64MB cache
 	sqlDB.Exec("PRAGMA busy_timeout=5000")
 	sqlDB.Exec("PRAGMA temp_store=MEMORY")
-	// 只读路径加速（Windows/Linux 均支持；若驱动报错可忽略）
 	_, _ = sqlDB.Exec("PRAGMA mmap_size=67108864") // 64MiB
 }
 
-// applySQLiteConnPool WAL 下允许多连接并发读，避免默认池过小导致请求在 Go 侧排队
 func applySQLiteConnPool(db *gorm.DB) {
 	sqlDB, err := db.DB()
 	if err != nil {
@@ -59,7 +55,6 @@ func applySQLiteConnPool(db *gorm.DB) {
 	sqlDB.SetConnMaxLifetime(0)
 }
 
-// applyMySQLConnPool 提高默认并发下的连接复用
 func applyMySQLConnPool(db *gorm.DB) {
 	sqlDB, err := db.DB()
 	if err != nil {
@@ -256,6 +251,11 @@ func migrate() error {
 		&models.ScheduleTask{},
 		&models.SysConfig{},
 		&models.OptimizeIP{},
+		&models.CloudflareHostname{},
+		&models.CloudflareTunnel{},
+		&models.CloudflareCIDRRoute{},
+		&models.CloudflareHostnameRoute{},
+		&models.DomainAlias{},
 	); err != nil {
 		return err
 	}

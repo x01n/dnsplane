@@ -544,6 +544,99 @@ func TestWechatNotification(c *gin.Context) {
 	middleware.SuccessMsg(c, "消息发送成功")
 }
 
+func TestDingtalkNotification(c *gin.Context) {
+	if !checkAdmin(c) {
+		middleware.ErrorResponse(c, "权限不足，仅管理员可操作")
+		return
+	}
+	var webhookURL, secret string
+	database.WithContext(c).Model(&models.SysConfig{}).Where("`key` = ?", "dingtalk_webhook").Pluck("value", &webhookURL)
+	database.WithContext(c).Model(&models.SysConfig{}).Where("`key` = ?", "dingtalk_secret").Pluck("value", &secret)
+	if webhookURL == "" {
+		middleware.ErrorResponse(c, "请先配置钉钉 Webhook URL")
+		return
+	}
+	notifier := notify.NewDingTalkNotifier(notify.DingTalkConfig{WebhookURL: webhookURL, Secret: secret})
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := notifier.Send(ctx, "DNSPlane 测试通知", "这是一条测试消息，如果您收到此消息，说明钉钉通知配置正确！"); err != nil {
+		middleware.ErrorResponse(c, "消息发送失败："+err.Error())
+		return
+	}
+	middleware.SuccessMsg(c, "消息发送成功")
+}
+
+func TestFeishuNotification(c *gin.Context) {
+	if !checkAdmin(c) {
+		middleware.ErrorResponse(c, "权限不足，仅管理员可操作")
+		return
+	}
+	var webhookURL, secret string
+	database.WithContext(c).Model(&models.SysConfig{}).Where("`key` = ?", "feishu_webhook").Pluck("value", &webhookURL)
+	database.WithContext(c).Model(&models.SysConfig{}).Where("`key` = ?", "feishu_secret").Pluck("value", &secret)
+	if webhookURL == "" {
+		middleware.ErrorResponse(c, "请先配置飞书 Webhook URL")
+		return
+	}
+	notifier := notify.NewFeishuNotifier(notify.FeishuConfig{WebhookURL: webhookURL, Secret: secret})
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := notifier.Send(ctx, "DNSPlane 测试通知", "这是一条测试消息，如果您收到此消息，说明飞书通知配置正确！"); err != nil {
+		middleware.ErrorResponse(c, "消息发送失败："+err.Error())
+		return
+	}
+	middleware.SuccessMsg(c, "消息发送成功")
+}
+
+func TestWxWorkAppNotification(c *gin.Context) {
+	if !checkAdmin(c) {
+		middleware.ErrorResponse(c, "权限不足，仅管理员可操作")
+		return
+	}
+	var corpID, agentID, secret, toUser string
+	database.WithContext(c).Model(&models.SysConfig{}).Where("`key` = ?", "wxwork_corpid").Pluck("value", &corpID)
+	database.WithContext(c).Model(&models.SysConfig{}).Where("`key` = ?", "wxwork_agentid").Pluck("value", &agentID)
+	database.WithContext(c).Model(&models.SysConfig{}).Where("`key` = ?", "wxwork_secret").Pluck("value", &secret)
+	database.WithContext(c).Model(&models.SysConfig{}).Where("`key` = ?", "wxwork_touser").Pluck("value", &toUser)
+	if corpID == "" || agentID == "" || secret == "" {
+		middleware.ErrorResponse(c, "请先配置企业微信应用参数")
+		return
+	}
+	notifier := notify.NewWxWorkAppNotifier(notify.WxWorkAppConfig{CorpID: corpID, AgentID: agentID, Secret: secret, ToUser: toUser})
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := notifier.Send(ctx, "DNSPlane 测试通知", "这是一条测试消息，如果您收到此消息，说明企业微信应用消息配置正确！"); err != nil {
+		middleware.ErrorResponse(c, "消息发送失败："+err.Error())
+		return
+	}
+	middleware.SuccessMsg(c, "消息发送成功")
+}
+
+func TestWxTplNotification(c *gin.Context) {
+	if !checkAdmin(c) {
+		middleware.ErrorResponse(c, "权限不足，仅管理员可操作")
+		return
+	}
+	var appID, appSecret, templateID, users, targetURL string
+	database.WithContext(c).Model(&models.SysConfig{}).Where("`key` = ?", "wxtpl_appid").Pluck("value", &appID)
+	database.WithContext(c).Model(&models.SysConfig{}).Where("`key` = ?", "wxtpl_appsecret").Pluck("value", &appSecret)
+	database.WithContext(c).Model(&models.SysConfig{}).Where("`key` = ?", "wxtpl_template_id").Pluck("value", &templateID)
+	database.WithContext(c).Model(&models.SysConfig{}).Where("`key` = ?", "wxtpl_users").Pluck("value", &users)
+	database.WithContext(c).Model(&models.SysConfig{}).Where("`key` = ?", "wxtpl_url").Pluck("value", &targetURL)
+	if appID == "" || appSecret == "" || templateID == "" || users == "" {
+		middleware.ErrorResponse(c, "请先配置公众号模板消息参数")
+		return
+	}
+	notifier := notify.NewWxTplNotifier(notify.WxTplConfig{AppID: appID, AppSecret: appSecret, TemplateID: templateID, ToUsers: users, URL: targetURL})
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := notifier.Send(ctx, "DNSPlane 测试通知", "这是一条测试消息，如果您收到此消息，说明公众号模板消息配置正确！"); err != nil {
+		middleware.ErrorResponse(c, "消息发送失败："+err.Error())
+		return
+	}
+	middleware.SuccessMsg(c, "消息发送成功")
+}
+
 // GetSystemInfo 获取系统信息
 func GetSystemInfo(c *gin.Context) {
 	if !checkAdmin(c) {

@@ -21,7 +21,6 @@ type Cache interface {
 	Incr(key string, ttl time.Duration) (int64, error)
 	SetJSON(key string, value interface{}, ttl time.Duration) error
 	GetJSON(key string, dest interface{}) bool
-	// 列表（供 logstore 等）；内存与 Redis 后端均需实现
 	IsRedis() bool
 	LPush(key, value string) error
 	LLen(key string) (int64, error)
@@ -41,10 +40,9 @@ type Config struct {
 	DB           int    `json:"db"`
 	PoolSize     int    `json:"pool_size"`
 	MinIdleConns int    `json:"min_idle_conns"`
-	KeyPrefix    string `json:"key_prefix"` // 逻辑 key 前追加，避免多环境共 Redis 冲突
+	KeyPrefix    string `json:"key_prefix"` 
 }
 
-// Init 初始化缓存（配置了 Redis 就用 Redis，否则用内存）
 func Init(cfg *Config) {
 	prefix := ""
 	if cfg != nil {
@@ -85,7 +83,6 @@ func Init(cfg *Config) {
 	}
 }
 
-// Close 关闭全局缓存（主要为释放 Redis 连接池）
 func Close() error {
 	if C == nil {
 		return nil
@@ -93,7 +90,6 @@ func Close() error {
 	return C.Close()
 }
 
-// ==================== 内存缓存实现 ====================
 
 type memoryEntry struct {
 	Value    string
@@ -104,7 +100,7 @@ type memoryCache struct {
 	mu     sync.RWMutex
 	prefix string
 	store  map[string]memoryEntry
-	lists  map[string][]string // Redis 风格 list：LPush 在头部插入
+	lists  map[string][]string 
 }
 
 func NewMemoryCache(keyPrefix string) Cache {

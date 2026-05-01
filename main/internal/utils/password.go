@@ -4,16 +4,6 @@ import (
 	"unicode"
 )
 
-/*
- * ValidatePasswordStrength 密码强度校验
- * 功能：检查密码是否满足最低复杂度要求
- * 规则：
- *   - 最少 8 个字符
- *   - 至少包含一个大写字母
- *   - 至少包含一个小写字母
- *   - 至少包含一个数字
- * 返回空字符串表示通过，否则返回具体不满足的提示
- */
 func ValidatePasswordStrength(password string) string {
 	if len(password) < 8 {
 		return "密码长度至少8位"

@@ -21,7 +21,6 @@ const (
 	requestStatsCacheTTL = 2 * time.Minute
 )
 
-// requestLogLite 统计扫描用：避免每条反序列化整棵 RequestLog（含大 body）
 type requestLogLite struct {
 	IsError   bool      `json:"is_error"`
 	CreatedAt time.Time `json:"created_at"`
@@ -32,7 +31,6 @@ var (
 	saveLogTrimCounter    atomic.Uint64
 )
 
-/* Store 日志存储（使用 Cache 的 List 操作，Redis 可用时用 Redis，否则回退到内存） */
 var Store *LogStore
 
 type LogStore struct {
@@ -45,18 +43,13 @@ func Init() {
 	if cache.C.IsRedis() {
 		logger.Info("[LogStore] 使用 Redis 存储请求日志和系统日志")
 	} else {
-		logger.Info("[LogStore] 使用内存存储请求日志和系统日志（建议配置 Redis）")
 	}
 }
 
-/* IsRedis 是否使用 Redis 后端 */
 func (s *LogStore) IsRedis() bool {
 	return s.c.IsRedis()
 }
 
-// ==================== 请求日志 ====================
-
-/* SaveRequestLog 保存请求日志 */
 func (s *LogStore) SaveRequestLog(log models.RequestLog) {
 	data, err := json.Marshal(log)
 	if err != nil {
@@ -263,7 +256,6 @@ func (s *LogStore) CleanRequestLogs(keepCount int) int64 {
 	return deleted
 }
 
-// ==================== 系统日志（操作日志） ====================
 
 /* SaveSystemLog 保存系统日志 */
 func (s *LogStore) SaveSystemLog(log models.Log) {
@@ -346,7 +338,6 @@ func (s *LogStore) CleanSystemLogs(keepDays int) int64 {
 	return deleted
 }
 
-// ==================== 工具函数 ====================
 
 func parseRequestLogs(items []string) []models.RequestLog {
 	logs := make([]models.RequestLog, 0, len(items))

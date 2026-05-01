@@ -35,7 +35,9 @@ import (
 	_ "main/internal/dns/providers/jdcloud"
 	_ "main/internal/dns/providers/namesilo"
 	_ "main/internal/dns/providers/powerdns"
+	_ "main/internal/dns/providers/qingcloud"
 	_ "main/internal/dns/providers/spaceship"
+	_ "main/internal/dns/providers/technitium"
 	_ "main/internal/dns/providers/tencenteo"
 	_ "main/internal/dns/providers/west"
 
@@ -95,10 +97,13 @@ func main() {
 	service.SetCertRenewProcessStarter(handler.TriggerCertOrderProcessing)
 	taskCtx, taskCancel := context.WithCancel(context.Background())
 	taskRunner := service.NewTaskRunner()
+	scheduleRunner := service.NewScheduleRunner()
 	go taskRunner.Start(taskCtx)
+	go scheduleRunner.Start(taskCtx)
 	defer func() {
 		taskCancel()
 		taskRunner.Stop()
+		scheduleRunner.Stop()
 	}()
 	database.StartMaintenance(database.LoadMaintenanceConfig())
 	defer database.StopMaintenance()

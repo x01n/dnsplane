@@ -32,6 +32,59 @@ func registerSelfHostedConfigs() {
 		},
 	})
 
+	registerDeployConfig(DeployProviderConfig{
+		Type:  "acepanel",
+		Name:  "ACE Panel",
+		Class: ClassSelfHosted,
+		Icon:  "acepanel.png",
+		Desc:  "部署证书到 ACE Panel",
+		Inputs: []cert.ConfigField{
+			{Name: "面板地址", Key: "url", Type: "input", Required: true},
+			{Name: "令牌ID", Key: "id", Type: "input", Required: true},
+			{Name: "访问令牌", Key: "token", Type: "input", Required: true},
+			{Name: "使用代理", Key: "proxy", Type: "radio", Options: []cert.ConfigOption{{Value: "0", Label: "否"}, {Value: "1", Label: "是"}}, Value: "0"},
+		},
+		TaskInputs: []cert.ConfigField{
+			{Name: "部署类型", Key: "type", Type: "radio", Required: true, Options: []cert.ConfigOption{{Value: "0", Label: "网站证书"}, {Value: "1", Label: "面板本身"}}, Value: "0"},
+			{Name: "网站名称列表", Key: "sites", Type: "textarea", Placeholder: "每行一个网站名称", Show: "type==0", Required: true},
+		},
+	})
+
+	registerDeployConfig(DeployProviderConfig{
+		Type:  "amh",
+		Name:  "AMH",
+		Class: ClassSelfHosted,
+		Icon:  "amh.png",
+		Desc:  "部署证书到 AMH 面板",
+		Inputs: []cert.ConfigField{
+			{Name: "面板地址", Key: "url", Type: "input", Required: true},
+			{Name: "接口密钥", Key: "apikey", Type: "input", Required: true},
+			{Name: "使用代理", Key: "proxy", Type: "radio", Options: []cert.ConfigOption{{Value: "0", Label: "否"}, {Value: "1", Label: "是"}}, Value: "0"},
+		},
+		TaskInputs: []cert.ConfigField{
+			{Name: "环境名称", Key: "env_name", Type: "input", Required: true},
+			{Name: "网站标识域名", Key: "vhost_name", Type: "textarea", Placeholder: "每行一个虚拟主机标识", Required: true},
+		},
+	})
+
+	registerDeployConfig(DeployProviderConfig{
+		Type:  "btwin",
+		Name:  "宝塔 Windows 极速版",
+		Class: ClassSelfHosted,
+		Icon:  "bt.png",
+		Desc:  "部署证书到宝塔 Windows 极速版",
+		Inputs: []cert.ConfigField{
+			{Name: "面板地址", Key: "url", Type: "input", Required: true},
+			{Name: "接口密钥", Key: "key", Type: "input", Required: true},
+			{Name: "使用代理", Key: "proxy", Type: "radio", Options: []cert.ConfigOption{{Value: "0", Label: "否"}, {Value: "1", Label: "是"}}, Value: "0"},
+		},
+		TaskInputs: []cert.ConfigField{
+			{Name: "部署类型", Key: "type", Type: "radio", Required: true, Options: []cert.ConfigOption{{Value: "0", Label: "网站证书"}, {Value: "1", Label: "面板本身"}}, Value: "0"},
+			{Name: "网站名称列表", Key: "sites", Type: "textarea", Placeholder: "每行一个网站名称", Show: "type==0", Required: true},
+			{Name: "是否IIS站点", Key: "is_iis", Type: "radio", Options: []cert.ConfigOption{{Value: "0", Label: "否"}, {Value: "1", Label: "是"}}, Show: "type==0", Value: "0"},
+		},
+	})
+
 	// 1Panel
 	registerDeployConfig(DeployProviderConfig{
 		Type:  "opanel",

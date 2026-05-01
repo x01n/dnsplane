@@ -32,7 +32,6 @@ var (
 	nonceCache = make(map[string]time.Time)
 )
 
-/* InitSignKey 初始化 HMAC 签名密钥（从文件加载或自动生成） */
 func InitSignKey() error {
 	var initErr error
 	signKeyOnce.Do(func() {
@@ -83,12 +82,10 @@ func DeriveSignKey(refreshToken, accessToken, secretToken string) []byte {
 	return h[:]
 }
 
-/* ParseSignedRequest 解析并验证带签名的请求（使用默认密钥） */
 func ParseSignedRequest(decryptedData []byte) (*SignedData, map[string]interface{}, error) {
 	return ParseSignedRequestWithKey(decryptedData, nil)
 }
 
-/* ParseSignedRequestWithKey 使用指定密钥解析并验证带签名的请求 */
 func ParseSignedRequestWithKey(decryptedData []byte, signKey []byte) (*SignedData, map[string]interface{}, error) {
 	var rawMap map[string]interface{}
 	if err := json.Unmarshal(decryptedData, &rawMap); err != nil {
@@ -140,7 +137,6 @@ func ParseSignedRequestWithKey(decryptedData []byte, signKey []byte) (*SignedDat
 	return signed, rawMap, nil
 }
 
-/* ValidateTimestamp 验证时间戳（允许前后 5 分钟偏移） */
 func ValidateTimestamp(ts int64) error {
 	now := time.Now().UnixMilli()
 	diff := now - ts
@@ -153,7 +149,6 @@ func ValidateTimestamp(ts int64) error {
 	return nil
 }
 
-/* ValidateNonce 验证 nonce 防重放攻击 */
 func ValidateNonce(nonce string) error {
 	if len(nonce) < 8 || len(nonce) > 64 {
 		return errors.New("invalid nonce length")
@@ -177,7 +172,6 @@ func ValidateNonce(nonce string) error {
 	return nil
 }
 
-/* ValidateSign 验证 HMAC 签名（使用默认密钥） */
 func ValidateSign(timestamp int64, nonce string, data map[string]interface{}, sign string) error {
 	expected := GenerateSign(timestamp, nonce, data)
 	if !hmac.Equal([]byte(expected), []byte(sign)) {
@@ -186,7 +180,6 @@ func ValidateSign(timestamp int64, nonce string, data map[string]interface{}, si
 	return nil
 }
 
-/* ValidateSignWithKey 使用指定密钥验证 HMAC 签名 */
 func ValidateSignWithKey(timestamp int64, nonce string, data map[string]interface{}, sign string, key []byte) error {
 	expected := GenerateSignWithKey(timestamp, nonce, data, key)
 	if !hmac.Equal([]byte(expected), []byte(sign)) {
@@ -195,7 +188,6 @@ func ValidateSignWithKey(timestamp int64, nonce string, data map[string]interfac
 	return nil
 }
 
-/* GenerateSign 生成 HMAC 签名（使用默认密钥） */
 func GenerateSign(timestamp int64, nonce string, data map[string]interface{}) string {
 	return GenerateSignWithKey(timestamp, nonce, data, GetSignKey())
 }
@@ -210,7 +202,6 @@ func GenerateSignWithKey(timestamp int64, nonce string, data map[string]interfac
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-/* sortMapToString 将 map 按 key 字母序排序后转为 key=value& 字符串 */
 func sortMapToString(m map[string]interface{}) string {
 	keys := make([]string, 0, len(m))
 	for k := range m {
@@ -221,7 +212,6 @@ func sortMapToString(m map[string]interface{}) string {
 	var parts []string
 	for _, k := range keys {
 		v := m[k]
-		// 跳过 nil 值（与前端 cleanObject 行为一致）
 		if v == nil {
 			continue
 		}
@@ -251,7 +241,6 @@ func sortMapToString(m map[string]interface{}) string {
 	return strings.Join(parts, "&")
 }
 
-/* ObfuscateResponse 混淆加密响应数据结构 */
 func ObfuscateResponse(payload *ResponsePayload) map[string]interface{} {
 	return map[string]interface{}{
 		"_e": true,
@@ -262,7 +251,6 @@ func ObfuscateResponse(payload *ResponsePayload) map[string]interface{} {
 	}
 }
 
-/* EncryptAndObfuscate AES 加密并混淆响应数据 */
 func EncryptAndObfuscate(data interface{}, aesKey []byte) (map[string]interface{}, error) {
 	payload, err := EncryptWithKey(data, aesKey)
 	if err != nil {
@@ -271,7 +259,6 @@ func EncryptAndObfuscate(data interface{}, aesKey []byte) (map[string]interface{
 	return ObfuscateResponse(payload), nil
 }
 
-/* GenerateNonce 生成 32 位随机 hex nonce */
 func GenerateNonce() string {
 	bytes := make([]byte, 16)
 	rand.Read(bytes)

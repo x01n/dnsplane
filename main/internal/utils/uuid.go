@@ -5,7 +5,6 @@ import (
 	"fmt"
 )
 
-/* GenerateUUID 生成 UUID v4 格式的随机唯一标识符 */
 func GenerateUUID() string {
 	b := make([]byte, 16)
 	rand.Read(b)

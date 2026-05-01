@@ -85,6 +85,14 @@ func SetupRouter(staticFS embed.FS) *gin.Engine {
 			auth.POST("/domains/:id/records/:recordId/status", handler.SetRecordStatus)
 			auth.POST("/domains/:id/records/:recordId/delete", handler.DeleteRecord)
 			auth.POST("/domains/:id/records/:recordId", handler.UpdateRecord)
+	auth.GET("/domains/:id/aliases", handler.GetDomainAliases)
+	auth.POST("/domains/:id/aliases", handler.AddDomainAlias)
+	auth.POST("/domains/aliases/:aliasId/delete", handler.DeleteDomainAlias)
+	auth.GET("/domains/:id/records/weight", handler.GetRecordWeight)
+	auth.POST("/domains/:id/records/weight", handler.UpdateRecordWeight)
+	auth.GET("/domains/records/smartparse", handler.SmartParseRecord)
+	auth.POST("/domains/:id/records/quickinfo", handler.GetRecordQuickInfo)
+	auth.GET("/domains/:id/records/logs", handler.GetRecordChangeLog)
 			auth.GET("/domains/:id/lines", handler.GetRecordLines)
 			auth.POST("/domains/:id/whois", handler.QueryWhois)
 
@@ -150,12 +158,25 @@ func SetupRouter(staticFS embed.FS) *gin.Engine {
 			auth.POST("/system/mail/test", handler.TestMailNotification)
 			auth.POST("/system/telegram/test", handler.TestTelegramNotification)
 			auth.POST("/system/webhook/test", handler.TestWebhookNotification)
+	auth.POST("/system/discord/test", handler.TestDiscordNotification)
+	auth.POST("/system/bark/test", handler.TestBarkNotification)
+	auth.POST("/system/wechat/test", handler.TestWechatNotification)
+	auth.POST("/system/dingtalk/test", handler.TestDingtalkNotification)
+	auth.POST("/system/feishu/test", handler.TestFeishuNotification)
+	auth.POST("/system/wxwork-app/test", handler.TestWxWorkAppNotification)
+	auth.POST("/system/wxtpl/test", handler.TestWxTplNotification)
 			auth.POST("/system/cache/clear", handler.ClearCache)
 
 			auth.POST("/system/proxy/test", handler.TestProxy)
 			auth.GET("/system/task/status", handler.GetTaskStatus)
 			auth.GET("/system/cron", handler.GetCronConfig)
 			auth.POST("/system/cron", handler.UpdateCronConfig)
+	auth.GET("/schedule/tasks", handler.GetScheduleTasks)
+	auth.POST("/schedule/tasks", handler.CreateScheduleTask)
+	auth.POST("/schedule/tasks/batch", handler.BatchScheduleTaskAction)
+	auth.POST("/schedule/tasks/:id", handler.UpdateScheduleTask)
+	auth.POST("/schedule/tasks/:id/delete", handler.DeleteScheduleTask)
+	auth.POST("/schedule/tasks/:id/toggle", handler.ToggleScheduleTask)
 
 			auth.GET("/domains/:id/logs", handler.GetDomainLogs)
 			auth.GET("/domains/:id/loginurl", handler.GetQuickLoginURL)
@@ -180,6 +201,28 @@ func SetupRouter(staticFS embed.FS) *gin.Engine {
 			auth.POST("/request-logs/error", handler.GetErrorByID)
 			auth.POST("/request-logs/stats", handler.GetRequestStats)
 			auth.POST("/request-logs/clean", handler.CleanRequestLogs)
+
+			// Cloudflare 增强功能
+			auth.GET("/cloudflare/hostnames/:id", handler.GetCustomHostnames)
+			auth.POST("/cloudflare/hostnames/add/:id", handler.AddCustomHostname)
+			auth.POST("/cloudflare/hostnames/update/:id", handler.UpdateCustomHostname)
+			auth.POST("/cloudflare/hostnames/delete/:id", handler.DeleteCustomHostname)
+			auth.POST("/cloudflare/hostnames/refresh/:id", handler.RefreshCustomHostname)
+			auth.POST("/cloudflare/fallback/get/:id", handler.GetFallbackOrigin)
+			auth.POST("/cloudflare/fallback/set/:id", handler.SetFallbackOrigin)
+			auth.POST("/cloudflare/fallback/delete/:id", handler.DeleteFallbackOrigin)
+			auth.POST("/cloudflare/dcv_delegation_uuid/:id", handler.GetDcvDelegationUUID)
+			auth.POST("/cloudflare/get_domain_default_line", handler.GetDomainDefaultLine)
+			auth.GET("/cloudflare/tunnels/:id", handler.GetTunnels)
+			auth.POST("/cloudflare/tunnels/add/:id", handler.AddTunnel)
+			auth.POST("/cloudflare/tunnels/delete/:id", handler.DeleteTunnel)
+			auth.POST("/cloudflare/tunnels/token/:id", handler.GetTunnelToken)
+			auth.POST("/cloudflare/tunnels/cidr/data/:id", handler.GetCidrRoutes)
+			auth.POST("/cloudflare/tunnels/cidr/add/:id", handler.AddCidrRoute)
+			auth.POST("/cloudflare/tunnels/cidr/delete/:id", handler.DeleteCidrRoute)
+			auth.POST("/cloudflare/tunnels/hostnameroutes/data/:id", handler.GetHostnameRoutes)
+			auth.POST("/cloudflare/tunnels/hostnameroutes/add/:id", handler.AddHostnameRoute)
+			auth.POST("/cloudflare/tunnels/hostnameroutes/delete/:id", handler.DeleteHostnameRoute)
 		}
 
 		api.GET("/quicklogin", handler.QuickLogin)
@@ -239,7 +282,7 @@ func SetupRouter(staticFS embed.FS) *gin.Engine {
 	}
 
 	r.GET("/", func(c *gin.Context) {
-		c.Redirect(http.StatusFound, "/login/")
+		c.Redirect(http.StatusFound, "/login")
 	})
 
 	r.NoRoute(func(c *gin.Context) {

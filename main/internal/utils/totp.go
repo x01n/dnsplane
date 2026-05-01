@@ -67,17 +67,6 @@ func VerifyTOTPCode(secret, code string) bool {
 	return ok
 }
 
-/*
- * VerifyTOTPCodeWithCounter 验证 TOTP 验证码并返回匹配的时间窗口计数器（counter）。
- *
- * 安全审计 M-1：允许 ±30s 共 3 个有效码，若仅返回 bool 则调用方无法实现
- * "同一 code 单次有效"的防重放。此函数额外返回 counter，供调用方把
- * (secret_hash, counter) 作为已用标记存入缓存，同一窗口内第二次出现即拒绝。
- *
- * 返回 (matched, counter)：
- *   - matched=false: code 错误，counter=0 无意义
- *   - matched=true:  counter 为 30 秒粒度的时间步数（time.Unix()/30 的邻近值）
- */
 func VerifyTOTPCodeWithCounter(secret, code string) (bool, int64) {
 	secret = strings.ToUpper(strings.ReplaceAll(secret, " ", ""))
 	code = strings.TrimSpace(code)
@@ -92,7 +81,6 @@ func VerifyTOTPCodeWithCounter(secret, code string) (bool, int64) {
 	return false, 0
 }
 
-/* generateTOTPCode 根据密钥和时间戳生成 6 位 TOTP 验证码 */
 func generateTOTPCode(secret string, timestamp int64) string {
 	// 解码密钥
 	key, err := base32.StdEncoding.WithPadding(base32.NoPadding).DecodeString(secret)
@@ -126,13 +114,11 @@ func generateTOTPCode(secret string, timestamp int64) string {
 	return fmt.Sprintf("%06d", otp)
 }
 
-/* GetCurrentTOTPCode 获取当前时间的 TOTP 码（仅用于测试） */
 func GetCurrentTOTPCode(secret string) string {
 	secret = strings.ToUpper(strings.ReplaceAll(secret, " ", ""))
 	return generateTOTPCode(secret, time.Now().Unix())
 }
 
-/* ValidateTOTPSecret 验证 TOTP 密钥格式有效性（长度 + Base32 合法性） */
 func ValidateTOTPSecret(secret string) bool {
 	secret = strings.ToUpper(strings.ReplaceAll(secret, " ", ""))
 	if len(secret) < 16 {
@@ -147,7 +133,6 @@ func ValidateTOTPSecret(secret string) bool {
 	return true
 }
 
-/* GenerateRecoveryCodes 生成指定数量的 TOTP 恢复码（XXXXX-XXXXX 格式） */
 func GenerateRecoveryCodes(count int) []string {
 	codes := make([]string, count)
 	for i := 0; i < count; i++ {
@@ -160,12 +145,10 @@ func GenerateRecoveryCodes(count int) []string {
 	return codes
 }
 
-/* VerifyRecoveryCode 验证并消耗恢复码（一次性使用） */
 func VerifyRecoveryCode(storedCodes []string, inputCode string) (bool, []string) {
 	inputCode = strings.ToUpper(strings.ReplaceAll(inputCode, " ", ""))
 	for i, code := range storedCodes {
 		if code == inputCode {
-			// 移除已使用的恢复码
 			remainingCodes := append(storedCodes[:i], storedCodes[i+1:]...)
 			return true, remainingCodes
 		}

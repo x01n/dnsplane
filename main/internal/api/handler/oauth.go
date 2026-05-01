@@ -148,13 +148,11 @@ func OAuthCallback(c *gin.Context) {
 		return
 	}
 
-	// ========== 绑定模式 ==========
 	if entry.Mode == "bind" && entry.BindUID > 0 {
 		handleOAuthBind(c, providerName, userInfo, tokenResult, entry.BindUID, siteURL)
 		return
 	}
 
-	// ========== 登录模式 ==========
 	handleOAuthLogin(c, providerName, userInfo, tokenResult, siteURL)
 }
 
@@ -305,7 +303,6 @@ func loginSuccessRedirect(c *gin.Context, user *models.User, providerName, siteU
 	c.Redirect(http.StatusFound, siteURL+"/oauth-callback#"+frag)
 }
 
-// ==================== 绑定管理 API（需要认证）====================
 
 // GetOAuthBindings 获取当前用户的所有 OAuth 绑定
 func GetOAuthBindings(c *gin.Context) {

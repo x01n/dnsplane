@@ -16,7 +16,6 @@ type LogCleanupService struct {
 
 var logCleanupService *LogCleanupService
 
-// StartLogCleanup 启动日志清理服务
 func StartLogCleanup() {
 	cfg := config.Get()
 	if cfg == nil || !cfg.LogCleanup.Enable {
@@ -26,16 +25,13 @@ func StartLogCleanup() {
 	logCleanupService = &LogCleanupService{
 		stopChan: make(chan struct{}),
 	}
-
 	go logCleanupService.run()
-	logger.Info("请求日志清理服务已启动")
 }
 
 // StopLogCleanup 停止日志清理服务
 func StopLogCleanup() {
 	if logCleanupService != nil {
 		close(logCleanupService.stopChan)
-		logger.Info("请求日志清理服务已停止")
 	}
 }
 
@@ -68,8 +64,6 @@ func (s *LogCleanupService) cleanup() {
 		return
 	}
 
-	// 注：DMCheckLog 清理已由 database.MaintenanceService 统一处理，此处不再重复
-
 	successKeep := cfg.LogCleanup.SuccessKeepCount
 	errorKeep := cfg.LogCleanup.ErrorKeepCount
 
@@ -79,13 +73,10 @@ func (s *LogCleanupService) cleanup() {
 	if errorKeep <= 0 {
 		errorKeep = 500
 	}
-
-	// 清理成功日志（保留最新的N条）
 	var successCount int64
 	database.RequestDB.Model(&models.RequestLog{}).Where("is_error = ?", false).Count(&successCount)
 	if successCount > int64(successKeep) {
-		deleteCount := successCount - int64(successKeep)
-		// 获取要保留的最小ID
+		_ = successCount - int64(successKeep) // deleteCount (unused but computed)
 		var minKeepID uint
 		database.RequestDB.Model(&models.RequestLog{}).
 			Where("is_error = ?", false).
@@ -97,14 +88,10 @@ func (s *LogCleanupService) cleanup() {
 		if minKeepID > 0 {
 			result := database.RequestDB.Where("is_error = ? AND id <= ?", false, minKeepID).Delete(&models.RequestLog{})
 			if result.RowsAffected > 0 {
-				logger.Info("清理成功请求日志 %d 条", result.RowsAffected)
 			}
 		} else {
-			logger.Info("计划清理成功日志 %d 条", deleteCount)
 		}
 	}
-
-	// 清理错误日志（保留最新的N条）
 	var errorCount int64
 	database.RequestDB.Model(&models.RequestLog{}).Where("is_error = ?", true).Count(&errorCount)
 	if errorCount > int64(errorKeep) {

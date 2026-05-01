@@ -62,8 +62,6 @@ func doInit() error {
 	if err != nil {
 		return fmt.Errorf("加载背景图片失败: %w", err)
 	}
-
-	/* ===== 点选验证码 ===== */
 	clickBuilder := click.NewBuilder(
 		click.WithRangeLen(option.RangeVal{Min: 4, Max: 6}),
 		click.WithRangeVerifyLen(option.RangeVal{Min: 2, Max: 4}),
@@ -74,8 +72,6 @@ func doInit() error {
 		click.WithBackgrounds(imgs),
 	)
 	clickCapt = clickBuilder.Make()
-
-	/* ===== 滑动验证码 ===== */
 	tileGraphs, err := tiles.GetTiles()
 	if err != nil {
 		return fmt.Errorf("加载滑块图片失败: %w", err)
@@ -94,8 +90,6 @@ func doInit() error {
 		slide.WithBackgrounds(imgs),
 	)
 	slideCapt = slideBuilder.Make()
-
-	/* ===== 旋转验证码 ===== */
 	rotateBuilder := rotate.NewBuilder()
 	rotateBuilder.SetResources(
 		rotate.WithImages(imgs),
@@ -106,9 +100,7 @@ func doInit() error {
 	return nil
 }
 
-/* ===== 生成结果结构 ===== */
 
-/* CaptchaResult 验证码生成结果（返回给前端） */
 type CaptchaResult struct {
 	CaptchaID   string `json:"captcha_id"`
 	CaptchaType string `json:"captcha_type"` // click, slide, rotate
@@ -121,7 +113,6 @@ type CaptchaResult struct {
 	ThumbSize   int    `json:"thumb_size,omitempty"`
 }
 
-/* ===== 点选验证码数据缓存结构 ===== */
 type clickCacheData struct {
 	Dots map[int]*click.Dot `json:"dots"`
 }
@@ -266,7 +257,6 @@ func generateRotate(id string) (*CaptchaResult, error) {
 	}, nil
 }
 
-/* ===== 验证 ===== */
 
 /* ClickPoint 用户提交的点选坐标 */
 type ClickPoint struct {
@@ -274,10 +264,6 @@ type ClickPoint struct {
 	Y int `json:"y"`
 }
 
-/*
- * Verify 验证用户提交的验证码答案
- * 功能：从缓存读取验证数据，根据类型执行不同的校验逻辑，一次性使用
- */
 func Verify(captchaID string, captchaType string, answer json.RawMessage) bool {
 	cacheKey := cacheKeyPrefix + captchaID
 	raw, ok := cache.C.Get(cacheKey)
@@ -381,7 +367,6 @@ func verifyRotate(raw string, answer json.RawMessage) bool {
 	return ok
 }
 
-/* ===== 缓存操作 ===== */
 
 func storeCache(id, captchaType string, data interface{}) {
 	cacheKey := cacheKeyPrefix + id

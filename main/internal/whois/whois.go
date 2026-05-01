@@ -9,7 +9,6 @@ import (
 	"github.com/domainr/whois"
 )
 
-/* whoisStatusURLPattern 预编译正则：去除 WHOIS status 行中的 URL 后缀 */
 var whoisStatusURLPattern = regexp.MustCompile(`\s+https?://.*`)
 
 type DomainInfo struct {
@@ -23,11 +22,6 @@ type DomainInfo struct {
 	RawData     string     `json:"raw_data"`
 }
 
-/*
- * Query 使用 domainr/whois 库查询域名 WHOIS 信息
- * 功能：通过 goroutine + channel 包装实现 context 超时/取消控制
- *       （domainr/whois 原生 Fetch 不支持 context）
- */
 func Query(ctx context.Context, domain string) (*DomainInfo, error) {
 	domain = strings.ToLower(strings.TrimSpace(domain))
 
@@ -131,15 +125,12 @@ func parseWhoisResponse(domain, rawData string) *DomainInfo {
 func parseDate(value string, patterns []string) *time.Time {
 	value = strings.TrimSpace(value)
 
-	// 尝试所有模式
 	for _, pattern := range patterns {
 		t, err := time.Parse(pattern, value)
 		if err == nil {
 			return &t
 		}
 	}
-
-	// 尝试只提取日期部分
 	if idx := strings.Index(value, "T"); idx > 0 {
 		dateOnly := value[:idx]
 		t, err := time.Parse("2006-01-02", dateOnly)
@@ -148,7 +139,6 @@ func parseDate(value string, patterns []string) *time.Time {
 		}
 	}
 
-	// 尝试从空格分隔的字符串中提取
 	if parts := strings.Fields(value); len(parts) > 0 {
 		for _, pattern := range patterns {
 			t, err := time.Parse(pattern, parts[0])

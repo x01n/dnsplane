@@ -8,7 +8,6 @@ import (
 	"time"
 )
 
-// 验证码字符集（排除易混淆字符 0O1IL）
 const charset = "23456789ABCDEFGHJKMNPQRSTUVWXYZ"
 const codeLength = 8
 const codeTTL = 5 * time.Minute       // 验证码有效期
@@ -45,8 +44,6 @@ func Generate(email, scene string) (string, error) {
 			return "", fmt.Errorf("发送过于频繁，请 %d 秒后重试", remaining)
 		}
 	}
-
-	// 生成 8 位随机验证码
 	code := generateRandomCode(codeLength)
 
 	// 存储到缓存
@@ -95,7 +92,6 @@ func Verify(email, scene, code string) error {
 	return nil
 }
 
-// ==================== 工具 ====================
 
 func codeKey(email, scene string) string {
 	return fmt.Sprintf("vcode:%s:%s", scene, email)
@@ -111,13 +107,11 @@ func generateRandomCode(length int) string {
 	return string(code)
 }
 
-// CheckIPLimit 检查 IP 发送频率限制
-// 返回 nil 表示未超限，否则返回错误
 func CheckIPLimit(ip string, maxPerHour int64) error {
 	key := fmt.Sprintf("vcode:ip:%s", ip)
 	count, err := cache.C.Incr(key, 1*time.Hour)
 	if err != nil {
-		return nil // 缓存失败不阻塞
+		return nil 
 	}
 	if count > maxPerHour {
 		return fmt.Errorf("请求过于频繁，请稍后重试")
@@ -125,9 +119,6 @@ func CheckIPLimit(ip string, maxPerHour int64) error {
 	return nil
 }
 
-// AllowPublicEmailRequest 公开「可能发邮件」接口的复合计数（IP + 邮箱），用于防刷与枚举。
-// 在调用方**最开始**调用；若返回 false，应直接返回与成功相同的模糊 JSON，且不做库查询、不写 token、不发信。
-// kind 区分业务，避免不同接口共用同一计数器。
 func AllowPublicEmailRequest(ip, email, kind string, maxIPPerHour, maxEmailPerHour int64) bool {
 	email = strings.ToLower(strings.TrimSpace(email))
 	kIP := fmt.Sprintf("rl:pubmail:%s:ip:%s", kind, ip)

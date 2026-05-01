@@ -9,10 +9,9 @@ import (
 	"gorm.io/gorm"
 )
 
-// GinContextKey 在 context / GORM Statement 中挂载 *gin.Context 的键（与 WithContext 一致）
 const GinContextKey = "gin_context"
 
-var traceGinByGoroutine sync.Map // goroutine id -> *gin.Context
+var traceGinByGoroutine sync.Map 
 
 func currentGoroutineID() uint64 {
 	var buf [128]byte
@@ -33,9 +32,6 @@ func currentGoroutineID() uint64 {
 	return id
 }
 
-// BindRequestGinForDBTrace 将当前 HTTP 处理 goroutine 与 gin.Context 绑定，
-// 供裸用 database.DB / LogDB 的 GORM 回调注入 GinContextKey，从而写入 db_queries。
-// 应在 RequestTrace 中于 c.Next() 之前 defer cleanup()。
 func BindRequestGinForDBTrace(c *gin.Context) (cleanup func()) {
 	id := currentGoroutineID()
 	if id == 0 {

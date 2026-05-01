@@ -18,12 +18,16 @@ import (
 type NotifyType string
 
 const (
-	NotifyEmail    NotifyType = "email"
-	NotifyTelegram NotifyType = "telegram"
-	NotifyWebhook  NotifyType = "webhook"
-	NotifyDiscord  NotifyType = "discord"
-	NotifyBark     NotifyType = "bark"
-	NotifyWechat   NotifyType = "wechat"
+	NotifyEmail     NotifyType = "email"
+	NotifyTelegram  NotifyType = "telegram"
+	NotifyWebhook   NotifyType = "webhook"
+	NotifyDiscord   NotifyType = "discord"
+	NotifyBark      NotifyType = "bark"
+	NotifyWechat    NotifyType = "wechat"
+	NotifyDingTalk  NotifyType = "dingtalk"
+	NotifyFeishu    NotifyType = "feishu"
+	NotifyWxWorkApp NotifyType = "wxwork_app"
+	NotifyWxTpl     NotifyType = "wxtpl"
 )
 
 /* Notifier 通知发送接口，所有通知渠道实现此接口 */
@@ -561,6 +565,10 @@ var notifyConfigKeys = []string{
 	"discord_webhook",
 	"bark_url", "bark_key",
 	"wechat_webhook",
+	"dingtalk_webhook", "dingtalk_secret",
+	"feishu_webhook", "feishu_secret",
+	"wxwork_corpid", "wxwork_agentid", "wxwork_secret", "wxwork_touser",
+	"wxtpl_appid", "wxtpl_appsecret", "wxtpl_template_id", "wxtpl_users", "wxtpl_url",
 }
 
 /*
@@ -609,5 +617,17 @@ func LoadNotifiersFromConfig(manager *NotifyManager, configMap map[string]string
 	}
 	if configMap["wechat_webhook"] != "" {
 		manager.AddNotifier(NewWechatWorkNotifier(WechatWorkConfig{WebhookURL: configMap["wechat_webhook"]}))
+	}
+	if configMap["dingtalk_webhook"] != "" {
+		manager.AddNotifier(NewDingTalkNotifier(DingTalkConfig{WebhookURL: configMap["dingtalk_webhook"], Secret: configMap["dingtalk_secret"]}))
+	}
+	if configMap["feishu_webhook"] != "" {
+		manager.AddNotifier(NewFeishuNotifier(FeishuConfig{WebhookURL: configMap["feishu_webhook"], Secret: configMap["feishu_secret"]}))
+	}
+	if configMap["wxwork_corpid"] != "" && configMap["wxwork_agentid"] != "" && configMap["wxwork_secret"] != "" {
+		manager.AddNotifier(NewWxWorkAppNotifier(WxWorkAppConfig{CorpID: configMap["wxwork_corpid"], AgentID: configMap["wxwork_agentid"], Secret: configMap["wxwork_secret"], ToUser: configMap["wxwork_touser"]}))
+	}
+	if configMap["wxtpl_appid"] != "" && configMap["wxtpl_appsecret"] != "" && configMap["wxtpl_template_id"] != "" && configMap["wxtpl_users"] != "" {
+		manager.AddNotifier(NewWxTplNotifier(WxTplConfig{AppID: configMap["wxtpl_appid"], AppSecret: configMap["wxtpl_appsecret"], TemplateID: configMap["wxtpl_template_id"], ToUsers: configMap["wxtpl_users"], URL: configMap["wxtpl_url"]}))
 	}
 }

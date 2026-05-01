@@ -195,8 +195,6 @@ func (m *MaintenanceService) run() {
 	}
 }
 
-// ==================== 清理逻辑 ====================
-
 func (m *MaintenanceService) runCleanup() {
 	// 每次清理前重新从数据库加载配置（管理员可能已修改）
 	m.config = LoadMaintenanceConfig()
@@ -269,7 +267,6 @@ func trimRequestLogs(db *gorm.DB, isError bool, keepCount int, label string) {
 	}
 }
 
-// ==================== VACUUM 与优化 ====================
 
 func (m *MaintenanceService) runVacuumAndOptimize() {
 	logger.Debug("[Maintenance] 开始数据库压缩与优化...")
@@ -323,7 +320,6 @@ func optimizeGormDB(gormDB *gorm.DB, name string) {
 	}
 }
 
-// ==================== 统计与工具 ====================
 
 var (
 	maintenanceStatsMu   sync.RWMutex

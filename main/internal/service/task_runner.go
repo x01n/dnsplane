@@ -42,10 +42,6 @@ func NewTaskRunner() *TaskRunner {
 	}
 }
 
-/*
- * Start 启动后台任务
- * 功能：启动证书任务和到期通知的定时循环，监听退出信号
- */
 func (r *TaskRunner) Start(ctx context.Context) {
 	r.mu.Lock()
 	if r.running {
@@ -56,13 +52,7 @@ func (r *TaskRunner) Start(ctx context.Context) {
 	r.stopCh = make(chan struct{})
 	r.stopOnce = sync.Once{} // 重置 stopOnce
 	r.mu.Unlock()
-
-	logger.Info("后台任务管理器启动")
-
-	// 加载通知配置
 	r.loadNotifyConfig()
-
-	// 启动各服务
 	r.wg.Add(2)
 	go r.runCertTask(ctx)
 	go r.runExpireNotice(ctx)
@@ -74,7 +64,6 @@ func (r *TaskRunner) Start(ctx context.Context) {
 	}()
 }
 
-/* Stop 停止所有后台任务并等待完成 */
 func (r *TaskRunner) Stop() {
 	r.stopOnce.Do(func() {
 		r.mu.Lock()
@@ -82,31 +71,22 @@ func (r *TaskRunner) Stop() {
 			r.mu.Unlock()
 			return
 		}
-		logger.Info("正在停止后台任务管理器...")
 		close(r.stopCh)
 		r.mu.Unlock()
 		r.wg.Wait()
 		r.mu.Lock()
 		r.running = false
 		r.mu.Unlock()
-		logger.Info("后台任务管理器已停止")
 	})
 }
 
-/*
- * loadNotifyConfig 加载通知渠道配置（使用 sysconfig 缓存层）
- * 功能：通过 sysconfig.GetValue 按需读取配置，避免每次批量查 DB
- */
 func (r *TaskRunner) loadNotifyConfig() {
 	r.notifyManager = notify.NewManager()
 	notify.LoadNotifiersWithGetter(r.notifyManager, sysconfig.GetValue)
 }
 
-/* runCertTask 证书任务定时循环（每 5 分钟检查续期和部署） */
 func (r *TaskRunner) runCertTask(ctx context.Context) {
 	defer r.wg.Done()
-
-	/* 首次延迟30秒执行，使用 select 代替 time.Sleep 确保服务关闭时能立即响应 */
 	select {
 	case <-r.stopCh:
 		return
@@ -131,11 +111,8 @@ func (r *TaskRunner) runCertTask(ctx context.Context) {
 	}
 }
 
-/* runExpireNotice 到期通知定时循环（每 24 小时检查域名和证书到期） */
 func (r *TaskRunner) runExpireNotice(ctx context.Context) {
 	defer r.wg.Done()
-
-	/* 首次延迟60秒执行，使用 select 代替 time.Sleep 确保服务关闭时能立即响应 */
 	select {
 	case <-r.stopCh:
 		return
@@ -160,30 +137,19 @@ func (r *TaskRunner) runExpireNotice(ctx context.Context) {
 	}
 }
 
-/* executeCertTask 执行证书任务（自动续期 + 部署 + 重试 + 锁释放） */
 func (r *TaskRunner) executeCertTask() {
 	defer func() {
 		if err := recover(); err != nil {
 			logger.Error("证书任务异常: %v", err)
 		}
 	}()
-
-	// 检查需要续期的证书
 	r.checkCertRenewal()
-
-	// 执行待部署任务（新签发的证书或待执行的部署）
 	r.executeDeployTasks()
-
-	// 处理失败重试的部署任务
 	r.retryFailedDeployTasks()
-
-	// 释放超时的锁
 	r.releaseExpiredLocks()
 }
 
-/* checkCertRenewal 检查即将到期的证书并触发自动续期 */
 func (r *TaskRunner) checkCertRenewal() {
-	/* 获取配置的续期提前天数（使用 sysconfig 缓存层） */
 	renewDays := 30
 	if v := sysconfig.GetValue("cert_expire_days"); v != "" {
 		if d, err := strconv.Atoi(v); err == nil && d > 0 {
@@ -193,13 +159,10 @@ func (r *TaskRunner) checkCertRenewal() {
 
 	var orders []models.CertOrder
 	expiryThreshold := time.Now().AddDate(0, 0, renewDays)
-
-	// 已签发且进入续期窗口（含已过期）：不再要求 expire_time > now，否则过期后永远不会自动续期
 	database.DB.Where("is_auto = ? AND status = ? AND expire_time IS NOT NULL AND expire_time < ?",
 		true, 3, expiryThreshold).Find(&orders)
 
 	for _, order := range orders {
-		// 检查是否已经在处理中（是否被锁定）
 		if order.IsLock {
 			continue
 		}
@@ -230,8 +193,6 @@ func (r *TaskRunner) checkCertRenewal() {
 		} else {
 			logger.Info("证书订单 %d 即将过期(剩余%d天)，触发自动续期", order.ID, daysLeft)
 		}
-
-		// 更新状态为待处理，并清空「已发到期通知」以便新证书周期可再次提醒
 		now := time.Now()
 		database.DB.Model(&order).Updates(map[string]interface{}{
 			"status":           0,
@@ -252,28 +213,19 @@ func (r *TaskRunner) checkCertRenewal() {
 	}
 }
 
-/* executeDeployTasks 执行待处理的证书部署任务 */
 func (r *TaskRunner) executeDeployTasks() {
-	// 查询 active=true 且满足以下条件的部署任务：
-	// 1. status=0 (待执行) 且未被锁定
-	// 2. 证书已签发且 issue_time 比部署记录的 issue_time 更新（需要重新部署）
 	var deploys []models.CertDeploy
 	database.DB.Where("active = ? AND is_lock = ? AND (status = ? OR status = ?)",
 		true, false, 0, 2).Find(&deploys)
 
 	for _, deployTask := range deploys {
-		// 获取关联的证书订单
 		var order models.CertOrder
 		if err := database.DB.First(&order, deployTask.OrderID).Error; err != nil {
 			continue
 		}
-
-		// 检查证书是否已签发
 		if order.Status != 3 || order.FullChain == "" || order.PrivateKey == "" {
 			continue
 		}
-
-		// 如果部署状态是已成功(2)，检查证书是否已更新（续期后需要重新部署）
 		if deployTask.Status == 2 {
 			if deployTask.IssueTime != nil && order.IssueTime != nil {
 				if !order.IssueTime.After(*deployTask.IssueTime) {
@@ -284,13 +236,10 @@ func (r *TaskRunner) executeDeployTasks() {
 				continue
 			}
 		}
-
-		// 执行部署
 		r.executeSingleDeploy(&deployTask, &order)
 	}
 }
 
-/* retryFailedDeployTasks 处理失败需要重试的部署任务（指数退避） */
 func (r *TaskRunner) retryFailedDeployTasks() {
 	var deploys []models.CertDeploy
 	database.DB.Where("active = ? AND status = ? AND is_lock = ?",
@@ -307,8 +256,6 @@ func (r *TaskRunner) retryFailedDeployTasks() {
 		if deployTask.Retry >= maxRetry {
 			continue
 		}
-
-		// 检查重试间隔（指数退避）
 		if deployTask.RetryTime != nil {
 			interval := getRetryInterval(deployTask.Retry, deployRetryIntervals)
 			if now.Sub(*deployTask.RetryTime) < time.Duration(interval)*time.Second {
@@ -316,7 +263,6 @@ func (r *TaskRunner) retryFailedDeployTasks() {
 			}
 		}
 
-		// 获取关联的证书订单
 		var order models.CertOrder
 		if err := database.DB.First(&order, deployTask.OrderID).Error; err != nil {
 			continue
@@ -331,7 +277,6 @@ func (r *TaskRunner) retryFailedDeployTasks() {
 	}
 }
 
-/* executeSingleDeploy 执行单个证书部署任务（加锁 → 部署 → 更新状态 → 通知） */
 func (r *TaskRunner) executeSingleDeploy(deployTask *models.CertDeploy, order *models.CertOrder) {
 	// 加锁防止并发执行
 	now := time.Now()
@@ -392,14 +337,10 @@ func (r *TaskRunner) executeSingleDeploy(deployTask *models.CertDeploy, order *m
 	if _, ok := deployConfig["domains"]; !ok {
 		deployConfig["domains"] = strings.Join(domainList, ",")
 	}
-
-	// 设置日志记录器
 	var logBuilder strings.Builder
 	provider.SetLogger(func(msg string) {
 		logBuilder.WriteString(fmt.Sprintf("[%s] %s\n", time.Now().Format("2006-01-02 15:04:05"), msg))
 	})
-
-	// 执行部署
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
@@ -407,8 +348,6 @@ func (r *TaskRunner) executeSingleDeploy(deployTask *models.CertDeploy, order *m
 		logBuilder.WriteString(fmt.Sprintf("[%s] 部署失败: %s\n", time.Now().Format("2006-01-02 15:04:05"), err.Error()))
 		r.updateDeployFailedWithLog(deployTask, err.Error(), logBuilder.String())
 		logger.Error("部署任务 %d 执行失败: %v", deployTask.ID, err)
-
-		// 发送失败通知（仅在最后一次重试时）
 		maxRetry := deployTask.MaxRetry
 		if maxRetry == 0 {
 			maxRetry = 5
@@ -418,8 +357,6 @@ func (r *TaskRunner) executeSingleDeploy(deployTask *models.CertDeploy, order *m
 		}
 		return
 	}
-
-	// 部署成功
 	logBuilder.WriteString(fmt.Sprintf("[%s] 部署成功\n", time.Now().Format("2006-01-02 15:04:05")))
 	deployNow := time.Now()
 	database.DB.Model(deployTask).Updates(map[string]interface{}{
@@ -474,7 +411,6 @@ func (r *TaskRunner) updateDeployFailedWithLog(deployTask *models.CertDeploy, er
 	})
 }
 
-/* releaseExpiredLocks 释放超时的锁（超过 10 分钟视为异常，防止进程重启或 panic 后锁残留） */
 func (r *TaskRunner) releaseExpiredLocks() {
 	lockTimeout := time.Now().Add(-10 * time.Minute)
 
@@ -489,7 +425,6 @@ func (r *TaskRunner) releaseExpiredLocks() {
 		logger.Warn("释放 %d 个超时的部署锁", result.RowsAffected)
 	}
 
-	/* 证书订单锁（申请流程超过 15 分钟视为异常） */
 	orderLockTimeout := time.Now().Add(-15 * time.Minute)
 	if result := database.DB.Model(&models.CertOrder{}).
 		Where("is_lock = ? AND lock_time < ? AND status = ?", true, orderLockTimeout, 1).
@@ -502,7 +437,6 @@ func (r *TaskRunner) releaseExpiredLocks() {
 	}
 }
 
-/* sendDeployNotification 发送部署成功/失败通知（失败依赖 cert_deploy_notice_enabled；成功依赖 cert_deploy_success_notice_enabled，默认关） */
 func (r *TaskRunner) sendDeployNotification(deployTask *models.CertDeploy, domains []string, success bool, errMsg string) {
 	if success {
 		if !sysconfigBoolExplicitOn("cert_deploy_success_notice_enabled") {
@@ -531,7 +465,6 @@ func (r *TaskRunner) sendDeployNotification(deployTask *models.CertDeploy, domai
 	}
 }
 
-/* SendCertRenewFailNotification 自动续期/ACME 最终失败通知（与部署通知共用渠道配置） */
 func SendCertRenewFailNotification(orderID uint, domainNames []string, errSummary string) {
 	if !sysconfigBoolDefaultTrue("cert_renew_fail_notice_enabled") {
 		return
@@ -552,7 +485,6 @@ func SendCertRenewFailNotification(orderID uint, domainNames []string, errSummar
 	}
 }
 
-/* MaybeNotifyCertAutoRenewACMEFailure ACME 异步失败后，对「自动续期」订单在冷却期内最多提醒一次 */
 func MaybeNotifyCertAutoRenewACMEFailure(orderID uint, errSummary string) {
 	if !sysconfigBoolDefaultTrue("cert_renew_fail_notice_enabled") {
 		return
@@ -564,7 +496,6 @@ func MaybeNotifyCertAutoRenewACMEFailure(orderID uint, errSummary string) {
 	if !order.IsAuto || order.Status >= 0 {
 		return
 	}
-	/* Retry==0 视为首次申请；自动续期调度在触发 ACME 前会将 retry 累加，≥1 时才通知 */
 	if order.Retry < 1 {
 		return
 	}
@@ -756,14 +687,11 @@ func (r *TaskRunner) checkCertExpire() {
 	intervalDays := certExpireNoticeIntervalDays()
 	now := time.Now()
 	expiryThreshold := now.AddDate(0, 0, notifyDays)
-
-	/* 旧版仅用 is_send：升级后若无 expire_notice_at，补为当前时间，避免同一任务周期内连发 */
 	database.DB.Model(&models.CertOrder{}).
 		Where("status = ? AND is_send = ? AND expire_notice_at IS NULL", 3, true).
 		Update("expire_notice_at", now)
 
 	var orders []models.CertOrder
-	// 已签发且已进入提醒窗口（含已过期）；重复推送由 expire_notice_at + 间隔控制
 	database.DB.Where("status = ? AND expire_time IS NOT NULL AND expire_time < ?",
 		3, expiryThreshold).Find(&orders)
 
@@ -780,8 +708,6 @@ func (r *TaskRunner) checkCertExpire() {
 		}
 
 		daysUntilExpiry := int(time.Until(*order.ExpireTime).Hours() / 24)
-
-		// 获取域名列表
 		var domains []models.CertDomain
 		database.DB.Where("oid = ?", order.ID).Find(&domains)
 		var domainList string
@@ -822,7 +748,6 @@ func (r *TaskRunner) checkCertExpire() {
 	}
 }
 
-/* addCertLog 添加证书操作日志到 LogDB */
 func (r *TaskRunner) addCertLog(orderID uint, action, data string) {
 	database.LogDB.Create(&models.CertLog{
 		OrderID:   orderID,
@@ -832,22 +757,18 @@ func (r *TaskRunner) addCertLog(orderID uint, action, data string) {
 	})
 }
 
-/* formatInt 格式化整数为字符串 */
 func formatInt(n int) string {
 	return strconv.Itoa(n)
 }
 
-/* ReloadNotifyConfig 重新加载通知渠道配置 */
 func (r *TaskRunner) ReloadNotifyConfig() {
 	r.loadNotifyConfig()
 }
 
-/* GetConfig 从缓存层读取系统配置项 */
 func (r *TaskRunner) GetConfig(key string) string {
 	return sysconfig.GetValue(key)
 }
 
-/* SetConfig 写入系统配置项到数据库，并清除缓存确保下次读取为最新值 */
 func (r *TaskRunner) SetConfig(key, value string) {
 	var config models.SysConfig
 	result := database.DB.Where("`key` = ?", key).First(&config)
@@ -859,16 +780,10 @@ func (r *TaskRunner) SetConfig(key, value string) {
 	sysconfig.Invalidate(key)
 }
 
-/*
- * GetStatus 获取后台任务运行状态统计
- * 优化：4次独立 COUNT → CertDeploy 用条件聚合合并为 1 次
- */
 func (r *TaskRunner) GetStatus() map[string]interface{} {
 	var certOrderCount, domainNoticeCount int64
 	database.DB.Model(&models.CertOrder{}).Where("is_auto = ?", true).Count(&certOrderCount)
 	database.DB.Model(&models.Domain{}).Where("is_notice = ?", true).Count(&domainNoticeCount)
-
-	/* CertDeploy: 条件聚合 active + failed 一次查询 */
 	var deployStats struct {
 		Active int64 `gorm:"column:active_cnt"`
 		Failed int64 `gorm:"column:failed_cnt"`

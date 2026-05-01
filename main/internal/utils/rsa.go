@@ -121,7 +121,6 @@ const (
 	rsaKeyBits     = 4096
 )
 
-/* EncryptedPayload RSA+AES 混合加密请求载荷 */
 type EncryptedPayload struct {
 	Key  string `json:"key"`
 	IV   string `json:"iv"`
@@ -138,8 +137,6 @@ func InitRSAKey() error {
 
 		privatePath := filepath.Join(rsaKeyDir, rsaPrivateFile)
 		publicPath := filepath.Join(rsaKeyDir, rsaPublicFile)
-
-		/* 尝试加载已有密钥 */
 		if privateData, err := os.ReadFile(privatePath); err == nil {
 			if publicData, err := os.ReadFile(publicPath); err == nil {
 				block, _ := pem.Decode(privateData)
@@ -154,8 +151,6 @@ func InitRSAKey() error {
 				}
 			}
 		}
-
-		/* 生成新的4096位密钥对 */
 		var err error
 		rsaPrivateKey, err = rsa.GenerateKey(rand.Reader, rsaKeyBits)
 		if err != nil {
@@ -198,13 +193,11 @@ func GetRSAPublicKey() string {
 	return rsaPublicKey
 }
 
-/* DecryptResult 解密结果，包含明文和 AES 密钥 */
 type DecryptResult struct {
 	Plaintext []byte
 	AESKey    []byte
 }
 
-/* HybridDecrypt 混合解密：RSA解密AES密钥，AES解密数据 */
 func HybridDecrypt(payload *EncryptedPayload) ([]byte, error) {
 	result, err := HybridDecryptWithKey(payload)
 	if err != nil {
@@ -213,13 +206,11 @@ func HybridDecrypt(payload *EncryptedPayload) ([]byte, error) {
 	return result.Plaintext, nil
 }
 
-/* HybridDecryptWithKey 混合解密并返回AES密钥（用于加密响应） */
 func HybridDecryptWithKey(payload *EncryptedPayload) (*DecryptResult, error) {
 	if rsaPrivateKey == nil {
 		InitRSAKey()
 	}
 
-	/* 1. 自定义解码 */
 	encryptedKey, err := customDecode(payload.Key)
 	if err != nil {
 		return nil, errors.New("invalid key format: " + err.Error())
@@ -232,19 +223,14 @@ func HybridDecryptWithKey(payload *EncryptedPayload) (*DecryptResult, error) {
 	if err != nil {
 		return nil, errors.New("invalid data format: " + err.Error())
 	}
-
-	/* 2. RSA-OAEP解密AES密钥 */
 	aesKey, err := rsa.DecryptOAEP(sha256.New(), rand.Reader, rsaPrivateKey, encryptedKey, nil)
 	if err != nil {
 		return nil, errors.New("decrypt key failed: " + err.Error())
 	}
-
-	/* 3. AES-GCM解密数据 */
 	block, err := aes.NewCipher(aesKey)
 	if err != nil {
 		return nil, errors.New("create cipher failed")
 	}
-
 	gcm, err := cipher.NewGCM(block)
 	if err != nil {
 		return nil, errors.New("create gcm failed")
@@ -261,9 +247,7 @@ func HybridDecryptWithKey(payload *EncryptedPayload) (*DecryptResult, error) {
 	}, nil
 }
 
-/* HybridEncrypt 混合加密：生成AES密钥加密数据，RSA加密AES密钥 */
 func HybridEncrypt(data []byte, publicKeyPEM string) (*EncryptedPayload, error) {
-	/* 解析公钥 */
 	block, _ := pem.Decode([]byte(publicKeyPEM))
 	if block == nil {
 		return nil, errors.New("invalid public key")
@@ -276,14 +260,10 @@ func HybridEncrypt(data []byte, publicKeyPEM string) (*EncryptedPayload, error) 
 	if !ok {
 		return nil, errors.New("invalid public key type")
 	}
-
-	/* 1. 生成随机AES密钥(256位) */
 	aesKey := make([]byte, 32)
 	if _, err := rand.Read(aesKey); err != nil {
 		return nil, err
 	}
-
-	/* 2. AES-GCM加密数据 */
 	cipherBlock, err := aes.NewCipher(aesKey)
 	if err != nil {
 		return nil, err
@@ -298,8 +278,6 @@ func HybridEncrypt(data []byte, publicKeyPEM string) (*EncryptedPayload, error) 
 		return nil, err
 	}
 	encryptedData := gcm.Seal(nil, iv, data, nil)
-
-	/* 3. RSA-OAEP加密AES密钥 */
 	encryptedKey, err := rsa.EncryptOAEP(sha256.New(), rand.Reader, publicKey, aesKey, nil)
 	if err != nil {
 		return nil, err
@@ -312,7 +290,6 @@ func HybridEncrypt(data []byte, publicKeyPEM string) (*EncryptedPayload, error) 
 	}, nil
 }
 
-/* ServerEncrypt 服务端加密响应（使用自己的公钥） */
 func ServerEncrypt(data interface{}) (*EncryptedPayload, error) {
 	jsonData, err := json.Marshal(data)
 	if err != nil {
@@ -321,20 +298,15 @@ func ServerEncrypt(data interface{}) (*EncryptedPayload, error) {
 	return HybridEncrypt(jsonData, GetRSAPublicKey())
 }
 
-/* ResponsePayload AES 加密响应载荷（IV + 密文） */
 type ResponsePayload struct {
 	IV   string `json:"iv"`
 	Data string `json:"data"`
 }
-
-/* EncryptWithKey 使用指定的AES密钥加密响应数据 */
 func EncryptWithKey(data interface{}, aesKey []byte) (*ResponsePayload, error) {
 	jsonData, err := json.Marshal(data)
 	if err != nil {
 		return nil, err
 	}
-
-	// AES-GCM加密
 	block, err := aes.NewCipher(aesKey)
 	if err != nil {
 		return nil, err
@@ -356,7 +328,6 @@ func EncryptWithKey(data interface{}, aesKey []byte) (*ResponsePayload, error) {
 	}, nil
 }
 
-/* RSADecrypt 简单 RSA-OAEP 解密（仅用于小数据如密码） */
 func RSADecrypt(ciphertext string) (string, error) {
 	if rsaPrivateKey == nil {
 		InitRSAKey()

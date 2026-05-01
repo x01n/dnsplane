@@ -475,7 +475,7 @@ func Install(c *gin.Context) {
 	user := models.User{
 		Username: req.Username,
 		Password: string(hashedPassword),
-		Level:    1,
+		Level:    2,
 		Status:   1,
 		RegTime:  time.Now(),
 	}

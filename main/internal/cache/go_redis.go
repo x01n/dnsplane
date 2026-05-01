@@ -9,7 +9,6 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// goRedisCache 基于 github.com/redis/go-redis/v9 的缓存实现
 type goRedisCache struct {
 	rdb    *redis.Client
 	prefix string

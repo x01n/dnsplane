@@ -59,11 +59,6 @@ func CheckPing(ctx context.Context, ip string, timeout int) *CheckResult {
 	return checkPingICMP(ctx, ip, timeout)
 }
 
-// checkPingWindows 在 check_ping_windows.go（Windows）/ check_ping_stub.go（其它平台）中实现
-
-// ==================== Linux/macOS: ICMP raw socket ====================
-
-// checkPingICMP 使用 golang.org/x/net/icmp 实现（Linux/macOS）
 func checkPingICMP(ctx context.Context, ip string, timeout int) *CheckResult {
 	dst := resolveIPv4(ip)
 	if dst == nil {
@@ -134,7 +129,6 @@ func checkPingICMP(ctx context.Context, ip string, timeout int) *CheckResult {
 	}
 }
 
-// ==================== 工具函数 ====================
 
 // resolveIPv4 解析IP或域名为IPv4地址
 func resolveIPv4(ip string) net.IP {
@@ -167,7 +161,6 @@ func checkTCPFallback(ctx context.Context, host string, timeout int) *CheckResul
 	return &CheckResult{Success: true, Duration: duration}
 }
 
-// ==================== TCP / HTTP 检测 ====================
 
 func CheckTCP(ctx context.Context, host string, port int, timeout int) *CheckResult {
 	start := time.Now()
@@ -344,7 +337,6 @@ func CheckHTTP(ctx context.Context, rawURL string, timeout int, opts *HTTPCheckO
 	return out
 }
 
-// ==================== 其他工具 ====================
 
 func ResolveDomain(domain string) ([]string, error) {
 	ips, err := net.LookupIP(domain)

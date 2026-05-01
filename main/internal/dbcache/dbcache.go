@@ -11,7 +11,6 @@ import (
 // DefaultTTL 热点列表读穿缓存默认存活时间
 const DefaultTTL = 60 * time.Second
 
-// GetOrSetJSON 读穿缓存：命中则反序列化到 dest；未命中则执行 load，写入缓存并填充 dest
 func GetOrSetJSON(ctx context.Context, key string, ttl time.Duration, load func() (interface{}, error), dest interface{}) error {
 	if err := ctx.Err(); err != nil {
 		return err

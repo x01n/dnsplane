@@ -7,7 +7,6 @@ import (
 	"unsafe"
 )
 
-// enableWindowsANSI 启用 Windows 终端 ANSI 颜色（虚拟终端处理）
 func enableWindowsANSI() {
 	kernel32 := syscall.NewLazyDLL("kernel32.dll")
 	setConsoleMode := kernel32.NewProc("SetConsoleMode")

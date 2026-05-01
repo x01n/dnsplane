@@ -169,8 +169,6 @@ func (m *Monitor) processTaskAsync(task models.DMTask) {
 	defer cancel()
 
 	checkStart := time.Now()
-
-	// ============ 并发检测主源 ============
 	mainCheckStart := time.Now()
 	mainIPs := parseValues(task.MainValue)
 	mainResults := make(map[string]*CheckResult)
@@ -191,8 +189,6 @@ func (m *Monitor) processTaskAsync(task models.DMTask) {
 			mainMu.Unlock()
 		}(ip)
 	}
-
-	// ============ 并发检测备用源 ============
 	backupCheckStart := time.Now()
 	backupVals := getBackupValues(task)
 	backupResults := make(map[string]*CheckResult)
@@ -221,8 +217,6 @@ func (m *Monitor) processTaskAsync(task models.DMTask) {
 	backupDuration := time.Since(backupCheckStart).Milliseconds()
 
 	duration := time.Since(checkStart).Milliseconds()
-
-	// ============ 保存检测日志 ============
 	errMsg := ""
 	for addr, r := range mainResults {
 		if !r.Success {
@@ -245,8 +239,6 @@ func (m *Monitor) processTaskAsync(task models.DMTask) {
 			CreatedAt:      time.Now(),
 		})
 	}()
-
-	// ============ 更新内存中的ResolveStatus ============
 	status := &ResolveStatus{
 		TaskID:       task.ID,
 		MainValue:    task.MainValue,
@@ -256,8 +248,6 @@ func (m *Monitor) processTaskAsync(task models.DMTask) {
 		LastError:    errMsg,
 	}
 	m.resolveStatuses.Store(task.ID, status)
-
-	// ============ 决策: 切换/恢复 ============
 	updates := map[string]interface{}{
 		"check_time":  time.Now().Unix(),
 		"main_health": mainHealthy,
@@ -740,7 +730,6 @@ func (m *Monitor) GetResolveStatus(taskID uint) *ResolveStatus {
 	return nil
 }
 
-// ==================== 通知 ====================
 
 // sendNotification 发送通知
 func (m *Monitor) sendNotification(task models.DMTask, eventType string, errMsg string) {
@@ -810,6 +799,10 @@ func (m *Monitor) buildNotifyManager(task models.DMTask) *notify.NotifyManager {
 		Or("`key` LIKE ?", "discord_%").
 		Or("`key` LIKE ?", "bark_%").
 		Or("`key` LIKE ?", "wechat_%").
+		Or("`key` LIKE ?", "dingtalk_%").
+		Or("`key` LIKE ?", "feishu_%").
+		Or("`key` LIKE ?", "wxwork_%").
+		Or("`key` LIKE ?", "wxtpl_%").
 		Find(&configs)
 
 	configMap := make(map[string]string)
@@ -886,11 +879,27 @@ func (m *Monitor) buildNotifyManager(task models.DMTask) *notify.NotifyManager {
 		hasNotifier = true
 	}
 
-	// 企业微信
+	// 企业微信群机器人
 	if (useAll || containsStr(channels, "wechat")) && configMap["wechat_webhook"] != "" {
 		manager.AddNotifier(notify.NewWechatWorkNotifier(notify.WechatWorkConfig{
 			WebhookURL: configMap["wechat_webhook"],
 		}))
+		hasNotifier = true
+	}
+	if (useAll || containsStr(channels, "dingtalk")) && configMap["dingtalk_webhook"] != "" {
+		manager.AddNotifier(notify.NewDingTalkNotifier(notify.DingTalkConfig{WebhookURL: configMap["dingtalk_webhook"], Secret: configMap["dingtalk_secret"]}))
+		hasNotifier = true
+	}
+	if (useAll || containsStr(channels, "feishu")) && configMap["feishu_webhook"] != "" {
+		manager.AddNotifier(notify.NewFeishuNotifier(notify.FeishuConfig{WebhookURL: configMap["feishu_webhook"], Secret: configMap["feishu_secret"]}))
+		hasNotifier = true
+	}
+	if (useAll || containsStr(channels, "wxwork") || containsStr(channels, "wxwork_app")) && configMap["wxwork_corpid"] != "" && configMap["wxwork_agentid"] != "" && configMap["wxwork_secret"] != "" {
+		manager.AddNotifier(notify.NewWxWorkAppNotifier(notify.WxWorkAppConfig{CorpID: configMap["wxwork_corpid"], AgentID: configMap["wxwork_agentid"], Secret: configMap["wxwork_secret"], ToUser: configMap["wxwork_touser"]}))
+		hasNotifier = true
+	}
+	if (useAll || containsStr(channels, "wxtpl")) && configMap["wxtpl_appid"] != "" && configMap["wxtpl_appsecret"] != "" && configMap["wxtpl_template_id"] != "" && configMap["wxtpl_users"] != "" {
+		manager.AddNotifier(notify.NewWxTplNotifier(notify.WxTplConfig{AppID: configMap["wxtpl_appid"], AppSecret: configMap["wxtpl_appsecret"], TemplateID: configMap["wxtpl_template_id"], ToUsers: configMap["wxtpl_users"], URL: configMap["wxtpl_url"]}))
 		hasNotifier = true
 	}
 
@@ -900,7 +909,6 @@ func (m *Monitor) buildNotifyManager(task models.DMTask) *notify.NotifyManager {
 	return manager
 }
 
-// ==================== 辅助函数 ====================
 
 // saveTaskState 保存任务切换状态到数据库
 func (m *Monitor) saveTaskState(taskID uint, state TaskState) {
