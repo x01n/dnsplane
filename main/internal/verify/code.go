@@ -22,7 +22,6 @@ const (
 	SceneForgotTOTP     = "forgot_totp"
 )
 
-// codeEntry 缓存中的验证码数据
 type codeEntry struct {
 	Code      string `json:"code"`
 	Attempts  int    `json:"attempts"`
@@ -92,7 +91,6 @@ func Verify(email, scene, code string) error {
 	return nil
 }
 
-
 func codeKey(email, scene string) string {
 	return fmt.Sprintf("vcode:%s:%s", scene, email)
 }
@@ -111,7 +109,7 @@ func CheckIPLimit(ip string, maxPerHour int64) error {
 	key := fmt.Sprintf("vcode:ip:%s", ip)
 	count, err := cache.C.Incr(key, 1*time.Hour)
 	if err != nil {
-		return nil 
+		return nil
 	}
 	if count > maxPerHour {
 		return fmt.Errorf("请求过于频繁，请稍后重试")

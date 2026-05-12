@@ -21,6 +21,9 @@ import {
   Rocket,
   ChevronRight,
   User as UserIcon,
+  Cloud,
+  Network,
+  Clock3,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
@@ -50,7 +53,17 @@ const navigation: NavItem[] = [
   { name: '仪表盘', href: '/dashboard', icon: LayoutDashboard },
   { name: 'DNS账户', href: '/dashboard/accounts', icon: Server, module: 'domain' },
   { name: '域名管理', href: '/dashboard/domains', icon: Globe, module: 'domain' },
+  {
+    name: 'Cloudflare',
+    icon: Cloud,
+    module: 'domain',
+    children: [
+      { name: '自定义主机名', href: '/dashboard/cloudflare/hostnames', icon: Globe, module: 'domain' },
+      { name: 'Tunnels', href: '/dashboard/cloudflare/tunnels', icon: Network, module: 'domain' },
+    ],
+  },
   { name: '容灾监控', href: '/dashboard/monitor', icon: Activity, module: 'monitor' },
+  { name: '定时切换', href: '/dashboard/schedule', icon: Clock3, module: 'domain' },
   {
     name: 'SSL证书',
     icon: ShieldCheck,

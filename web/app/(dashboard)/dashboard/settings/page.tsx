@@ -12,7 +12,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Separator } from '@/components/ui/separator'
 import { toast } from 'sonner'
 import { systemApi, SystemConfig, CronConfig, TaskStatus } from '@/lib/api'
-import { Settings, Mail, MessageSquare, Webhook, Shield, Globe, RefreshCw, CheckCircle, Lock, Send, Bell, Server, Home, UserPlus, Github, Clock, Timer } from 'lucide-react'
+import { Settings, Mail, MessageSquare, Webhook, Shield, Globe, RefreshCw, CheckCircle, Lock, Send, Bell, Server, Home, UserPlus, Github, Clock, Timer, Building2 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 
 export default function SettingsPage() {
@@ -227,6 +227,70 @@ export default function SettingsPage() {
       }
     } catch {
       toast.error('企业微信消息发送失败')
+    } finally {
+      setTesting(null)
+    }
+  }
+
+  const handleTestDingtalk = async () => {
+    setTesting('dingtalk')
+    try {
+      const res = await systemApi.testDingtalk()
+      if (res.code === 0) {
+        toast.success('钉钉消息发送成功')
+      } else {
+        toast.error(res.msg || '钉钉消息发送失败')
+      }
+    } catch {
+      toast.error('钉钉消息发送失败')
+    } finally {
+      setTesting(null)
+    }
+  }
+
+  const handleTestFeishu = async () => {
+    setTesting('feishu')
+    try {
+      const res = await systemApi.testFeishu()
+      if (res.code === 0) {
+        toast.success('飞书消息发送成功')
+      } else {
+        toast.error(res.msg || '飞书消息发送失败')
+      }
+    } catch {
+      toast.error('飞书消息发送失败')
+    } finally {
+      setTesting(null)
+    }
+  }
+
+  const handleTestWxWorkApp = async () => {
+    setTesting('wxwork_app')
+    try {
+      const res = await systemApi.testWxWorkApp()
+      if (res.code === 0) {
+        toast.success('企业微信应用消息发送成功')
+      } else {
+        toast.error(res.msg || '企业微信应用消息发送失败')
+      }
+    } catch {
+      toast.error('企业微信应用消息发送失败')
+    } finally {
+      setTesting(null)
+    }
+  }
+
+  const handleTestWxTpl = async () => {
+    setTesting('wxtpl')
+    try {
+      const res = await systemApi.testWxTpl()
+      if (res.code === 0) {
+        toast.success('公众号模板消息发送成功')
+      } else {
+        toast.error(res.msg || '公众号模板消息发送失败')
+      }
+    } catch {
+      toast.error('公众号模板消息发送失败')
     } finally {
       setTesting(null)
     }
@@ -1174,6 +1238,119 @@ export default function SettingsPage() {
             )}
           </Card>
 
+          {/* 钉钉通知 */}
+          <Card>
+            <CardHeader className="cursor-pointer" onClick={() => toggleNotifySection('dingtalk')}>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Building2 className="h-5 w-5" />
+                  <CardTitle className="text-base">钉钉机器人</CardTitle>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Switch checked={config.dingtalk_enabled || false} onCheckedChange={(checked) => { setConfig({ ...config, dingtalk_enabled: checked }) }} onClick={(e) => e.stopPropagation()} />
+                  <Button size="sm" variant="outline" onClick={(e) => { e.stopPropagation(); handleTestDingtalk(); }} disabled={testing === 'dingtalk'}>
+                    {testing === 'dingtalk' ? <RefreshCw className="h-3 w-3 animate-spin" /> : '测试'}
+                  </Button>
+                </div>
+              </div>
+            </CardHeader>
+            {expandedNotify === 'dingtalk' && (
+              <CardContent className="space-y-4">
+                <div className="space-y-2">
+                  <Label>Webhook URL</Label>
+                  <Input placeholder="https://oapi.dingtalk.com/robot/send?..." value={config.dingtalk_webhook || ''} onChange={(e) => setConfig({ ...config, dingtalk_webhook: e.target.value })} />
+                </div>
+                <div className="space-y-2">
+                  <Label>Secret</Label>
+                  <Input type="password" placeholder="可选，开启签名时填写" value={config.dingtalk_secret || ''} onChange={(e) => setConfig({ ...config, dingtalk_secret: e.target.value })} />
+                </div>
+              </CardContent>
+            )}
+          </Card>
+
+          {/* 飞书通知 */}
+          <Card>
+            <CardHeader className="cursor-pointer" onClick={() => toggleNotifySection('feishu')}>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Bell className="h-5 w-5" />
+                  <CardTitle className="text-base">飞书机器人</CardTitle>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Switch checked={config.feishu_enabled || false} onCheckedChange={(checked) => { setConfig({ ...config, feishu_enabled: checked }) }} onClick={(e) => e.stopPropagation()} />
+                  <Button size="sm" variant="outline" onClick={(e) => { e.stopPropagation(); handleTestFeishu(); }} disabled={testing === 'feishu'}>
+                    {testing === 'feishu' ? <RefreshCw className="h-3 w-3 animate-spin" /> : '测试'}
+                  </Button>
+                </div>
+              </div>
+            </CardHeader>
+            {expandedNotify === 'feishu' && (
+              <CardContent className="space-y-4">
+                <div className="space-y-2">
+                  <Label>Webhook URL</Label>
+                  <Input placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/..." value={config.feishu_webhook || ''} onChange={(e) => setConfig({ ...config, feishu_webhook: e.target.value })} />
+                </div>
+                <div className="space-y-2">
+                  <Label>Secret</Label>
+                  <Input type="password" placeholder="可选，开启签名时填写" value={config.feishu_secret || ''} onChange={(e) => setConfig({ ...config, feishu_secret: e.target.value })} />
+                </div>
+              </CardContent>
+            )}
+          </Card>
+
+          {/* 企业微信应用消息 */}
+          <Card>
+            <CardHeader className="cursor-pointer" onClick={() => toggleNotifySection('wxwork_app')}>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <MessageSquare className="h-5 w-5" />
+                  <CardTitle className="text-base">企业微信应用消息</CardTitle>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Switch checked={config.wxwork_app_enabled || false} onCheckedChange={(checked) => { setConfig({ ...config, wxwork_app_enabled: checked }) }} onClick={(e) => e.stopPropagation()} />
+                  <Button size="sm" variant="outline" onClick={(e) => { e.stopPropagation(); handleTestWxWorkApp(); }} disabled={testing === 'wxwork_app'}>
+                    {testing === 'wxwork_app' ? <RefreshCw className="h-3 w-3 animate-spin" /> : '测试'}
+                  </Button>
+                </div>
+              </div>
+            </CardHeader>
+            {expandedNotify === 'wxwork_app' && (
+              <CardContent className="space-y-4">
+                <div className="space-y-2"><Label>CorpID</Label><Input value={config.wxwork_corpid || ''} onChange={(e) => setConfig({ ...config, wxwork_corpid: e.target.value })} /></div>
+                <div className="space-y-2"><Label>AgentID</Label><Input value={config.wxwork_agentid || ''} onChange={(e) => setConfig({ ...config, wxwork_agentid: e.target.value })} /></div>
+                <div className="space-y-2"><Label>Secret</Label><Input type="password" value={config.wxwork_secret || ''} onChange={(e) => setConfig({ ...config, wxwork_secret: e.target.value })} /></div>
+                <div className="space-y-2"><Label>ToUser</Label><Input placeholder="留空默认 @all" value={config.wxwork_touser || ''} onChange={(e) => setConfig({ ...config, wxwork_touser: e.target.value })} /></div>
+              </CardContent>
+            )}
+          </Card>
+
+          {/* 微信公众号模板消息 */}
+          <Card>
+            <CardHeader className="cursor-pointer" onClick={() => toggleNotifySection('wxtpl')}>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Mail className="h-5 w-5" />
+                  <CardTitle className="text-base">公众号模板消息</CardTitle>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Switch checked={config.wxtpl_enabled || false} onCheckedChange={(checked) => { setConfig({ ...config, wxtpl_enabled: checked }) }} onClick={(e) => e.stopPropagation()} />
+                  <Button size="sm" variant="outline" onClick={(e) => { e.stopPropagation(); handleTestWxTpl(); }} disabled={testing === 'wxtpl'}>
+                    {testing === 'wxtpl' ? <RefreshCw className="h-3 w-3 animate-spin" /> : '测试'}
+                  </Button>
+                </div>
+              </div>
+            </CardHeader>
+            {expandedNotify === 'wxtpl' && (
+              <CardContent className="space-y-4">
+                <div className="space-y-2"><Label>AppID</Label><Input value={config.wxtpl_appid || ''} onChange={(e) => setConfig({ ...config, wxtpl_appid: e.target.value })} /></div>
+                <div className="space-y-2"><Label>AppSecret</Label><Input type="password" value={config.wxtpl_appsecret || ''} onChange={(e) => setConfig({ ...config, wxtpl_appsecret: e.target.value })} /></div>
+                <div className="space-y-2"><Label>Template ID</Label><Input value={config.wxtpl_template_id || ''} onChange={(e) => setConfig({ ...config, wxtpl_template_id: e.target.value })} /></div>
+                <div className="space-y-2"><Label>OpenID 列表</Label><Textarea rows={3} placeholder="多个 OpenID 用逗号分隔" value={config.wxtpl_users || ''} onChange={(e) => setConfig({ ...config, wxtpl_users: e.target.value })} /></div>
+                <div className="space-y-2"><Label>点击跳转 URL</Label><Input value={config.wxtpl_url || ''} onChange={(e) => setConfig({ ...config, wxtpl_url: e.target.value })} /></div>
+              </CardContent>
+            )}
+          </Card>
+
           {/* Webhook 通知 */}
           <Card>
             <CardHeader className="cursor-pointer" onClick={() => toggleNotifySection('webhook')}>
@@ -1233,13 +1410,6 @@ export default function SettingsPage() {
                       )}
                     </div>
                     <div className="space-y-1.5 p-3 rounded-lg border">
-                      <div className="text-sm text-muted-foreground">优选IP</div>
-                      <div className="text-xl font-bold">{taskStatus.optimize.active} <span className="text-sm font-normal text-muted-foreground">/ {taskStatus.optimize.total}</span></div>
-                      {taskStatus.optimize.last_time && (
-                        <div className="text-xs text-muted-foreground">上次执行: {taskStatus.optimize.last_time}</div>
-                      )}
-                    </div>
-                    <div className="space-y-1.5 p-3 rounded-lg border">
                       <div className="text-sm text-muted-foreground">自动续期证书</div>
                       <div className="text-xl font-bold">{taskStatus.cert_auto}</div>
                     </div>
@@ -1271,15 +1441,6 @@ export default function SettingsPage() {
                       onChange={(e) => setCronConfig({ ...cronConfig, cron_schedule: e.target.value })}
                     />
                     <p className="text-xs text-muted-foreground">用户自定义定时任务的检查周期，默认每分钟 <Badge variant="outline" className="text-xs ml-1">*/1 * * * *</Badge></p>
-                  </div>
-                  <div className="space-y-2">
-                    <Label>优选IP执行周期</Label>
-                    <Input
-                      placeholder="*/30 * * * *"
-                      value={cronConfig.cron_optimize || ''}
-                      onChange={(e) => setCronConfig({ ...cronConfig, cron_optimize: e.target.value })}
-                    />
-                    <p className="text-xs text-muted-foreground">优选IP任务的执行周期，默认每30分钟 <Badge variant="outline" className="text-xs ml-1">*/30 * * * *</Badge></p>
                   </div>
                   <div className="space-y-2">
                     <Label>证书自动续期检查周期</Label>

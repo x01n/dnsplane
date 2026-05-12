@@ -28,7 +28,7 @@ function OAuthCallbackInner() {
       return
     }
 
-    const { access_token, refresh_token } = consumeOAuthTokensFromUrl(searchParams)
+    const { access_token, refresh_token } = consumeOAuthTokensFromUrl()
     if (access_token && refresh_token) {
       api.setTokens({ token: access_token, refresh_token })
       toast.success('登录成功')

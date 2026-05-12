@@ -125,7 +125,7 @@ func (s *EnhanceService) requestRaw(method, path string, query map[string]string
 				errMsg = fmt.Sprintf("HTTP %d", resp.StatusCode)
 			}
 		}
-		return resp, respBody, fmt.Errorf(errMsg)
+		return resp, respBody, fmt.Errorf("%s", errMsg)
 	}
 
 	return resp, respBody, nil
@@ -147,7 +147,7 @@ func (s *EnhanceService) requestResult(method, path string, query map[string]str
 		if errors, ok := result["errors"].([]interface{}); ok && len(errors) > 0 {
 			if errObj, ok := errors[0].(map[string]interface{}); ok {
 				if msg, ok := errObj["message"].(string); ok {
-					return nil, fmt.Errorf(msg)
+					return nil, fmt.Errorf("%s", msg)
 				}
 			}
 		}
@@ -177,7 +177,7 @@ func (s *EnhanceService) requestResultMap(method, path string, query map[string]
 		if errors, ok := result["errors"].([]interface{}); ok && len(errors) > 0 {
 			if errObj, ok := errors[0].(map[string]interface{}); ok {
 				if msg, ok := errObj["message"].(string); ok {
-					return nil, fmt.Errorf(msg)
+					return nil, fmt.Errorf("%s", msg)
 				}
 			}
 		}
@@ -223,7 +223,7 @@ func (s *EnhanceService) paginate(method, path string, query map[string]string, 
 			if errors, ok := result["errors"].([]interface{}); ok && len(errors) > 0 {
 				if errObj, ok := errors[0].(map[string]interface{}); ok {
 					if msg, ok := errObj["message"].(string); ok {
-						return nil, fmt.Errorf(msg)
+						return nil, fmt.Errorf("%s", msg)
 					}
 				}
 			}
@@ -437,7 +437,7 @@ func (s *EnhanceService) CreateTunnel(accountID, name string) (map[string]interf
 	_ = secret // 实际上 Cloudflare 会自动处理
 
 	body := map[string]interface{}{
-		"name":    name,
+		"name":          name,
 		"tunnel_secret": base64.StdEncoding.EncodeToString(generateRandomBytes(32)),
 	}
 
@@ -552,8 +552,8 @@ func (s *EnhanceService) UpsertTunnelCnameRecord(zoneID, hostname, tunnelID stri
 
 	// 获取所有该名称的 DNS 记录
 	allRecords, err := s.requestResult("GET", "/zones/"+zoneID+"/dns_records", map[string]string{
-		"name":    hostname,
-		"page":    "1",
+		"name":     hostname,
+		"page":     "1",
 		"per_page": "100",
 	}, nil, false)
 	if err != nil {
@@ -664,9 +664,9 @@ func (s *EnhanceService) DeleteTunnelCnameRecordIfMatch(zoneID, hostname, tunnel
 	target := normalizeHostname(tunnelID) + ".cfargotunnel.com"
 
 	records, err := s.requestResult("GET", "/zones/"+zoneID+"/dns_records", map[string]string{
-		"name":    hostname,
-		"type":    "CNAME",
-		"page":    "1",
+		"name":     hostname,
+		"type":     "CNAME",
+		"page":     "1",
 		"per_page": "100",
 	}, nil, false)
 	if err != nil {

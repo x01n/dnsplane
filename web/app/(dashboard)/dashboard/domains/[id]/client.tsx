@@ -23,6 +23,10 @@ import {
   List,
   Filter,
   ChevronDown,
+  Link2,
+  Weight,
+  Sparkles,
+  History as HistoryIcon,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { TableSkeleton } from '@/components/table-skeleton'
@@ -130,8 +134,16 @@ export default function DomainRecordsClient() {
   const [selectedRecord, setSelectedRecord] = useState<DNSRecord | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [selectedRecordIds, setSelectedRecordIds] = useState<string[]>([])
+  const [aliases, setAliases] = useState<Array<{ id: number; did: number; name: string }>>([])
+  const [newAlias, setNewAlias] = useState('')
+  const [smartParseValue, setSmartParseValue] = useState('')
+  const [smartParseResult, setSmartParseResult] = useState<{ type: string; value: string } | null>(null)
+  const [quickInfo, setQuickInfo] = useState<{ lines: RecordLine[]; min_ttl: number; supports_weight: boolean; supports_remark: number; supports_log: boolean; supports_status: boolean } | null>(null)
+  const [recordLogs, setRecordLogs] = useState<unknown[]>([])
+  const [recordLogsLoading, setRecordLogsLoading] = useState(false)
 
   const [formData, setFormData] = useState({
+    Weight: 0,
     Name: '',
     Type: 'A',
     Value: '',
@@ -190,9 +202,128 @@ export default function DomainRecordsClient() {
     if (domainId) {
       fetchDomainInfo()
       fetchLines()
+      fetchAliases()
+      fetchQuickInfo()
+      fetchRecordLogs()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [domainId])
+
+  const fetchAliases = async () => {
+    try {
+      const res = await domainApi.getAliases(domainId)
+      if (res.code === 0 && res.data) setAliases(res.data.list || [])
+    } catch {
+      // ignore
+    }
+  }
+
+  const fetchQuickInfo = async () => {
+    try {
+      const res = await domainApi.getRecordQuickInfo(domainId)
+      if (res.code === 0 && res.data) setQuickInfo(res.data)
+    } catch {
+      // ignore
+    }
+  }
+
+  const fetchRecordLogs = async () => {
+    setRecordLogsLoading(true)
+    try {
+      const res = await domainApi.getRecordChangeLogs(domainId, { page: 1, page_size: 20 })
+      if (res.code === 0 && res.data) setRecordLogs(res.data.list || [])
+    } catch {
+      // ignore
+    } finally {
+      setRecordLogsLoading(false)
+    }
+  }
+
+  const handleAddAlias = async () => {
+    const name = newAlias.trim()
+    if (!name) {
+      toast.error('请输入别名')
+      return
+    }
+    try {
+      const res = await domainApi.addAlias(domainId, name)
+      if (res.code === 0) {
+        toast.success('别名添加成功')
+        setNewAlias('')
+        fetchAliases()
+      } else {
+        toast.error(res.msg || '添加失败')
+      }
+    } catch {
+      toast.error('添加失败')
+    }
+  }
+
+  const handleDeleteAlias = async (aliasId: number) => {
+    try {
+      const res = await domainApi.deleteAlias(aliasId)
+      if (res.code === 0) {
+        toast.success('别名删除成功')
+        fetchAliases()
+      } else {
+        toast.error(res.msg || '删除失败')
+      }
+    } catch {
+      toast.error('删除失败')
+    }
+  }
+
+  const handleSmartParse = async () => {
+    const value = smartParseValue.trim()
+    if (!value) {
+      toast.error('请输入要识别的值')
+      return
+    }
+    try {
+      const res = await domainApi.smartParse(value)
+      if (res.code === 0 && res.data) {
+        setSmartParseResult(res.data)
+        setFormData((prev) => ({ ...prev, Type: res.data?.type || prev.Type, Value: res.data?.value || prev.Value }))
+        toast.success('识别成功，已填入表单')
+      } else {
+        toast.error(res.msg || '识别失败')
+      }
+    } catch {
+      toast.error('识别失败')
+    }
+  }
+
+  const handleUpdateWeight = async (record: DNSRecord, weight: number) => {
+    try {
+      const res = await domainApi.updateRecordWeight(domainId, record.RecordId, weight)
+      if (res.code === 0) {
+        toast.success('权重更新成功')
+        fetchRecords(true)
+      } else {
+        toast.error(res.msg || '权重更新失败')
+      }
+    } catch {
+      toast.error('权重更新失败')
+    }
+  }
+
+  const openWeightPrompt = (record: DNSRecord) => {
+    const current = typeof record.Weight === 'number' ? record.Weight : 0
+    const raw = window.prompt(`请输入 ${record.Name} 的新权重`, String(current))
+    if (raw == null) return
+    const next = parseInt(raw, 10)
+    if (!Number.isFinite(next) || next < 0) {
+      toast.error('请输入有效权重')
+      return
+    }
+    handleUpdateWeight(record, next)
+  }
+
+  const canEditWeight = quickInfo?.supports_weight === true
+  const canViewRecordLogs = quickInfo?.supports_log === true
+  const minTTLHint = quickInfo?.min_ttl || 600
+  const lineOptions = quickInfo?.lines || lines
+  const fmtLog = (item: unknown) => typeof item === 'string' ? item : JSON.stringify(item)
 
   const filterKey = useMemo(
     () =>
@@ -311,11 +442,12 @@ export default function DomainRecordsClient() {
     setSelectedRecord(null)
     setFormData({
       Name: '',
-      Type: 'A',
-      Value: '',
-      Line: lines[0]?.id || '',
-      TTL: 600,
+      Type: smartParseResult?.type || 'A',
+      Value: smartParseResult?.value || '',
+      Line: lineOptions[0]?.id || '',
+      TTL: minTTLHint,
       MX: 10,
+      Weight: 0,
       Remark: '',
     })
     setDialogOpen(true)
@@ -330,6 +462,7 @@ export default function DomainRecordsClient() {
       Line: record.Line,
       TTL: record.TTL,
       MX: record.MX || 10,
+      Weight: typeof record.Weight === 'number' ? record.Weight : 0,
       Remark: record.Remark || '',
     })
     setDialogOpen(true)
@@ -578,6 +711,59 @@ export default function DomainRecordsClient() {
         </div>
       </div>
 
+      {domainInfo && (
+        <div className="grid gap-4 lg:grid-cols-3">
+          <Card>
+            <CardHeader><div className="flex items-center gap-2 font-semibold"><Link2 className="h-4 w-4" />域名别名</div></CardHeader>
+            <CardContent className="space-y-3">
+              <div className="flex gap-2">
+                <Input placeholder="添加别名" value={newAlias} onChange={(e) => setNewAlias(e.target.value)} />
+                <Button onClick={handleAddAlias}>添加</Button>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {aliases.length === 0 ? <span className="text-sm text-muted-foreground">暂无别名</span> : aliases.map((alias) => (
+                  <Badge key={alias.id} variant="secondary" className="gap-2">
+                    {alias.name}
+                    <button type="button" onClick={() => handleDeleteAlias(alias.id)} className="text-xs opacity-80 hover:opacity-100">×</button>
+                  </Badge>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader><div className="flex items-center gap-2 font-semibold"><Sparkles className="h-4 w-4" />智能识别</div></CardHeader>
+            <CardContent className="space-y-3">
+              <div className="flex gap-2">
+                <Input placeholder="输入 IP / 域名 / 值" value={smartParseValue} onChange={(e) => setSmartParseValue(e.target.value)} />
+                <Button variant="outline" onClick={handleSmartParse}>识别</Button>
+              </div>
+              {smartParseResult && <div className="text-sm text-muted-foreground">识别结果：<Badge variant="outline">{smartParseResult.type}</Badge><span className="ml-2 break-all">{smartParseResult.value}</span></div>}
+              {quickInfo && <div className="text-xs text-muted-foreground">最小 TTL：{quickInfo.min_ttl}，权重：{quickInfo.supports_weight ? '支持' : '不支持'}，备注：{quickInfo.supports_remark ? '支持' : '不支持'}</div>}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader><div className="flex items-center gap-2 font-semibold"><HistoryIcon className="h-4 w-4" />记录日志</div></CardHeader>
+            <CardContent className="space-y-2">
+              {!canViewRecordLogs ? (
+                <div className="text-sm text-muted-foreground">当前服务商不支持记录日志</div>
+              ) : recordLogsLoading ? (
+                <div className="text-sm text-muted-foreground">加载中...</div>
+              ) : recordLogs.length === 0 ? (
+                <div className="text-sm text-muted-foreground">暂无日志</div>
+              ) : (
+                <div className="space-y-2 max-h-40 overflow-auto text-xs">
+                  {recordLogs.map((item, idx) => (
+                    <div key={idx} className="rounded border p-2 break-all bg-muted/30">{fmtLog(item)}</div>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
       {/* 记录类型统计卡片 */}
       {Object.keys(recordStats).length > 0 && (
         <div className="flex flex-wrap gap-2">
@@ -773,6 +959,7 @@ export default function DomainRecordsClient() {
                     <TableHead className="font-semibold">线路</TableHead>
                     <TableHead className="font-semibold">记录值</TableHead>
                     <TableHead className="font-semibold w-20">TTL</TableHead>
+                    <TableHead className="font-semibold w-20">权重</TableHead>
                     <TableHead className="font-semibold w-24">状态</TableHead>
                     <TableHead className="w-[80px]"></TableHead>
                   </TableRow>
@@ -821,6 +1008,15 @@ export default function DomainRecordsClient() {
                       </TableCell>
                       <TableCell>
                         <span className="text-sm text-muted-foreground">{record.TTL}s</span>
+                      </TableCell>
+                      <TableCell>
+                        {canEditWeight && (record.Type === 'A' || record.Type === 'AAAA') ? (
+                          <Button variant="ghost" size="sm" onClick={() => openWeightPrompt(record)} className="h-8 px-2">
+                            <Weight className="h-3.5 w-3.5 mr-1" />{typeof record.Weight === 'number' ? record.Weight : 0}
+                          </Button>
+                        ) : (
+                          <span className="text-sm text-muted-foreground">{typeof record.Weight === 'number' ? record.Weight : '-'}</span>
+                        )}
                       </TableCell>
                       <TableCell>
                         <div className="flex items-center gap-2">
@@ -948,6 +1144,7 @@ export default function DomainRecordsClient() {
                       <div className="flex items-center gap-3 text-xs text-muted-foreground">
                         <span>{getLineName(record.Line, record.LineName)}</span>
                         <span>TTL: {record.TTL}s</span>
+                        <span>权重: {typeof record.Weight === 'number' ? record.Weight : '-'}</span>
                       </div>
                       <Switch
                         checked={record.Status === '1'}
@@ -1110,6 +1307,18 @@ export default function DomainRecordsClient() {
                   onChange={(e) => setFormData({ ...formData, MX: parseInt(e.target.value) || 10 })}
                   min={1}
                   max={100}
+                />
+              </div>
+            )}
+
+            {canEditWeight && (formData.Type === 'A' || formData.Type === 'AAAA') && (
+              <div className="space-y-2">
+                <Label>权重</Label>
+                <Input
+                  type="number"
+                  value={formData.Weight}
+                  onChange={(e) => setFormData({ ...formData, Weight: Math.max(0, parseInt(e.target.value) || 0) })}
+                  min={0}
                 />
               </div>
             )}

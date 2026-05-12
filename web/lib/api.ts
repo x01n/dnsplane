@@ -459,6 +459,25 @@ export const domainApi = {
   getLogs: (id: number | string, params?: { page?: number; page_size?: number }) =>
     api.get<{ total: number; list: DomainLog[] }>(`/domains/${id}/logs`, params),
   getQuickLoginURL: (id: number | string) => api.get<{ url: string }>(`/domains/${id}/loginurl`),
+  getAliases: (id: number | string) => api.get<{ list: Array<{ id: number; did: number; name: string }> }>(`/domains/${id}/aliases`),
+  addAlias: (id: number | string, name: string) => api.post(`/domains/${id}/aliases`, { name }),
+  deleteAlias: (aliasId: number | string) => api.post(`/domains/aliases/${aliasId}/delete`, {}),
+  getRecordWeight: (id: number | string, sub: string) => api.get<{ list: DNSRecord[] }>(`/domains/${id}/records/weight`, { sub }),
+  updateRecordWeight: (id: number | string, record_id: string, weight: number) => api.post(`/domains/${id}/records/weight`, { domain_id: id, record_id, weight }),
+  smartParse: (value: string) => api.get<{ type: string; value: string }>(`/domains/records/smartparse`, { value }),
+  getRecordQuickInfo: (id: number | string) => api.post<{ lines: RecordLine[]; min_ttl: number; supports_weight: boolean; supports_remark: number; supports_log: boolean; supports_status: boolean }>(`/domains/${id}/records/quickinfo`, {}),
+  getRecordChangeLogs: (id: number | string, params?: { page?: number; page_size?: number; keyword?: string; start_date?: string; end_date?: string }) => api.get<{ total: number; list: unknown[] }>(`/domains/${id}/records/logs`, params),
+}
+
+// Schedule APIs
+export const scheduleApi = {
+  list: (params?: { page?: number; page_size?: number; keyword?: string; type?: string }) =>
+    api.get<{ total: number; list: Array<Record<string, unknown>> }>('/schedule/tasks', params),
+  create: (data: Record<string, unknown>) => api.post('/schedule/tasks', data),
+  update: (id: number | string, data: Record<string, unknown>) => api.post(`/schedule/tasks/${id}`, data),
+  delete: (id: number | string) => api.post(`/schedule/tasks/${id}/delete`, {}),
+  toggle: (id: number | string, active: boolean) => api.post(`/schedule/tasks/${id}/toggle`, { active }),
+  batch: (ids: number[], act: 'open' | 'close' | 'delete') => api.post('/schedule/tasks/batch', { ids, act }),
 }
 
 // Monitor APIs
@@ -472,13 +491,10 @@ export const monitorApi = {
   switch: (id: number | string) => api.post(`/monitor/tasks/${id}/switch`, {}),
   getLogs: (id: number | string, params?: { page?: number; page_size?: number; action?: number }) =>
     api.get<{ total: number; list: MonitorLog[] }>(`/monitor/tasks/${id}/logs`, params),
-  /** 探测历史（用于列表迷你条、详情图表），数据来自 LogDB 的 dm_check_logs */
   getHistory: (id: number | string, period: '1h' | '24h' | '7d' | '30d' = '24h') =>
     api.get<MonitorCheckPoint[]>(`/monitor/tasks/${id}/history`, { period }),
   getUptime: (id: number | string) =>
-    api.get<Record<string, { total: number; success: number; uptime: number; avg_duration: number }>>(
-      `/monitor/tasks/${id}/uptime`
-    ),
+    api.get<Record<string, { total: number; success: number; uptime: number; avg_duration: number }>>(`/monitor/tasks/${id}/uptime`),
   getResolveStatus: (id: number | string) => api.get<unknown[]>(`/monitor/tasks/${id}/resolve-status`),
   lookup: (domainId: number | string, subDomain: string) =>
     api.post<{ domain: string; account_type: string; records: unknown[] }>('/monitor/lookup', {
@@ -487,9 +503,7 @@ export const monitorApi = {
     }),
   getOverview: () => api.get<MonitorOverview>('/monitor/overview'),
   batchCreate: (data: { tasks: Partial<MonitorTask>[] }) => api.post('/monitor/tasks/batch', data),
-  /** 智能创建（lookup 选记录后批量建任务），与 handler.AutoCreateMonitorTask 一致 */
-  autoCreate: (data: Record<string, unknown>) =>
-    api.post<{ ids: number[]; created: number }>('/monitor/tasks/auto-create', data),
+  autoCreate: (data: Record<string, unknown>) => api.post<{ ids: number[]; created: number }>('/monitor/tasks/auto-create', data),
   getStatus: () => api.get<{ running: boolean; last_run: string }>('/monitor/status'),
 }
 
@@ -630,6 +644,10 @@ export const systemApi = {
   testDiscord: () => api.post('/system/discord/test'),
   testBark: () => api.post('/system/bark/test'),
   testWechat: () => api.post('/system/wechat/test'),
+  testDingtalk: () => api.post('/system/dingtalk/test'),
+  testFeishu: () => api.post('/system/feishu/test'),
+  testWxWorkApp: () => api.post('/system/wxwork-app/test'),
+  testWxTpl: () => api.post('/system/wxtpl/test'),
   /** 与 handler.TestProxy JSON 一致：host、pass（非 server/password） */
   testProxy: (data: {
     host: string
@@ -691,6 +709,107 @@ export const requestLogApi = {
     api.post<RequestLog>('/request-logs/error', { error_id }),
   cleanLogs: (days: number) =>
     api.post<{ msg?: string; deleted?: number }>('/request-logs/clean', { days }),
+}
+
+// Cloudflare 增强功能 API
+export const cloudflareApi = {
+  // 自定义主机名
+  getHostnames: (domainId: number | string) =>
+    api.get<CustomHostname[]>(`/cloudflare/hostnames/${domainId}`),
+  addHostname: (domainId: number | string, data: {
+    hostname: string
+    custom_origin_server?: string
+    ssl_method: 'txt' | 'http'
+    min_tls_version: string
+  }) => api.post(`/cloudflare/hostnames/add/${domainId}`, data),
+  updateHostname: (domainId: number | string, data: {
+    hostname_id: string
+    custom_origin_server?: string
+    ssl_method: 'txt' | 'http'
+    min_tls_version: string
+  }) => api.post(`/cloudflare/hostnames/update/${domainId}`, data),
+  deleteHostname: (domainId: number | string, hostnameId: string) =>
+    api.post(`/cloudflare/hostnames/delete/${domainId}`, { hostname_id: hostnameId }),
+  refreshHostname: (domainId: number | string, hostnameId: string) =>
+    api.post(`/cloudflare/hostnames/refresh/${domainId}`, { hostname_id: hostnameId }),
+  batchAddHostnames: (domainId: number | string, data: {
+    hostnames: string
+    custom_origin_server?: string
+    ssl_method: 'txt' | 'http'
+    min_tls_version: string
+  }) => api.post<CloudflareBatchResult>(`/cloudflare/hostnames/batch-add/${domainId}`, data),
+  batchUpdateHostnames: (domainId: number | string, data: {
+    hostname_ids: string[]
+    custom_origin_server?: string
+    ssl_method?: 'txt' | 'http'
+    min_tls_version?: string
+  }) => api.post<CloudflareBatchResult>(`/cloudflare/hostnames/batch-update/${domainId}`, data),
+  batchDeleteHostnames: (domainId: number | string, hostnameIds: string[]) =>
+    api.post<CloudflareBatchResult>(`/cloudflare/hostnames/batch-delete/${domainId}`, { hostname_ids: hostnameIds }),
+  getHostnameTxtTargets: (domainId: number | string, hostname: string) =>
+    api.post<CloudflareTxtTargetsResult>(`/cloudflare/hostnames/txt-targets/${domainId}`, { hostname }),
+
+  // Fallback Origin
+  getFallbackOrigin: (domainId: number | string) =>
+    api.post<{ origin: string }>(`/cloudflare/fallback/get/${domainId}`, {}),
+  setFallbackOrigin: (domainId: number | string, origin: string) =>
+    api.post(`/cloudflare/fallback/set/${domainId}`, { origin }),
+  deleteFallbackOrigin: (domainId: number | string) =>
+    api.post(`/cloudflare/fallback/delete/${domainId}`, {}),
+
+  // DCV Delegation
+  getDcvDelegationUuid: (domainId: number | string) =>
+    api.post<{ uuid: string }>(`/cloudflare/dcv_delegation_uuid/${domainId}`, {}),
+
+  // 获取域名默认线路
+  getDomainDefaultLine: (domain: string) =>
+    api.post<{ default_line: string }>('/cloudflare/get_domain_default_line', { domain }),
+
+  // Tunnels
+  getTunnels: (domainId: number | string) =>
+    api.get<CloudflareTunnel[]>(`/cloudflare/tunnels/${domainId}`),
+  addTunnel: (domainId: number | string, name: string) =>
+    api.post(`/cloudflare/tunnels/add/${domainId}`, { name }),
+  deleteTunnel: (domainId: number | string, tunnelId: string) =>
+    api.post(`/cloudflare/tunnels/delete/${domainId}`, { tunnel_id: tunnelId }),
+  getTunnelToken: (domainId: number | string, tunnelId: string) =>
+    api.post<{ token: string }>(`/cloudflare/tunnels/token/${domainId}`, { tunnel_id: tunnelId }),
+  getTunnelPublicHostnames: (domainId: number | string, tunnelId: string) =>
+    api.post<TunnelPublicHostname[]>(`/cloudflare/tunnels/public-hostnames/data/${domainId}`, { tunnel_id: tunnelId }),
+  saveTunnelPublicHostname: (domainId: number | string, data: {
+    tunnel_id: string
+    hostname: string
+    service: string
+    path?: string
+  }) => api.post(`/cloudflare/tunnels/public-hostnames/save/${domainId}`, data),
+  deleteTunnelPublicHostname: (domainId: number | string, data: {
+    tunnel_id: string
+    hostname: string
+    path?: string
+  }) => api.post(`/cloudflare/tunnels/public-hostnames/delete/${domainId}`, data),
+
+  // CIDR Routes
+  getCidrRoutes: (domainId: number | string, tunnelId?: string) =>
+    api.post<CidrRoute[]>(`/cloudflare/tunnels/cidr/data/${domainId}`, tunnelId ? { tunnel_id: tunnelId } : {}),
+  addCidrRoute: (domainId: number | string, data: {
+    tunnel_id: string
+    network: string
+    comment?: string
+    virtual_network_id?: string
+  }) => api.post(`/cloudflare/tunnels/cidr/add/${domainId}`, data),
+  deleteCidrRoute: (domainId: number | string, routeId: string, tunnelId?: string) =>
+    api.post(`/cloudflare/tunnels/cidr/delete/${domainId}`, { route_id: routeId, tunnel_id: tunnelId }),
+
+  // Hostname Routes
+  getHostnameRoutes: (domainId: number | string, tunnelId?: string) =>
+    api.post<HostnameRoute[]>(`/cloudflare/tunnels/hostnameroutes/data/${domainId}`, tunnelId ? { tunnel_id: tunnelId } : {}),
+  addHostnameRoute: (domainId: number | string, data: {
+    tunnel_id: string
+    hostname: string
+    comment?: string
+  }) => api.post(`/cloudflare/tunnels/hostnameroutes/add/${domainId}`, data),
+  deleteHostnameRoute: (domainId: number | string, routeId: string, tunnelId?: string) =>
+    api.post(`/cloudflare/tunnels/hostnameroutes/delete/${domainId}`, { route_id: routeId, tunnel_id: tunnelId }),
 }
 
 // Types
@@ -1123,9 +1242,30 @@ export interface SystemConfig {
   bark_enabled?: boolean
   bark_server?: string
   bark_key?: string
-  // 企业微信
+  // 企业微信群机器人
   wechat_enabled?: boolean
   wechat_webhook?: string
+  // 钉钉机器人
+  dingtalk_enabled?: boolean
+  dingtalk_webhook?: string
+  dingtalk_secret?: string
+  // 飞书机器人
+  feishu_enabled?: boolean
+  feishu_webhook?: string
+  feishu_secret?: string
+  // 企业微信应用消息
+  wxwork_app_enabled?: boolean
+  wxwork_corpid?: string
+  wxwork_agentid?: string
+  wxwork_secret?: string
+  wxwork_touser?: string
+  // 微信公众号模板消息
+  wxtpl_enabled?: boolean
+  wxtpl_appid?: string
+  wxtpl_appsecret?: string
+  wxtpl_template_id?: string
+  wxtpl_users?: string
+  wxtpl_url?: string
   // 代理
   proxy_enabled?: boolean
   proxy_server?: string
@@ -1175,7 +1315,6 @@ export interface CronConfig {
   key?: string
   /** Cron 任务调度表达式分项配置 */
   cron_schedule?: string
-  cron_optimize?: string
   cron_cert?: string
   cron_expire?: string
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1191,9 +1330,6 @@ export interface DashboardStats {
   dmonitor_active: number
   dmonitor_status_0: number
   dmonitor_status_1: number
-  optimizeip_active?: number
-  optimizeip_status_1?: number
-  optimizeip_status_2?: number
   certorder_status_3: number
   certorder_status_5: number
   certorder_status_6: number
@@ -1201,4 +1337,88 @@ export interface DashboardStats {
   certdeploy_status_0: number
   certdeploy_status_1: number
   certdeploy_status_2: number
+}
+
+// Cloudflare 增强功能类型
+export interface CloudflareBatchResult {
+  success: number
+  failed: Array<{ hostname?: string; hostname_id?: string; msg: string }>
+}
+
+export interface CloudflareTxtTargetCandidate {
+  domain_id: number
+  domain_name: string
+  record_name: string
+  account_id: number
+  account_type: string
+  account_type_name: string
+  account_display_name: string
+  is_current_domain: boolean
+}
+
+export interface CloudflareTxtTargetsResult {
+  hostname: string
+  candidates: CloudflareTxtTargetCandidate[]
+}
+
+export interface TunnelPublicHostname {
+  hostname: string
+  path?: string
+  service: string
+  zone_name?: string
+  zone_id?: string
+}
+
+export interface CustomHostname {
+  id: string
+  hostname: string
+  custom_origin_server?: string
+  ssl: {
+    status: string
+    method: string
+    type: string
+    min_tls_version?: string
+    validation_records?: Array<{
+      txt_name?: string
+      txt_value?: string
+      http_url?: string
+      http_body?: string
+    }>
+    settings?: {
+      min_tls_version?: string
+    }
+  }
+  status: string
+  created_at?: string
+  modified_at?: string
+}
+
+export interface CloudflareTunnel {
+  id: string
+  name: string
+  created_at: string
+  deleted_at?: string
+  status?: string
+  connections?: Array<{
+    colo_name: string
+    id: string
+    is_pending: boolean
+  }>
+}
+
+export interface CidrRoute {
+  id: string
+  tunnel_id: string
+  network: string
+  comment: string
+  created_at: string
+  virtual_network_id?: string
+}
+
+export interface HostnameRoute {
+  id: string
+  tunnel_id: string
+  hostname: string
+  comment: string
+  created_at: string
 }

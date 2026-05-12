@@ -109,7 +109,7 @@ func (p *Provider) request(ctx context.Context, method, path string, params map[
 	if status, ok := result["status"].(string); ok && status != "ok" {
 		if errMsg, ok := result["errorMessage"].(string); ok {
 			p.lastErr = errMsg
-			return nil, fmt.Errorf(errMsg)
+			return nil, fmt.Errorf("%s", errMsg)
 		}
 		p.lastErr = "API 请求失败"
 		return nil, fmt.Errorf("API 请求失败")
@@ -623,9 +623,9 @@ func (p *Provider) SetDomainRecordStatus(ctx context.Context, recordID string, e
 	}
 
 	params := map[string]string{
-		"domain": oldDomain,
-		"zone":   p.domain,
-		"type":   oldType,
+		"domain":  oldDomain,
+		"zone":    p.domain,
+		"type":    oldType,
 		"disable": disable,
 	}
 

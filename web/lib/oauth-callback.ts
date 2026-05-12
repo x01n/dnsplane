@@ -8,7 +8,7 @@
  *
  * 参数 _ 已弃用，保留签名避免全量改调用方；后续可清理。
  */
-export function consumeOAuthTokensFromUrl(_: URLSearchParams): {
+export function consumeOAuthTokensFromUrl(): {
   access_token: string | null
   refresh_token: string | null
 } {

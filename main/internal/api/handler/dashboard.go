@@ -52,9 +52,6 @@ func GetDashboardStats(c *gin.Context) {
 		DmonitorActive    int64 `gorm:"column:dmonitor_active"`
 		DmonitorStatus0   int64 `gorm:"column:dmonitor_status_0"`
 		DmonitorStatus1   int64 `gorm:"column:dmonitor_status_1"`
-		OptimizeipActive  int64 `gorm:"column:optimizeip_active"`
-		OptimizeipStatus1 int64 `gorm:"column:optimizeip_status_1"`
-		OptimizeipStatus2 int64 `gorm:"column:optimizeip_status_2"`
 		CertorderStatus3  int64 `gorm:"column:certorder_status_3"`
 		CertorderStatus5  int64 `gorm:"column:certorder_status_5"`
 		CertorderStatus6  int64 `gorm:"column:certorder_status_6"`
@@ -80,9 +77,6 @@ SELECT
   (SELECT COUNT(*) FROM dm_tasks WHERE active = 1) AS dmonitor_active,
   (SELECT COUNT(*) FROM dm_tasks WHERE status = 0) AS dmonitor_status_0,
   (SELECT COUNT(*) FROM dm_tasks WHERE status = 1) AS dmonitor_status_1,
-  (SELECT COUNT(*) FROM optimize_ips WHERE active = 1) AS optimizeip_active,
-  (SELECT COUNT(*) FROM optimize_ips WHERE status = 1) AS optimizeip_status_1,
-  (SELECT COUNT(*) FROM optimize_ips WHERE status = 2) AS optimizeip_status_2,
   (SELECT COUNT(*) FROM cert_orders WHERE status = 3) AS certorder_status_3,
   (SELECT COUNT(*) FROM cert_orders WHERE status < 0) AS certorder_status_5,
   (SELECT COUNT(*) FROM cert_orders WHERE expire_time IS NOT NULL AND expire_time < ? AND expire_time >= ?) AS certorder_status_6,
@@ -116,9 +110,6 @@ SELECT
 		"dmonitor_status_0":   dr.DmonitorStatus0,
 		"dmonitor_status_1":   dr.DmonitorStatus1,
 		"dmonitor_state":      dmonitorState,
-		"optimizeip_active":   dr.OptimizeipActive,
-		"optimizeip_status_1": dr.OptimizeipStatus1,
-		"optimizeip_status_2": dr.OptimizeipStatus2,
 		"certorder_status_3":  dr.CertorderStatus3,
 		"certorder_status_5":  dr.CertorderStatus5,
 		"certorder_status_6":  dr.CertorderStatus6,
@@ -386,33 +377,24 @@ func TestProxy(c *gin.Context) {
 func GetTaskStatus(c *gin.Context) {
 
 	// 获取各任务统计
-	var scheduleCount, optimizeCount, certAutoCount, domainNoticeCount int64
-	var scheduleActiveCount, optimizeActiveCount int64
+	var scheduleCount, certAutoCount, domainNoticeCount int64
+	var scheduleActiveCount int64
 
 	database.WithContext(c).Model(&models.ScheduleTask{}).Count(&scheduleCount)
 	database.WithContext(c).Model(&models.ScheduleTask{}).Where("active = ?", true).Count(&scheduleActiveCount)
-
-	database.WithContext(c).Model(&models.OptimizeIP{}).Count(&optimizeCount)
-	database.WithContext(c).Model(&models.OptimizeIP{}).Where("active = ?", true).Count(&optimizeActiveCount)
 
 	database.WithContext(c).Model(&models.CertOrder{}).Where("is_auto = ?", true).Count(&certAutoCount)
 	database.WithContext(c).Model(&models.Domain{}).Where("is_notice = ?", true).Count(&domainNoticeCount)
 
 	// 获取最近执行时间
-	var scheduleTime, optimizeTime string
+	var scheduleTime string
 	database.WithContext(c).Model(&models.SysConfig{}).Where("`key` = ?", "schedule_time").Pluck("value", &scheduleTime)
-	database.WithContext(c).Model(&models.SysConfig{}).Where("`key` = ?", "optimize_time").Pluck("value", &optimizeTime)
 
 	middleware.SuccessResponse(c, gin.H{
 		"schedule": gin.H{
 			"total":     scheduleCount,
 			"active":    scheduleActiveCount,
 			"last_time": scheduleTime,
-		},
-		"optimize": gin.H{
-			"total":     optimizeCount,
-			"active":    optimizeActiveCount,
-			"last_time": optimizeTime,
 		},
 		"cert_auto":     certAutoCount,
 		"domain_notice": domainNoticeCount,
@@ -423,7 +405,7 @@ func GetTaskStatus(c *gin.Context) {
 func GetCronConfig(c *gin.Context) {
 
 	// 从数据库读取cron配置
-	configKeys := []string{"cron_schedule", "cron_optimize", "cron_cert", "cron_expire"}
+	configKeys := []string{"cron_schedule", "cron_cert", "cron_expire"}
 	configs := make(map[string]string)
 
 	for _, key := range configKeys {
@@ -435,9 +417,6 @@ func GetCronConfig(c *gin.Context) {
 	// 设置默认值
 	if configs["cron_schedule"] == "" {
 		configs["cron_schedule"] = "*/1 * * * *" // 每分钟
-	}
-	if configs["cron_optimize"] == "" {
-		configs["cron_optimize"] = "*/30 * * * *" // 每30分钟
 	}
 	if configs["cron_cert"] == "" {
 		configs["cron_cert"] = "0 * * * *" // 每小时
@@ -685,7 +664,6 @@ func UpdateCronConfig(c *gin.Context) {
 
 	var req struct {
 		CronSchedule string `json:"cron_schedule"`
-		CronOptimize string `json:"cron_optimize"`
 		CronCert     string `json:"cron_cert"`
 		CronExpire   string `json:"cron_expire"`
 	}
@@ -710,7 +688,6 @@ func UpdateCronConfig(c *gin.Context) {
 	}
 
 	updateConfig("cron_schedule", req.CronSchedule)
-	updateConfig("cron_optimize", req.CronOptimize)
 	updateConfig("cron_cert", req.CronCert)
 	updateConfig("cron_expire", req.CronExpire)
 

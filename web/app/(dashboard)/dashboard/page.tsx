@@ -17,7 +17,6 @@ import {
   HardDrive,
   MemoryStick,
   Info,
-  Zap,
   RefreshCw,
 } from 'lucide-react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -263,36 +262,6 @@ export default function DashboardPage() {
           </CardContent>
         </Card>
 
-        {/* 优选IP状态 */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Zap className="h-5 w-5" />
-              优选IP
-            </CardTitle>
-            <CardDescription>优选IP任务情况</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="flex items-center justify-between">
-              <span className="text-sm text-muted-foreground">已启用任务</span>
-              <span className="font-medium">{stats?.optimizeip_active ?? 0}</span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-sm text-muted-foreground">正在运行</span>
-              <Badge variant="outline" className="bg-blue-50 dark:bg-blue-950 text-blue-700 dark:text-blue-300 border-blue-200 dark:border-blue-800">
-                <Activity className="h-3 w-3 mr-1" />
-                {stats?.optimizeip_status_1 ?? 0}
-              </Badge>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-sm text-muted-foreground">执行失败</span>
-              <Badge variant="destructive">
-                <XCircle className="h-3 w-3 mr-1" />
-                {stats?.optimizeip_status_2 ?? 0}
-              </Badge>
-            </div>
-          </CardContent>
-        </Card>
 
         {/* 证书状态 */}
         <Card>
