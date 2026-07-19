@@ -14,6 +14,7 @@ import { requestLogApi, RequestLog, RequestLogStats } from "@/lib/api"
 import { Search, RefreshCw, Trash2, AlertCircle, CheckCircle, Clock, Database, FileText, Code } from "lucide-react"
 import { TableSkeleton } from '@/components/table-skeleton'
 import { EmptyState } from '@/components/empty-state'
+import { Pagination } from '@/components/pagination'
 import { toast } from "sonner"
 
 export default function RequestLogsPage() {
@@ -541,29 +542,13 @@ export default function RequestLogsPage() {
           )}
 
           {total > pageSize && (
-            <div className="flex flex-wrap items-center justify-between gap-2 mt-4">
-              <div className="text-sm text-muted-foreground">
-                共 {total} 条记录
-              </div>
-              <div className="flex gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={page === 1}
-                  onClick={() => setPage(page - 1)}
-                >
-                  上一页
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={page * pageSize >= total}
-                  onClick={() => setPage(page + 1)}
-                >
-                  下一页
-                </Button>
-              </div>
-            </div>
+            <Pagination
+              page={page}
+              pageSize={pageSize}
+              total={total}
+              onPageChange={setPage}
+              showPageSize={false}
+            />
           )}
         </CardContent>
       </Card>

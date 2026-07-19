@@ -144,6 +144,7 @@ type LoginRequest struct {
 	Password    string `json:"password" binding:"required"`
 	CaptchaID   string `json:"captcha_id"`
 	CaptchaCode string `json:"captcha_code"`
+	VerifyToken string `json:"verify_token"`
 	TOTPCode    string `json:"totp_code"`
 }
 
@@ -167,7 +168,11 @@ func GetCaptcha(c *gin.Context) {
 func GetAuthConfig(c *gin.Context) {
 	var captchaConfig models.SysConfig
 	var needCaptcha bool = true
-	if err := database.DB.Where("`key` = ?", "login_captcha").First(&captchaConfig).Error; err == nil {
+	if err := database.DB.Where("`key` = ?", "captcha_enabled").First(&captchaConfig).Error; err == nil {
+		if captchaConfig.Value == "0" || captchaConfig.Value == "false" {
+			needCaptcha = false
+		}
+	} else if err := database.DB.Where("`key` = ?", "login_captcha").First(&captchaConfig).Error; err == nil {
 		if captchaConfig.Value == "0" || captchaConfig.Value == "false" {
 			needCaptcha = false
 		}
@@ -177,10 +182,15 @@ func GetAuthConfig(c *gin.Context) {
 	passwordRegister := GetSysConfigValue("auth_password_register") == "true" || GetSysConfigValue("auth_password_register") == "1"
 	magicLinkLogin := GetSysConfigValue("auth_magic_link_login") == "true" || GetSysConfigValue("auth_magic_link_login") == "1"
 	turnstileSite := strings.TrimSpace(GetSysConfigValue("turnstile_site_key"))
+	captchaType := GetSysConfigValue("captcha_type")
+	if captchaType == "" {
+		captchaType = "image"
+	}
 
 	data := gin.H{
 		"login_captcha":             needCaptcha,
 		"captcha_enabled":           needCaptcha,
+		"captcha_type":              captchaType,
 		"register_enabled":          registerEnabled,
 		"password_register_enabled": passwordRegister,
 		"magic_link_login_enabled":  magicLinkLogin,
@@ -215,20 +225,32 @@ func Login(c *gin.Context) {
 	// Check if captcha is enabled
 	var captchaConfig models.SysConfig
 	needCaptcha := true
-	if err := database.DB.Where("`key` = ?", "login_captcha").First(&captchaConfig).Error; err == nil {
+	if err := database.DB.Where("`key` = ?", "captcha_enabled").First(&captchaConfig).Error; err == nil {
+		if captchaConfig.Value == "0" || captchaConfig.Value == "false" {
+			needCaptcha = false
+		}
+	} else if err := database.DB.Where("`key` = ?", "login_captcha").First(&captchaConfig).Error; err == nil {
 		if captchaConfig.Value == "0" || captchaConfig.Value == "false" {
 			needCaptcha = false
 		}
 	}
 
 	if needCaptcha {
-		if req.CaptchaID == "" || req.CaptchaCode == "" {
-			c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "验证码不能为空"})
-			return
-		}
-		if !store.Verify(req.CaptchaID, req.CaptchaCode, true) {
-			c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "验证码错误"})
-			return
+		captchaType := GetSysConfigValue("captcha_type")
+		if captchaType == "behavioral" || captchaType == "go-captcha" {
+			if !ConsumeCaptchaVerifyToken(req.VerifyToken) {
+				c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "请先完成验证码"})
+				return
+			}
+		} else {
+			if req.CaptchaID == "" || req.CaptchaCode == "" {
+				c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "验证码不能为空"})
+				return
+			}
+			if !store.Verify(req.CaptchaID, req.CaptchaCode, true) {
+				c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "验证码错误"})
+				return
+			}
 		}
 	}
 

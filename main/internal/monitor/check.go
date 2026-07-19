@@ -215,7 +215,14 @@ func CheckHTTP(ctx context.Context, rawURL string, timeout int, opts *HTTPCheckO
 		maxFollow = 3
 	}
 
-	baseDialer := &net.Dialer{Timeout: time.Duration(timeout) * time.Second}
+	if err := validateHostIP(opts.HostIP); err != nil {
+		return &CheckResult{Success: false, Duration: time.Since(start), Error: err.Error()}
+	}
+
+	baseDialer := &net.Dialer{
+		Timeout: time.Duration(timeout) * time.Second,
+		Control: ssrfDialControl,
+	}
 	// 默认开启 TLS 校验（安全审计 H-3）；仅当监控任务显式勾选"允许自签证书"时退让。
 	tlsCfg := &tls.Config{InsecureSkipVerify: opts.InsecureSkipTLS}
 	transport := &http.Transport{

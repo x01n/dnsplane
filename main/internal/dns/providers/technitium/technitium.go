@@ -56,6 +56,9 @@ func (p *Provider) GetError() string {
 }
 
 func (p *Provider) request(ctx context.Context, method, path string, params map[string]string, body map[string]string) (map[string]interface{}, error) {
+	if params == nil {
+		params = make(map[string]string)
+	}
 	params["token"] = p.token
 
 	reqURL := p.baseURL + path
@@ -504,20 +507,9 @@ func (p *Provider) UpdateDomainRecord(ctx context.Context, recordID, name, recor
 		params["comments"] = ""
 	}
 
-	// Old value params
-	oldValParams := p.buildRecordParams(oldType, "", 1)
-	_, oldMX := p.parseRecordValue(oldRecord)
-	if oldType == "A" || oldType == "AAAA" {
-		if ip, ok := oldRecord["rData"].(map[string]interface{})["ipAddress"].(string); ok {
-			oldValParams["ipAddress"] = ip
-		}
-	} else if oldType == "MX" {
-		if exchange, ok := oldRecord["rData"].(map[string]interface{})["exchange"].(string); ok {
-			oldValParams["exchange"] = exchange
-		}
-		oldValParams["preference"] = strconv.Itoa(oldMX)
-	}
-	// Add other types as needed...
+	// Old value params - use parseRecordValue to correctly extract old values for all types
+	oldVal, oldMX := p.parseRecordValue(oldRecord)
+	oldValParams := p.buildRecordParams(oldType, oldVal, oldMX)
 
 	// New value params
 	newValParams := p.buildRecordParams(recordType, value, mx)
@@ -591,12 +583,11 @@ func (p *Provider) DeleteDomainRecord(ctx context.Context, recordID string) erro
 		"type":   oldType,
 	}
 
-	// Re-send old values
-	rData, _ := oldRecord["rData"].(map[string]interface{})
-	for k, v := range rData {
-		if str, ok := v.(string); ok {
-			params[k] = str
-		}
+	// Use parseRecordValue + buildRecordParams to correctly handle all types
+	oldVal, oldMX := p.parseRecordValue(oldRecord)
+	oldValParams := p.buildRecordParams(oldType, oldVal, oldMX)
+	for k, v := range oldValParams {
+		params[k] = v
 	}
 
 	_, err = p.request(ctx, "POST", "/zones/records/delete", nil, params)

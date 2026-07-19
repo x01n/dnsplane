@@ -162,7 +162,7 @@ func Load(path string) (*Config, error) {
 func generateRandomSecret(length int) string {
 	bytes := make([]byte, length)
 	if _, err := rand.Read(bytes); err != nil {
-		return "dnsplane-fallback-secret-key"
+		panic("crypto/rand 不可用，无法生成安全密钥: " + err.Error())
 	}
 	return hex.EncodeToString(bytes)
 }

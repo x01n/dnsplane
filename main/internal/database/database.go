@@ -148,7 +148,17 @@ func Init(cfg *config.DatabaseConfig) error {
 	// 迁移旧数据：将主库中的日志数据迁移到独立数据库
 	migrateOldData()
 
+	// 重启后清理卡在"处理中"的证书订单（goroutine 已丢失，需要重置状态允许重试）
+	resetStuckOrders()
+
 	return nil
+}
+
+func resetStuckOrders() {
+	result := DB.Model(&models.CertOrder{}).Where("status = ?", 1).Update("status", 0)
+	if result.RowsAffected > 0 {
+		logger.Info("[Database] 重置 %d 个卡在处理中的证书订单", result.RowsAffected)
+	}
 }
 
 // migrateOldData 将旧主库中的日志数据迁移到新的独立数据库并清理旧表
@@ -238,6 +248,7 @@ func migrate() error {
 		&models.User{},
 		&models.UserOAuth{},
 		&models.Account{},
+		&models.DomainCategory{},
 		&models.Domain{},
 		&models.DomainNote{},
 		&models.Permission{},

@@ -231,7 +231,7 @@ func (p *Provider) GetDomainRecords(ctx context.Context, page, pageSize int, key
 				}
 
 				records = append(records, dns.Record{
-					ID:     rec["record_id"].(string),
+					ID:     fmt.Sprintf("%v", rec["record_id"]),
 					Name:   rec["record"].(string),
 					Type:   rec["type"].(string),
 					Value:  rec["value"].(string),
@@ -327,7 +327,7 @@ func (p *Provider) UpdateDomainRecordRemark(ctx context.Context, recordID, remar
 
 func (p *Provider) DeleteDomainRecord(ctx context.Context, recordID string) error {
 	params := map[string]interface{}{
-		"id":          recordID,
+		"record_id":   recordID,
 		"domain_id":   p.domainID,
 		"domain_type": p.domainType,
 	}

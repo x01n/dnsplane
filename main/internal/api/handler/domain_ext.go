@@ -342,3 +342,66 @@ func GetRecordChangeLog(c *gin.Context) {
 	}
 	middleware.SuccessResponse(c, gin.H{"total": result.Total, "list": result.Records})
 }
+
+func GetRecordGroups(c *gin.Context) {
+	if !requireUserModule(c, "domain") {
+		return
+	}
+	domain, ok := loadDomainForAction(c)
+	if !ok {
+		return
+	}
+	provider := getProviderByDomain(c, domain)
+	if provider == nil {
+		return
+	}
+	grouper, ok := provider.(dns.RecordGrouper)
+	if !ok {
+		middleware.SuccessResponse(c, gin.H{"list": []interface{}{}})
+		return
+	}
+	groups, err := grouper.GetRecordGroups(c.Request.Context())
+	if err != nil {
+		middleware.ErrorResponse(c, "获取分组列表失败: "+err.Error())
+		return
+	}
+	middleware.SuccessResponse(c, gin.H{"list": groups})
+}
+
+type changeRecordGroupRequest struct {
+	RecordIDs []string `json:"record_ids" binding:"required"`
+	GroupID   string   `json:"group_id" binding:"required"`
+}
+
+func ChangeRecordGroup(c *gin.Context) {
+	if !requireUserModule(c, "domain") {
+		return
+	}
+	domain, ok := loadDomainForAction(c)
+	if !ok {
+		return
+	}
+	if !ensureDomainWrite(c, strconv.FormatUint(uint64(domain.ID), 10), "") {
+		return
+	}
+	var req changeRecordGroupRequest
+	if err := middleware.BindDecryptedData(c, &req); err != nil {
+		middleware.ErrorResponse(c, "参数解析失败")
+		return
+	}
+	provider := getProviderByDomain(c, domain)
+	if provider == nil {
+		return
+	}
+	grouper, ok := provider.(dns.RecordGrouper)
+	if !ok {
+		middleware.ErrorResponse(c, "当前DNS服务商不支持记录分组")
+		return
+	}
+	if err := grouper.ChangeRecordGroup(c.Request.Context(), req.RecordIDs, req.GroupID); err != nil {
+		middleware.ErrorResponse(c, "修改分组失败: "+err.Error())
+		return
+	}
+	service.Audit.LogAction(c, "change_record_group", domain.Name, fmt.Sprintf("移动 %d 条记录到分组 %s", len(req.RecordIDs), req.GroupID))
+	middleware.SuccessResponse(c, nil)
+}

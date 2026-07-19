@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/url"
 	"strings"
+	"syscall"
 )
 
 // 安全审计 M-3：监控任务的 CheckURL 来源于可添加域名的普通用户，未做任何过滤即发起出站请求，
@@ -26,7 +27,7 @@ var allowedCheckURLSchemes = map[string]struct{}{
 //   - 保留的 DNS 域名（localhost、内网 TLD）同样拒绝
 //
 // 注意：本函数不做 DNS 解析（避免慢解析 + TOCTOU 漂移）；check.go 里的 Dialer
-//       仍会做实际连接，若目标解析到私网，buildInsecureAddrGuard 会在连接阶段二次拦截。
+//       通过 ssrfDialControl 在连接阶段二次拦截解析后指向私网的地址（防 DNS rebinding）。
 func validateCheckURL(rawURL string) error {
 	raw := strings.TrimSpace(rawURL)
 	if raw == "" {
@@ -91,4 +92,36 @@ func isPrivateOrReservedIP(ip net.IP) bool {
 		}
 	}
 	return false
+}
+
+// ssrfDialControl 作为 net.Dialer.Control 的回调，在 connect(2) 之前检查解析后的目标 IP。
+// 防止 DNS rebinding：域名首次验证时返回公网 IP，实际连接时 DNS 返回私网 IP 的攻击向量。
+func ssrfDialControl(network, address string, c syscall.RawConn) error {
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		return fmt.Errorf("ssrf guard: 无法解析地址 %q: %w", address, err)
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return fmt.Errorf("ssrf guard: 无法解析 IP %q", host)
+	}
+	if isPrivateOrReservedIP(ip) {
+		return fmt.Errorf("ssrf guard: 拒绝连接到私网/保留地址 %s", ip)
+	}
+	return nil
+}
+
+// validateHostIP 校验用户提供的 HostIP 字段不指向私网/保留地址。
+func validateHostIP(hostIP string) error {
+	if hostIP == "" {
+		return nil
+	}
+	ip := net.ParseIP(strings.TrimSpace(hostIP))
+	if ip == nil {
+		return fmt.Errorf("host_ip %q 不是有效 IP 地址", hostIP)
+	}
+	if isPrivateOrReservedIP(ip) {
+		return fmt.Errorf("拒绝 host_ip 指向私网/保留地址 %s", ip)
+	}
+	return nil
 }

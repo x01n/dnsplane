@@ -561,7 +561,7 @@ func NotifyConfigKeys() []string { return notifyConfigKeys }
 var notifyConfigKeys = []string{
 	"mail_host", "mail_port", "mail_user", "mail_password", "mail_from", "mail_recv", "mail_secure", "mail_tls",
 	"tgbot_token", "tgbot_chatid",
-	"webhook_url",
+	"webhook_url", "webhook_method", "webhook_content_type", "webhook_headers", "webhook_body", "webhook_content_format", "webhook_user",
 	"discord_webhook",
 	"bark_url", "bark_key",
 	"wechat_webhook",
@@ -607,7 +607,31 @@ func LoadNotifiersFromConfig(manager *NotifyManager, configMap map[string]string
 		}))
 	}
 	if configMap["webhook_url"] != "" {
-		manager.AddNotifier(NewWebhookNotifier(WebhookConfig{URL: configMap["webhook_url"]}))
+		headers := make(map[string]string)
+		if configMap["webhook_headers"] != "" {
+			lines := strings.Split(configMap["webhook_headers"], "\n")
+			for _, line := range lines {
+				line = strings.TrimSpace(line)
+				if line == "" {
+					continue
+				}
+				pos := strings.Index(line, ":")
+				if pos > 0 {
+					key := strings.TrimSpace(line[:pos])
+					val := strings.TrimSpace(line[pos+1:])
+					if key != "" {
+						headers[key] = val
+					}
+				}
+			}
+		}
+		manager.AddNotifier(NewWebhookNotifier(WebhookConfig{
+			URL:         configMap["webhook_url"],
+			Method:      configMap["webhook_method"],
+			Headers:     headers,
+			ContentType: configMap["webhook_content_type"],
+			Template:    configMap["webhook_body"],
+		}))
 	}
 	if configMap["discord_webhook"] != "" {
 		manager.AddNotifier(NewDiscordNotifier(DiscordConfig{WebhookURL: configMap["discord_webhook"]}))

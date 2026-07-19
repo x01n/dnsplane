@@ -491,7 +491,7 @@ export default function CloudflareTunnelsPage() {
                                 setSelectedTunnelForHostname(null)
                                 fetchPublicHostnames(tunnel.id)
                               }}>
-                                <Globe className="h-3 w-3 mr-1" /> 公网
+                                <Globe className="h-3 w-3 mr-1" /> 穿透
                               </Button>
                               <Button size="icon" variant="ghost" onClick={() => { setSelectedTunnel(tunnel); setDeleteDialogOpen(true) }}>
                                 <Trash2 className="h-4 w-4 text-destructive" />
@@ -683,7 +683,7 @@ export default function CloudflareTunnelsPage() {
           <CardHeader>
             <div className="flex items-center justify-between">
               <div>
-                <CardTitle>Public Hostnames</CardTitle>
+                <CardTitle>穿透配置</CardTitle>
                 <p className="text-sm text-muted-foreground mt-1">配置 Tunnel ingress 规则，并自动同步同名 CNAME 记录</p>
               </div>
               <Button size="sm" variant="outline" onClick={() => setSelectedTunnelForPublic(null)}>
@@ -718,7 +718,7 @@ export default function CloudflareTunnelsPage() {
               {publicLoading ? (
                 <TableSkeleton rows={3} columns={5} />
               ) : publicHostnames.length === 0 ? (
-                <EmptyState icon={Globe} title="暂无 Public Hostname" />
+                <EmptyState icon={Globe} title="暂无穿透配置" />
               ) : (
                 <Table>
                   <TableHeader>

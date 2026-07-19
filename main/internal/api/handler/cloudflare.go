@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"main/internal/api/middleware"
+	"main/internal/cache"
 	"main/internal/database"
 	maindns "main/internal/dns"
 	"main/internal/models"
@@ -12,9 +13,31 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
+
+// cfCacheKey 生成 Cloudflare 缓存 key
+func cfCacheKey(handler string, id string) string {
+	return "cf:" + handler + ":" + id
+}
+
+// cfCacheDelete 删除指定前缀的缓存
+func cfCacheDelete(handler string, id string) {
+	if cache.C == nil {
+		return
+	}
+	_ = cache.C.Delete(cfCacheKey(handler, id))
+}
+
+// cfCacheDeletePrefix 删除指定前缀的所有缓存
+func cfCacheDeletePrefix(handler string) {
+	if cache.C == nil {
+		return
+	}
+	_ = cache.C.DeletePrefix("cf:" + handler + ":")
+}
 
 // getCFEnhanceService 从账户配置构建 Cloudflare 增强服务
 func getCFEnhanceService(accountID uint) (*service.EnhanceService, *models.Account, error) {
@@ -29,7 +52,7 @@ func getCFEnhanceService(accountID uint) (*service.EnhanceService, *models.Accou
 
 	var config map[string]string
 	if account.Config != "" {
-		decrypted := account.Config // 假设已解密
+		decrypted := account.Config
 		json.Unmarshal([]byte(decrypted), &config)
 	}
 
@@ -37,11 +60,11 @@ func getCFEnhanceService(accountID uint) (*service.EnhanceService, *models.Accou
 	apiKey := config["apikey"]
 	proxy := config["proxy"] == "1"
 
-	auth := service.DetectAuthMode(apiKey)
-
-	// Tunnels API 必须使用 API Token
-	if auth == 0 {
-		return nil, nil, fmt.Errorf("Tunnel API 不支持 Global API Key，请使用 API Token")
+	auth := 0
+	if config["auth"] == "1" {
+		auth = 1
+	} else {
+		auth = service.DetectAuthMode(apiKey)
 	}
 
 	svc := service.NewEnhanceService(email, apiKey, auth, proxy, config["account_id"])
@@ -563,6 +586,16 @@ func GetCustomHostnames(c *gin.Context) {
 		zoneID = domain.ThirdID
 	}
 
+	// 检查缓存
+	cacheKey := cfCacheKey("hostnames", fmt.Sprintf("%d:%s:%d:%d", id, zoneID, page, pageSize))
+	if cache.C != nil {
+		var cached gin.H
+		if cache.C.GetJSON(cacheKey, &cached) {
+			c.JSON(http.StatusOK, cached)
+			return
+		}
+	}
+
 	items, total, err := svc.ListCustomHostnames(zoneID, page, pageSize)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 1, "msg": err.Error()})
@@ -576,12 +609,19 @@ func GetCustomHostnames(c *gin.Context) {
 		rows = append(rows, row)
 	}
 
-	c.JSON(http.StatusOK, gin.H{
+	result := gin.H{
 		"code":  0,
 		"data":  rows,
 		"total": total,
 		"rows":  rows,
-	})
+	}
+
+	// 写入缓存 2min
+	if cache.C != nil {
+		_ = cache.C.SetJSON(cacheKey, result, 2*time.Minute)
+	}
+
+	c.JSON(http.StatusOK, result)
 }
 
 // AddCustomHostname 添加自定义主机名
@@ -648,6 +688,9 @@ func AddCustomHostname(c *gin.Context) {
 	// 记录日志
 	addCFLog(account.ID, domain.Name, "添加自定义主机名", hostname)
 
+	// 清除 hostnames 缓存
+	cfCacheDeletePrefix("hostnames")
+
 	c.JSON(http.StatusOK, gin.H{
 		"code": 0,
 		"msg":  "添加成功",
@@ -679,12 +722,20 @@ func UpdateCustomHostname(c *gin.Context) {
 	}
 
 	if sslMethod := cfString(body, c, "ssl_method"); sslMethod != "" {
-		updates["ssl"] = map[string]interface{}{
-			"method": sslMethod,
-			"settings": map[string]interface{}{
-				"min_tls_version": cfStringDefault(body, c, "min_tls_version", "1.2"),
-			},
+		if sslMethod == "" {
+			sslMethod = "http"
 		}
+		sslPayload := map[string]interface{}{
+			"method": sslMethod,
+			"type":   "dv",
+		}
+		minTLS := cfStringDefault(body, c, "min_tls_version", "1.0")
+		if minTLS != "" {
+			sslPayload["settings"] = map[string]interface{}{
+				"min_tls_version": minTLS,
+			}
+		}
+		updates["ssl"] = sslPayload
 	}
 
 	result, err := svc.UpdateCustomHostname(domain.ThirdID, hostnameID, updates)
@@ -694,6 +745,9 @@ func UpdateCustomHostname(c *gin.Context) {
 	}
 
 	addCFLog(account.ID, domain.Name, "更新自定义主机名", hostnameID)
+
+	// 清除 hostnames 缓存
+	cfCacheDeletePrefix("hostnames")
 
 	c.JSON(http.StatusOK, gin.H{
 		"code": 0,
@@ -729,6 +783,9 @@ func DeleteCustomHostname(c *gin.Context) {
 	database.DB.Where("hostname_id = ?", hostnameID).Delete(&models.CloudflareHostname{})
 
 	addCFLog(account.ID, domain.Name, "删除自定义主机名", hostnameID)
+
+	// 清除 hostnames 缓存
+	cfCacheDeletePrefix("hostnames")
 
 	c.JSON(http.StatusOK, gin.H{
 		"code": 0,
@@ -790,6 +847,8 @@ func BatchAddCustomHostnames(c *gin.Context) {
 	}
 
 	addCFLog(account.ID, domain.Name, "批量添加自定义主机名", fmt.Sprintf("成功 %d 个，失败 %d 个", success, len(failed)))
+	// 清除 hostnames 缓存
+	cfCacheDeletePrefix("hostnames")
 	c.JSON(http.StatusOK, gin.H{"code": 0, "msg": fmt.Sprintf("成功添加 %d 个自定义主机名", success), "data": gin.H{"success": success, "failed": failed}})
 }
 
@@ -819,7 +878,9 @@ func BatchUpdateCustomHostnames(c *gin.Context) {
 	updates := make(map[string]interface{})
 	updates["custom_origin_server"] = customOrigin
 	if sslMethod != "" || minTLSVersion != "" {
-		ssl := map[string]interface{}{}
+		ssl := map[string]interface{}{
+			"type": "dv",
+		}
 		if sslMethod != "" {
 			ssl["method"] = sslMethod
 		}
@@ -845,6 +906,8 @@ func BatchUpdateCustomHostnames(c *gin.Context) {
 	}
 
 	addCFLog(account.ID, domain.Name, "批量更新自定义主机名", fmt.Sprintf("成功 %d 个，失败 %d 个", success, len(failed)))
+	// 清除 hostnames 缓存
+	cfCacheDeletePrefix("hostnames")
 	c.JSON(http.StatusOK, gin.H{"code": 0, "msg": fmt.Sprintf("成功更新 %d 个自定义主机名", success), "data": gin.H{"success": success, "failed": failed}})
 }
 
@@ -876,6 +939,8 @@ func BatchDeleteCustomHostnames(c *gin.Context) {
 	}
 
 	addCFLog(account.ID, domain.Name, "批量删除自定义主机名", fmt.Sprintf("成功 %d 个，失败 %d 个", success, len(failed)))
+	// 清除 hostnames 缓存
+	cfCacheDeletePrefix("hostnames")
 	c.JSON(http.StatusOK, gin.H{"code": 0, "msg": fmt.Sprintf("成功删除 %d 个自定义主机名", success), "data": gin.H{"success": success, "failed": failed}})
 }
 
@@ -948,6 +1013,246 @@ func RefreshCustomHostname(c *gin.Context) {
 	})
 }
 
+// SetupHostnameValidation 一键配置 custom hostname 验证所需的 DNS 记录
+func SetupHostnameValidation(c *gin.Context) {
+	id, _ := strconv.ParseUint(c.Param("id"), 10, 32)
+
+	svc, domain, _, err := getCFDomainContextForRequest(c, uint(id))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 1, "msg": err.Error()})
+		return
+	}
+
+	body := cfRequestBody(c)
+	hostnameID := cfString(body, c, "hostname_id")
+	if hostnameID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 1, "msg": "hostname_id 不能为空"})
+		return
+	}
+
+	// 从 Cloudflare 获取最新验证信息
+	result, err := svc.GetCustomHostname(domain.ThirdID, hostnameID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 1, "msg": "获取主机名信息失败: " + err.Error()})
+		return
+	}
+
+	hostname, _ := result["hostname"].(string)
+	if hostname == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 1, "msg": "主机名为空"})
+		return
+	}
+
+	// 如果 SSL 已过期或错误状态，先 PATCH SSL 触发重新验证
+	sslStatus := ""
+	sslMethod := "http"
+	if ssl, ok := result["ssl"].(map[string]interface{}); ok {
+		sslStatus, _ = ssl["status"].(string)
+		if m, _ := ssl["method"].(string); m != "" {
+			sslMethod = m
+		}
+	}
+	if sslStatus == "expired" || sslStatus == "deleted" || sslStatus == "validation_timed_out" {
+		updates := map[string]interface{}{
+			"ssl": map[string]interface{}{
+				"method": sslMethod,
+				"type":   "dv",
+			},
+		}
+		newResult, patchErr := svc.UpdateCustomHostname(domain.ThirdID, hostnameID, updates)
+		if patchErr != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"code": 1, "msg": "重新激活 SSL 失败: " + patchErr.Error()})
+			return
+		}
+		result = newResult
+	}
+
+	type dnsTask struct {
+		RecordName string
+		RecordType string
+		Value      string
+		Purpose    string
+	}
+
+	var tasks []dnsTask
+
+	// 收集 ownership_verification TXT 记录
+	if ov, ok := result["ownership_verification"].(map[string]interface{}); ok {
+		if ovType, _ := ov["type"].(string); strings.EqualFold(ovType, "txt") {
+			if name, _ := ov["name"].(string); name != "" {
+				if value, _ := ov["value"].(string); value != "" {
+					tasks = append(tasks, dnsTask{
+						RecordName: name,
+						RecordType: "TXT",
+						Value:      value,
+						Purpose:    "ownership_verification",
+					})
+				}
+			}
+		}
+	}
+
+	// 收集 SSL validation_records
+	if ssl, ok := result["ssl"].(map[string]interface{}); ok {
+		if valRecords, ok := ssl["validation_records"].([]interface{}); ok {
+			for _, vr := range valRecords {
+				rec, ok := vr.(map[string]interface{})
+				if !ok {
+					continue
+				}
+				if txtName, _ := rec["txt_name"].(string); txtName != "" {
+					if txtValue, _ := rec["txt_value"].(string); txtValue != "" {
+						tasks = append(tasks, dnsTask{
+							RecordName: txtName,
+							RecordType: "TXT",
+							Value:      txtValue,
+							Purpose:    "ssl_validation",
+						})
+					}
+				}
+				if cnameName, _ := rec["cname"].(string); cnameName != "" {
+					if cnameTarget, _ := rec["cname_target"].(string); cnameTarget != "" {
+						tasks = append(tasks, dnsTask{
+							RecordName: cnameName,
+							RecordType: "CNAME",
+							Value:      cnameTarget,
+							Purpose:    "ssl_validation",
+						})
+					}
+				}
+			}
+		}
+	}
+
+	// 如果没有单独的 validation records，添加 DCV delegation CNAME
+	if len(tasks) == 0 || sslStatus == "expired" || sslStatus == "deleted" {
+		dcvUuid, dcvErr := svc.GetDcvDelegationUUID(domain.ThirdID)
+		if dcvErr == nil && dcvUuid != "" {
+			tasks = append(tasks, dnsTask{
+				RecordName: "_acme-challenge." + hostname,
+				RecordType: "CNAME",
+				Value:      hostname + "." + dcvUuid + ".dcv.cloudflare.com",
+				Purpose:    "dcv_delegation",
+			})
+		}
+	}
+
+	if len(tasks) == 0 {
+		c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "无需配置验证记录（可能已验证通过或验证信息为空）", "data": gin.H{"added": 0, "results": []gin.H{}}})
+		return
+	}
+
+	// 对每条验证记录尝试找到面板中匹配的域名并添加
+	var results []gin.H
+	added := 0
+	for _, task := range tasks {
+		recordFQDN := task.RecordName
+		targetDomain, recordName := cfMatchFQDNToDomain(recordFQDN)
+		if targetDomain == nil {
+			results = append(results, gin.H{
+				"fqdn":    recordFQDN,
+				"type":    task.RecordType,
+				"purpose": task.Purpose,
+				"status":  "skipped",
+				"msg":     "未找到匹配的托管域名",
+			})
+			continue
+		}
+
+		provider, err := getDNSProviderByDomain(targetDomain)
+		if err != nil {
+			results = append(results, gin.H{
+				"fqdn":    recordFQDN,
+				"type":    task.RecordType,
+				"purpose": task.Purpose,
+				"status":  "error",
+				"msg":     "获取DNS服务商失败: " + err.Error(),
+			})
+			continue
+		}
+
+		ctx := c.Request.Context()
+
+		// 确定 TTL 列表：如果域名已保存 MinTTL，直接使用；否则按 1→60→600 探测
+		ttlList := []int{1, 60, 600}
+		if targetDomain.MinTTL > 0 {
+			ttlList = []int{targetDomain.MinTTL}
+		}
+
+		recordID, skipped, usedTTL, addErr := maindns.EnsureChallengeRecordWithTTLProbe(ctx, provider, recordName, task.RecordType, task.Value, "", ttlList, "cf-hostname-validation")
+		if addErr != nil {
+			results = append(results, gin.H{
+				"fqdn":    recordFQDN,
+				"type":    task.RecordType,
+				"purpose": task.Purpose,
+				"status":  "error",
+				"msg":     addErr.Error(),
+			})
+			continue
+		}
+
+		// 如果探测到新的 MinTTL，保存到域名
+		if usedTTL > 0 && targetDomain.MinTTL == 0 {
+			database.DB.Model(targetDomain).Update("min_ttl", usedTTL)
+		}
+
+		status := "added"
+		if skipped {
+			status = "exists"
+		} else {
+			added++
+		}
+		results = append(results, gin.H{
+			"fqdn":      recordFQDN,
+			"type":      task.RecordType,
+			"purpose":   task.Purpose,
+			"status":    status,
+			"record_id": recordID,
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"code": 0,
+		"msg":  fmt.Sprintf("配置完成，新增 %d 条记录", added),
+		"data": gin.H{
+			"added":   added,
+			"results": results,
+		},
+	})
+}
+
+// cfMatchFQDNToDomain 根据 FQDN 找到面板中最匹配的域名和记录名
+func cfMatchFQDNToDomain(fqdn string) (*models.Domain, string) {
+	fqdn = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(fqdn)), ".")
+
+	var domains []models.Domain
+	database.DB.Find(&domains)
+
+	var bestDomain *models.Domain
+	bestLength := 0
+
+	for i := range domains {
+		domainName := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(domains[i].Name)), ".")
+		if fqdn == domainName || strings.HasSuffix(fqdn, "."+domainName) {
+			if len(domainName) > bestLength {
+				bestDomain = &domains[i]
+				bestLength = len(domainName)
+			}
+		}
+	}
+
+	if bestDomain == nil {
+		return nil, ""
+	}
+
+	domainName := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(bestDomain.Name)), ".")
+	recordName := "@"
+	if fqdn != domainName {
+		recordName = strings.TrimSuffix(fqdn, "."+domainName)
+	}
+	return bestDomain, recordName
+}
+
 // ========== Fallback Origin ==========
 
 // GetFallbackOrigin 获取 Fallback Origin
@@ -960,16 +1265,33 @@ func GetFallbackOrigin(c *gin.Context) {
 		return
 	}
 
+	// 检查缓存
+	cacheKey := cfCacheKey("fallback", strconv.FormatUint(id, 10))
+	if cache.C != nil {
+		var cached gin.H
+		if cache.C.GetJSON(cacheKey, &cached) {
+			c.JSON(http.StatusOK, cached)
+			return
+		}
+	}
+
 	origin, err := svc.GetFallbackOrigin(domain.ThirdID)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 1, "msg": err.Error()})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
+	result := gin.H{
 		"code": 0,
 		"data": gin.H{"origin": origin},
-	})
+	}
+
+	// 写入缓存 60s
+	if cache.C != nil {
+		_ = cache.C.SetJSON(cacheKey, result, 60*time.Second)
+	}
+
+	c.JSON(http.StatusOK, result)
 }
 
 // SetFallbackOrigin 设置 Fallback Origin
@@ -997,6 +1319,9 @@ func SetFallbackOrigin(c *gin.Context) {
 
 	addCFLog(account.ID, domain.Name, "设置 Fallback Origin", origin)
 
+	// 清除缓存
+	cfCacheDelete("fallback", strconv.FormatUint(id, 10))
+
 	c.JSON(http.StatusOK, gin.H{
 		"code": 0,
 		"msg":  "设置成功",
@@ -1022,6 +1347,9 @@ func DeleteFallbackOrigin(c *gin.Context) {
 
 	addCFLog(account.ID, domain.Name, "删除 Fallback Origin", "")
 
+	// 清除缓存
+	cfCacheDelete("fallback", strconv.FormatUint(id, 10))
+
 	c.JSON(http.StatusOK, gin.H{
 		"code": 0,
 		"msg":  "删除成功",
@@ -1040,16 +1368,33 @@ func GetDcvDelegationUUID(c *gin.Context) {
 		return
 	}
 
+	// 检查缓存
+	cacheKey := cfCacheKey("dcv", strconv.FormatUint(id, 10))
+	if cache.C != nil {
+		var cached gin.H
+		if cache.C.GetJSON(cacheKey, &cached) {
+			c.JSON(http.StatusOK, cached)
+			return
+		}
+	}
+
 	uuid, err := svc.GetDcvDelegationUUID(domain.ThirdID)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 1, "msg": err.Error()})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
+	result := gin.H{
 		"code": 0,
 		"data": gin.H{"uuid": uuid},
-	})
+	}
+
+	// 写入缓存 60s
+	if cache.C != nil {
+		_ = cache.C.SetJSON(cacheKey, result, 60*time.Second)
+	}
+
+	c.JSON(http.StatusOK, result)
 }
 
 // ========== Tunnels ==========
@@ -1076,6 +1421,16 @@ func GetTunnels(c *gin.Context) {
 		}
 	}
 
+	// 检查缓存
+	cacheKey := cfCacheKey("tunnels", strconv.FormatUint(id, 10))
+	if cache.C != nil {
+		var cached gin.H
+		if cache.C.GetJSON(cacheKey, &cached) {
+			c.JSON(http.StatusOK, cached)
+			return
+		}
+	}
+
 	items, err := svc.ListTunnels(accountID)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 1, "msg": err.Error()})
@@ -1088,13 +1443,20 @@ func GetTunnels(c *gin.Context) {
 		rows = append(rows, row)
 	}
 
-	c.JSON(http.StatusOK, gin.H{
+	result := gin.H{
 		"code":       0,
 		"data":       rows,
 		"total":      len(rows),
 		"rows":       rows,
 		"account_id": accountID,
-	})
+	}
+
+	// 写入缓存 2min
+	if cache.C != nil {
+		_ = cache.C.SetJSON(cacheKey, result, 2*time.Minute)
+	}
+
+	c.JSON(http.StatusOK, result)
 }
 
 // AddTunnel 添加 Tunnel
@@ -1144,6 +1506,9 @@ func AddTunnel(c *gin.Context) {
 	}
 
 	database.DB.Create(&cfTunnel)
+
+	// 清除 Tunnel 列表缓存
+	cfCacheDelete("tunnels", strconv.FormatUint(id, 10))
 
 	c.JSON(http.StatusOK, gin.H{
 		"code": 0,
@@ -1197,6 +1562,10 @@ func DeleteTunnel(c *gin.Context) {
 	database.DB.Where("tid = ?", cfTunnel.ID).Delete(&models.CloudflareCIDRRoute{})
 	database.DB.Where("tid = ?", cfTunnel.ID).Delete(&models.CloudflareHostnameRoute{})
 
+	// 清除 Tunnel 列表缓存和 Token 缓存
+	cfCacheDelete("tunnels", strconv.FormatUint(id, 10))
+	cfCacheDelete("tunnel_token", fmt.Sprintf("%d:%s", id, tunnelID))
+
 	c.JSON(http.StatusOK, gin.H{
 		"code": 0,
 		"msg":  "删除成功",
@@ -1227,16 +1596,33 @@ func GetTunnelToken(c *gin.Context) {
 		accountID, _ = svc.GetDefaultAccountID()
 	}
 
+	// 检查缓存
+	cacheKey := cfCacheKey("tunnel_token", fmt.Sprintf("%d:%s", id, tunnelID))
+	if cache.C != nil {
+		var cached gin.H
+		if cache.C.GetJSON(cacheKey, &cached) {
+			c.JSON(http.StatusOK, cached)
+			return
+		}
+	}
+
 	token, err := svc.GetTunnelToken(accountID, tunnelID)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 1, "msg": err.Error()})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
+	result := gin.H{
 		"code": 0,
 		"data": gin.H{"token": token},
-	})
+	}
+
+	// 写入缓存 60s
+	if cache.C != nil {
+		_ = cache.C.SetJSON(cacheKey, result, 60*time.Second)
+	}
+
+	c.JSON(http.StatusOK, result)
 }
 
 // ========== CIDR Routes ==========
@@ -1770,8 +2156,14 @@ func formatCustomHostnameRow(item interface{}) gin.H {
 	if origin, ok := row["custom_origin_server"].(string); ok {
 		result["custom_origin_server"] = origin
 	}
+	if sni, ok := row["custom_origin_sni"].(string); ok {
+		result["custom_origin_sni"] = sni
+	}
 	if status, ok := row["status"].(string); ok {
 		result["status"] = status
+	}
+	if verStatus, ok := row["verification_status"].(string); ok {
+		result["verification_status"] = verStatus
 	}
 
 	if ssl, ok := row["ssl"].(map[string]interface{}); ok {
@@ -1782,11 +2174,33 @@ func formatCustomHostnameRow(item interface{}) gin.H {
 		if m, ok := ssl["method"].(string); ok {
 			result["ssl_method"] = m
 		}
+		if t, ok := ssl["type"].(string); ok {
+			result["ssl_type"] = t
+		}
+		if ca, ok := ssl["certificate_authority"].(string); ok {
+			result["ssl_certificate_authority"] = ca
+		}
 		if settings, ok := ssl["settings"].(map[string]interface{}); ok {
 			if tls, ok := settings["min_tls_version"].(string); ok {
 				result["ssl_min_tls_version"] = tls
 			}
 		}
+		if valRecords, ok := ssl["validation_records"].([]interface{}); ok {
+			result["ssl_validation_records"] = valRecords
+		}
+		if valErrors, ok := ssl["validation_errors"].([]interface{}); ok {
+			result["validation_errors"] = valErrors
+		}
+		if expiry, ok := ssl["expires_on"].(string); ok {
+			result["ssl_expires_on"] = expiry
+		}
+	}
+
+	if ov, ok := row["ownership_verification"].(map[string]interface{}); ok {
+		result["ownership_verification"] = ov
+	}
+	if ovHTTP, ok := row["ownership_verification_http"].(map[string]interface{}); ok {
+		result["ownership_verification_http"] = ovHTTP
 	}
 
 	if created, ok := row["created_on"].(string); ok {
@@ -1810,12 +2224,24 @@ func formatTunnelRow(item interface{}) gin.H {
 	}
 	if status, ok := row["status"].(string); ok {
 		result["status"] = status
+	} else {
+		result["status"] = "unknown"
 	}
 	if createdAt, ok := row["created_at"].(string); ok {
 		result["created_at"] = createdAt
 	}
-	if conns, ok := row["conns"].([]interface{}); ok {
-		result["connection_count"] = len(conns)
+	if deletedAt, ok := row["deleted_at"].(string); ok {
+		result["deleted_at"] = deletedAt
+	}
+	if connsActiveAt, ok := row["conns_active_at"].(string); ok {
+		result["conns_active_at"] = connsActiveAt
+	}
+	if connections, ok := row["connections"].([]interface{}); ok {
+		result["connections"] = connections
+		result["connection_count"] = len(connections)
+	} else {
+		result["connections"] = []interface{}{}
+		result["connection_count"] = 0
 	}
 
 	return result

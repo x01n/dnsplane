@@ -24,6 +24,13 @@ export default function SettingsPage() {
   const [cronConfig, setCronConfig] = useState<CronConfig>({})
   const [taskStatus, setTaskStatus] = useState<TaskStatus | null>(null)
   const [savingCron, setSavingCron] = useState(false)
+  const [eoZones, setEoZones] = useState<Array<{ zone_id: string; zone_name: string; status: string; plan_type: string }>>([])
+  const [eoZonesLoading, setEoZonesLoading] = useState(false)
+  const [esaSites, setEsaSites] = useState<Array<{ site_id: string; site_name: string; status: string; plan_name: string }>>([])
+  const [esaSitesLoading, setEsaSitesLoading] = useState(false)
+  const [accelAccounts, setAccelAccounts] = useState<{ cloudflare: Array<{ id: number; name: string; type: string }>; dnspod: Array<{ id: number; name: string; type: string }>; aliyun: Array<{ id: number; name: string; type: string }> }>({ cloudflare: [], dnspod: [], aliyun: [] })
+  const [cfDomains, setCfDomains] = useState<Array<{ id: number; name: string; third_id: string }>>([])
+  const [accelAccountsLoaded, setAccelAccountsLoaded] = useState(false)
 
   const toggleNotifySection = (section: string) => {
     setExpandedNotify(expandedNotify === section ? null : section)
@@ -40,7 +47,11 @@ export default function SettingsPage() {
     try {
       const res = await systemApi.getConfig()
       if (res.code === 0 && res.data) {
-        setConfig(res.data)
+        const data = { ...res.data }
+        if (data.captcha_enabled === undefined && data.login_captcha !== undefined) {
+          data.captcha_enabled = String(data.login_captcha) === 'true' || String(data.login_captcha) === '1'
+        }
+        setConfig(data)
       }
     } catch (error) {
       console.error('Failed to load config:', error)
@@ -136,161 +147,27 @@ export default function SettingsPage() {
     }
   }
 
-  const handleTestMail = async () => {
-    setTesting('mail')
+  /**
+   * 通用通知渠道测试函数，替代各渠道独立的 handleTestXxx
+   * @param channel - 渠道标识，用于 setTesting 状态管理
+   * @param apiCall - 对应的 systemApi 测试方法
+   * @param label - 渠道显示名称，用于 toast 提示
+   */
+  const handleTest = async (
+    channel: string,
+    apiCall: () => Promise<{ code: number; msg?: string }>,
+    label: string,
+  ) => {
+    setTesting(channel)
     try {
-      const res = await systemApi.testMail()
+      const res = await apiCall()
       if (res.code === 0) {
-        toast.success('邮件发送成功')
+        toast.success(`${label}成功`)
       } else {
-        toast.error(res.msg || '邮件发送失败')
+        toast.error(res.msg || `${label}失败`)
       }
     } catch {
-      toast.error('邮件发送失败')
-    } finally {
-      setTesting(null)
-    }
-  }
-
-  const handleTestTelegram = async () => {
-    setTesting('telegram')
-    try {
-      const res = await systemApi.testTelegram()
-      if (res.code === 0) {
-        toast.success('Telegram 消息发送成功')
-      } else {
-        toast.error(res.msg || 'Telegram 消息发送失败')
-      }
-    } catch {
-      toast.error('Telegram 消息发送失败')
-    } finally {
-      setTesting(null)
-    }
-  }
-
-  const handleTestWebhook = async () => {
-    setTesting('webhook')
-    try {
-      const res = await systemApi.testWebhook()
-      if (res.code === 0) {
-        toast.success('Webhook 请求成功')
-      } else {
-        toast.error(res.msg || 'Webhook 请求失败')
-      }
-    } catch {
-      toast.error('Webhook 请求失败')
-    } finally {
-      setTesting(null)
-    }
-  }
-
-  const handleTestDiscord = async () => {
-    setTesting('discord')
-    try {
-      const res = await systemApi.testDiscord()
-      if (res.code === 0) {
-        toast.success('Discord 消息发送成功')
-      } else {
-        toast.error(res.msg || 'Discord 消息发送失败')
-      }
-    } catch {
-      toast.error('Discord 消息发送失败')
-    } finally {
-      setTesting(null)
-    }
-  }
-
-  const handleTestBark = async () => {
-    setTesting('bark')
-    try {
-      const res = await systemApi.testBark()
-      if (res.code === 0) {
-        toast.success('Bark 推送发送成功')
-      } else {
-        toast.error(res.msg || 'Bark 推送发送失败')
-      }
-    } catch {
-      toast.error('Bark 推送发送失败')
-    } finally {
-      setTesting(null)
-    }
-  }
-
-  const handleTestWechat = async () => {
-    setTesting('wechat')
-    try {
-      const res = await systemApi.testWechat()
-      if (res.code === 0) {
-        toast.success('企业微信消息发送成功')
-      } else {
-        toast.error(res.msg || '企业微信消息发送失败')
-      }
-    } catch {
-      toast.error('企业微信消息发送失败')
-    } finally {
-      setTesting(null)
-    }
-  }
-
-  const handleTestDingtalk = async () => {
-    setTesting('dingtalk')
-    try {
-      const res = await systemApi.testDingtalk()
-      if (res.code === 0) {
-        toast.success('钉钉消息发送成功')
-      } else {
-        toast.error(res.msg || '钉钉消息发送失败')
-      }
-    } catch {
-      toast.error('钉钉消息发送失败')
-    } finally {
-      setTesting(null)
-    }
-  }
-
-  const handleTestFeishu = async () => {
-    setTesting('feishu')
-    try {
-      const res = await systemApi.testFeishu()
-      if (res.code === 0) {
-        toast.success('飞书消息发送成功')
-      } else {
-        toast.error(res.msg || '飞书消息发送失败')
-      }
-    } catch {
-      toast.error('飞书消息发送失败')
-    } finally {
-      setTesting(null)
-    }
-  }
-
-  const handleTestWxWorkApp = async () => {
-    setTesting('wxwork_app')
-    try {
-      const res = await systemApi.testWxWorkApp()
-      if (res.code === 0) {
-        toast.success('企业微信应用消息发送成功')
-      } else {
-        toast.error(res.msg || '企业微信应用消息发送失败')
-      }
-    } catch {
-      toast.error('企业微信应用消息发送失败')
-    } finally {
-      setTesting(null)
-    }
-  }
-
-  const handleTestWxTpl = async () => {
-    setTesting('wxtpl')
-    try {
-      const res = await systemApi.testWxTpl()
-      if (res.code === 0) {
-        toast.success('公众号模板消息发送成功')
-      } else {
-        toast.error(res.msg || '公众号模板消息发送失败')
-      }
-    } catch {
-      toast.error('公众号模板消息发送失败')
+      toast.error(`${label}失败`)
     } finally {
       setTesting(null)
     }
@@ -329,6 +206,84 @@ export default function SettingsPage() {
       toast.error('代理连接失败')
     } finally {
       setTesting(null)
+    }
+  }
+
+  const loadAccelAccounts = async () => {
+    if (accelAccountsLoaded) return
+    try {
+      const res = await systemApi.listAccelAccounts()
+      if (res.code === 0 && res.data) {
+        setAccelAccounts(res.data.accounts)
+        setCfDomains(res.data.cf_domains)
+      }
+    } catch {
+      // ignore
+    }
+    setAccelAccountsLoaded(true)
+  }
+
+  const handleApplyAccount = async (accountId: number, platform: string) => {
+    try {
+      const res = await systemApi.applyAccountToAccel({ account_id: accountId, platform })
+      if (res.code === 0) {
+        toast.success('已从账号同步密钥')
+        await loadConfig()
+      } else {
+        toast.error(res.msg || '同步失败')
+      }
+    } catch {
+      toast.error('同步失败')
+    }
+  }
+
+  const handleFetchEOZones = async () => {
+    setEoZonesLoading(true)
+    try {
+      const res = await systemApi.listEOZones({
+        secret_id: config.accel_eo_secret_id || '',
+        secret_key: config.accel_eo_secret_key || '',
+        endpoint: config.accel_eo_endpoint || 'cn',
+      })
+      if (res.code === 0 && res.data?.zones) {
+        setEoZones(res.data.zones)
+        if (res.data.zones.length === 0) {
+          toast.info('未找到 EO 站点')
+        } else {
+          toast.success(`获取到 ${res.data.zones.length} 个站点`)
+        }
+      } else {
+        toast.error(res.msg || '获取站点失败')
+      }
+    } catch {
+      toast.error('获取 EO 站点失败')
+    } finally {
+      setEoZonesLoading(false)
+    }
+  }
+
+  const handleFetchESASites = async () => {
+    setEsaSitesLoading(true)
+    try {
+      const res = await systemApi.listESASites({
+        access_key_id: config.accel_esa_access_key_id || '',
+        access_key_secret: config.accel_esa_access_key_secret || '',
+        region: config.accel_esa_region || 'cn-hangzhou',
+      })
+      if (res.code === 0 && res.data?.sites) {
+        setEsaSites(res.data.sites)
+        if (res.data.sites.length === 0) {
+          toast.info('未找到 ESA 站点')
+        } else {
+          toast.success(`获取到 ${res.data.sites.length} 个站点`)
+        }
+      } else {
+        toast.error(res.msg || '获取站点失败')
+      }
+    } catch {
+      toast.error('获取 ESA 站点失败')
+    } finally {
+      setEsaSitesLoading(false)
     }
   }
 
@@ -381,7 +336,7 @@ export default function SettingsPage() {
         </Button>
       </div>
 
-      <Tabs defaultValue="site" className="space-y-6">
+      <Tabs defaultValue="site" className="space-y-6" onValueChange={(v) => { if (v === 'accel') loadAccelAccounts() }}>
         <TabsList className="flex flex-wrap gap-1 h-auto p-1">
           <TabsTrigger value="site" className="flex items-center gap-2">
             <Home className="h-4 w-4" />
@@ -402,6 +357,10 @@ export default function SettingsPage() {
           <TabsTrigger value="proxy" className="flex items-center gap-2">
             <Globe className="h-4 w-4" />
             <span className="hidden sm:inline">代理</span>
+          </TabsTrigger>
+          <TabsTrigger value="accel" className="flex items-center gap-2">
+            <RefreshCw className="h-4 w-4" />
+            <span className="hidden sm:inline">加速</span>
           </TabsTrigger>
         </TabsList>
 
@@ -614,6 +573,7 @@ export default function SettingsPage() {
                         </SelectTrigger>
                         <SelectContent>
                           <SelectItem value="image">图形验证码（内置）</SelectItem>
+                          <SelectItem value="behavioral">行为验证码（内置 go-captcha）</SelectItem>
                           <SelectItem value="turnstile">Cloudflare Turnstile</SelectItem>
                           <SelectItem value="recaptcha">Google reCAPTCHA v2</SelectItem>
                           <SelectItem value="hcaptcha">hCaptcha</SelectItem>
@@ -623,10 +583,11 @@ export default function SettingsPage() {
                         {config.captcha_type === 'turnstile' && '免费、隐私友好的验证码服务，推荐使用'}
                         {config.captcha_type === 'recaptcha' && '需要科学上网才能正常使用'}
                         {config.captcha_type === 'hcaptcha' && '隐私友好的验证码服务'}
+                        {config.captcha_type === 'behavioral' && '内置行为验证码（点选/滑动/旋转），无需额外配置'}
                         {(!config.captcha_type || config.captcha_type === 'image') && '服务端生成图形验证码，无需额外配置'}
                       </p>
                     </div>
-                    {config.captcha_type && config.captcha_type !== 'image' && (
+                    {config.captcha_type && config.captcha_type !== 'image' && config.captcha_type !== 'behavioral' && (
                       <>
                         <div className="space-y-2">
                           <Label>Site Key（站点密钥）</Label>
@@ -931,7 +892,7 @@ export default function SettingsPage() {
                     onCheckedChange={(checked) => { setConfig({ ...config, mail_enabled: checked }) }}
                     onClick={(e) => e.stopPropagation()}
                   />
-                  <Button size="sm" variant="outline" onClick={(e) => { e.stopPropagation(); handleTestMail(); }} disabled={testing === 'mail'}>
+                  <Button size="sm" variant="outline" onClick={(e) => { e.stopPropagation(); handleTest('mail', systemApi.testMail, '邮件发送'); }} disabled={testing === 'mail'}>
                     {testing === 'mail' ? <RefreshCw className="h-3 w-3 animate-spin" /> : '测试'}
                   </Button>
                 </div>
@@ -1094,7 +1055,7 @@ export default function SettingsPage() {
                     onCheckedChange={(checked) => { setConfig({ ...config, tgbot_enabled: checked }) }}
                     onClick={(e) => e.stopPropagation()}
                   />
-                  <Button size="sm" variant="outline" onClick={(e) => { e.stopPropagation(); handleTestTelegram(); }} disabled={testing === 'telegram'}>
+                  <Button size="sm" variant="outline" onClick={(e) => { e.stopPropagation(); handleTest('telegram', systemApi.testTelegram, 'Telegram 消息发送'); }} disabled={testing === 'telegram'}>
                     {testing === 'telegram' ? <RefreshCw className="h-3 w-3 animate-spin" /> : '测试'}
                   </Button>
                 </div>
@@ -1138,7 +1099,7 @@ export default function SettingsPage() {
                     onCheckedChange={(checked) => { setConfig({ ...config, discord_enabled: checked }) }}
                     onClick={(e) => e.stopPropagation()}
                   />
-                  <Button size="sm" variant="outline" onClick={(e) => { e.stopPropagation(); handleTestDiscord(); }} disabled={testing === 'discord'}>
+                  <Button size="sm" variant="outline" onClick={(e) => { e.stopPropagation(); handleTest('discord', systemApi.testDiscord, 'Discord 消息发送'); }} disabled={testing === 'discord'}>
                     {testing === 'discord' ? <RefreshCw className="h-3 w-3 animate-spin" /> : '测试'}
                   </Button>
                 </div>
@@ -1173,7 +1134,7 @@ export default function SettingsPage() {
                     onCheckedChange={(checked) => { setConfig({ ...config, bark_enabled: checked }) }}
                     onClick={(e) => e.stopPropagation()}
                   />
-                  <Button size="sm" variant="outline" onClick={(e) => { e.stopPropagation(); handleTestBark(); }} disabled={testing === 'bark'}>
+                  <Button size="sm" variant="outline" onClick={(e) => { e.stopPropagation(); handleTest('bark', systemApi.testBark, 'Bark 推送发送'); }} disabled={testing === 'bark'}>
                     {testing === 'bark' ? <RefreshCw className="h-3 w-3 animate-spin" /> : '测试'}
                   </Button>
                 </div>
@@ -1217,7 +1178,7 @@ export default function SettingsPage() {
                     onCheckedChange={(checked) => { setConfig({ ...config, wechat_enabled: checked }) }}
                     onClick={(e) => e.stopPropagation()}
                   />
-                  <Button size="sm" variant="outline" onClick={(e) => { e.stopPropagation(); handleTestWechat(); }} disabled={testing === 'wechat'}>
+                  <Button size="sm" variant="outline" onClick={(e) => { e.stopPropagation(); handleTest('wechat', systemApi.testWechat, '企业微信消息发送'); }} disabled={testing === 'wechat'}>
                     {testing === 'wechat' ? <RefreshCw className="h-3 w-3 animate-spin" /> : '测试'}
                   </Button>
                 </div>
@@ -1248,7 +1209,7 @@ export default function SettingsPage() {
                 </div>
                 <div className="flex items-center gap-2">
                   <Switch checked={config.dingtalk_enabled || false} onCheckedChange={(checked) => { setConfig({ ...config, dingtalk_enabled: checked }) }} onClick={(e) => e.stopPropagation()} />
-                  <Button size="sm" variant="outline" onClick={(e) => { e.stopPropagation(); handleTestDingtalk(); }} disabled={testing === 'dingtalk'}>
+                  <Button size="sm" variant="outline" onClick={(e) => { e.stopPropagation(); handleTest('dingtalk', systemApi.testDingtalk, '钉钉消息发送'); }} disabled={testing === 'dingtalk'}>
                     {testing === 'dingtalk' ? <RefreshCw className="h-3 w-3 animate-spin" /> : '测试'}
                   </Button>
                 </div>
@@ -1278,7 +1239,7 @@ export default function SettingsPage() {
                 </div>
                 <div className="flex items-center gap-2">
                   <Switch checked={config.feishu_enabled || false} onCheckedChange={(checked) => { setConfig({ ...config, feishu_enabled: checked }) }} onClick={(e) => e.stopPropagation()} />
-                  <Button size="sm" variant="outline" onClick={(e) => { e.stopPropagation(); handleTestFeishu(); }} disabled={testing === 'feishu'}>
+                  <Button size="sm" variant="outline" onClick={(e) => { e.stopPropagation(); handleTest('feishu', systemApi.testFeishu, '飞书消息发送'); }} disabled={testing === 'feishu'}>
                     {testing === 'feishu' ? <RefreshCw className="h-3 w-3 animate-spin" /> : '测试'}
                   </Button>
                 </div>
@@ -1308,7 +1269,7 @@ export default function SettingsPage() {
                 </div>
                 <div className="flex items-center gap-2">
                   <Switch checked={config.wxwork_app_enabled || false} onCheckedChange={(checked) => { setConfig({ ...config, wxwork_app_enabled: checked }) }} onClick={(e) => e.stopPropagation()} />
-                  <Button size="sm" variant="outline" onClick={(e) => { e.stopPropagation(); handleTestWxWorkApp(); }} disabled={testing === 'wxwork_app'}>
+                  <Button size="sm" variant="outline" onClick={(e) => { e.stopPropagation(); handleTest('wxwork_app', systemApi.testWxWorkApp, '企业微信应用消息发送'); }} disabled={testing === 'wxwork_app'}>
                     {testing === 'wxwork_app' ? <RefreshCw className="h-3 w-3 animate-spin" /> : '测试'}
                   </Button>
                 </div>
@@ -1334,7 +1295,7 @@ export default function SettingsPage() {
                 </div>
                 <div className="flex items-center gap-2">
                   <Switch checked={config.wxtpl_enabled || false} onCheckedChange={(checked) => { setConfig({ ...config, wxtpl_enabled: checked }) }} onClick={(e) => e.stopPropagation()} />
-                  <Button size="sm" variant="outline" onClick={(e) => { e.stopPropagation(); handleTestWxTpl(); }} disabled={testing === 'wxtpl'}>
+                  <Button size="sm" variant="outline" onClick={(e) => { e.stopPropagation(); handleTest('wxtpl', systemApi.testWxTpl, '公众号模板消息发送'); }} disabled={testing === 'wxtpl'}>
                     {testing === 'wxtpl' ? <RefreshCw className="h-3 w-3 animate-spin" /> : '测试'}
                   </Button>
                 </div>
@@ -1365,7 +1326,7 @@ export default function SettingsPage() {
                     onCheckedChange={(checked) => { setConfig({ ...config, webhook_enabled: checked }) }}
                     onClick={(e) => e.stopPropagation()}
                   />
-                  <Button size="sm" variant="outline" onClick={(e) => { e.stopPropagation(); handleTestWebhook(); }} disabled={testing === 'webhook'}>
+                  <Button size="sm" variant="outline" onClick={(e) => { e.stopPropagation(); handleTest('webhook', systemApi.testWebhook, 'Webhook 请求'); }} disabled={testing === 'webhook'}>
                     {testing === 'webhook' ? <RefreshCw className="h-3 w-3 animate-spin" /> : '测试'}
                   </Button>
                 </div>
@@ -1380,7 +1341,59 @@ export default function SettingsPage() {
                     value={config.webhook_url || ''}
                     onChange={(e) => setConfig({ ...config, webhook_url: e.target.value })}
                   />
-                  <p className="text-xs text-muted-foreground">系统将向此URL发送POST请求</p>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label>请求方法</Label>
+                    <Select value={config.webhook_method || 'POST'} onValueChange={(v) => setConfig({ ...config, webhook_method: v })}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="POST">POST</SelectItem>
+                        <SelectItem value="GET">GET</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Content-Type</Label>
+                    <Select value={config.webhook_content_type || 'application/json'} onValueChange={(v) => setConfig({ ...config, webhook_content_type: v })}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="application/json">application/json</SelectItem>
+                        <SelectItem value="application/x-www-form-urlencoded">application/x-www-form-urlencoded</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <Label>内容格式</Label>
+                  <Select value={config.webhook_content_format || 'text'} onValueChange={(v) => setConfig({ ...config, webhook_content_format: v })}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="text">纯文本</SelectItem>
+                      <SelectItem value="markdown">Markdown</SelectItem>
+                      <SelectItem value="html">HTML</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>自定义请求头</Label>
+                  <Textarea
+                    placeholder={"Authorization: Bearer xxx\nX-Custom: value"}
+                    rows={3}
+                    value={config.webhook_headers || ''}
+                    onChange={(e) => setConfig({ ...config, webhook_headers: e.target.value })}
+                  />
+                  <p className="text-xs text-muted-foreground">每行一个，格式: Key: Value</p>
+                </div>
+                <div className="space-y-2">
+                  <Label>请求体模板</Label>
+                  <Textarea
+                    placeholder={'{"title":"{title}","content":"{content}"}'}
+                    rows={4}
+                    value={config.webhook_body || ''}
+                    onChange={(e) => setConfig({ ...config, webhook_body: e.target.value })}
+                  />
+                  <p className="text-xs text-muted-foreground">支持占位符: {'{title}'} 和 {'{content}'}</p>
                 </div>
               </CardContent>
             )}
@@ -1577,6 +1590,233 @@ export default function SettingsPage() {
                   </Button>
                 </div>
               )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* Acceleration Settings */}
+        <TabsContent value="accel">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <RefreshCw className="h-5 w-5" />
+                一键加速配置
+              </CardTitle>
+              <CardDescription>配置 Cloudflare / 腾讯云 EO / 阿里云 ESA 加速平台，实现 DNS 记录一键加速</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              <div className="space-y-2">
+                <Label>加速策略</Label>
+                <Select value={config.accel_strategy || 'mixed_cf_eo'} onValueChange={(v) => setConfig({...config, accel_strategy: v})}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="cf_only">仅 CF（海外优选）</SelectItem>
+                    <SelectItem value="eo_only">仅腾讯云 EO</SelectItem>
+                    <SelectItem value="esa_only">仅阿里云 ESA</SelectItem>
+                    <SelectItem value="mixed_cf_eo">混合：国内 EO + 海外 CF</SelectItem>
+                    <SelectItem value="mixed_cf_esa">混合：国内 ESA + 海外 CF</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <Separator />
+
+              <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h4 className="font-medium">Cloudflare 加速</h4>
+                    <p className="text-sm text-muted-foreground">通过 CF SaaS 自定义主机名 + 优选域名加速</p>
+                  </div>
+                  <Switch checked={config.accel_cf_enabled === 'true'} onCheckedChange={(v) => setConfig({...config, accel_cf_enabled: v ? 'true' : 'false'})} />
+                </div>
+                {config.accel_cf_enabled === 'true' && (
+                  <div className="space-y-4 pl-4 border-l-2 border-muted">
+                    <div className="space-y-2">
+                      <Label>CF 优选域名</Label>
+                      <Input placeholder="cdn.example.com" value={config.accel_cf_prefer_domain || ''} onChange={(e) => setConfig({...config, accel_cf_prefer_domain: e.target.value})} />
+                      <p className="text-xs text-muted-foreground">已解析到 CF 节点的域名，加速记录将 CNAME 到此域名</p>
+                    </div>
+                    <div className="space-y-2">
+                      <Label>CF SaaS 回落域名</Label>
+                      {cfDomains.length > 0 ? (
+                        <Select value={config.accel_cf_domain_id || ''} onValueChange={(v) => {
+                          const d = cfDomains.find(d => String(d.id) === v)
+                          setConfig({...config, accel_cf_domain_id: v, accel_cf_zone_id: d?.third_id || config.accel_cf_zone_id || ''})
+                        }}>
+                          <SelectTrigger>
+                            <SelectValue placeholder="选择面板中已有的 CF 域名" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {cfDomains.map(d => (
+                              <SelectItem key={d.id} value={String(d.id)}>{d.name}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      ) : (
+                        <Input placeholder="面板中 CF 域名的 ID" value={config.accel_cf_domain_id || ''} onChange={(e) => setConfig({...config, accel_cf_domain_id: e.target.value})} />
+                      )}
+                      <p className="text-xs text-muted-foreground">自动复用该域名对应的 CF 账号令牌，无需额外配置</p>
+                    </div>
+                    {config.accel_cf_zone_id && (
+                      <div className="text-xs text-muted-foreground">Zone ID: {config.accel_cf_zone_id}</div>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              <Separator />
+
+              <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h4 className="font-medium">腾讯云 EdgeOne (EO)</h4>
+                    <p className="text-sm text-muted-foreground">自动创建 EO 加速域名，获取 CNAME 配置解析</p>
+                  </div>
+                  <Switch checked={config.accel_eo_enabled === 'true'} onCheckedChange={(v) => setConfig({...config, accel_eo_enabled: v ? 'true' : 'false'})} />
+                </div>
+                {config.accel_eo_enabled === 'true' && (
+                  <div className="space-y-4 pl-4 border-l-2 border-muted">
+                    {accelAccounts.dnspod.length > 0 && (
+                      <div className="space-y-2">
+                        <Label>从已有 DNSPod 账号同步密钥</Label>
+                        <div className="flex gap-2">
+                          <Select onValueChange={(v) => handleApplyAccount(Number(v), 'eo')}>
+                            <SelectTrigger className="flex-1">
+                              <SelectValue placeholder="选择 DNSPod 账号" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {accelAccounts.dnspod.map(a => (
+                                <SelectItem key={a.id} value={String(a.id)}>{a.name}</SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <p className="text-xs text-muted-foreground">选择后自动同步该账号的 SecretId/Key 到加速配置</p>
+                      </div>
+                    )}
+                    <div className="space-y-2">
+                      <Label>SecretId</Label>
+                      <Input value={config.accel_eo_secret_id || ''} onChange={(e) => setConfig({...config, accel_eo_secret_id: e.target.value})} placeholder={config.accel_eo_secret_id ? '' : '未配置，请从上方选择账号同步'} />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>站点 ID (ZoneId)</Label>
+                      <div className="flex gap-2">
+                        {eoZones.length > 0 ? (
+                          <Select value={config.accel_eo_zone_id || ''} onValueChange={(v) => setConfig({...config, accel_eo_zone_id: v})}>
+                            <SelectTrigger className="flex-1">
+                              <SelectValue placeholder="选择站点" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {eoZones.map((z) => (
+                                <SelectItem key={z.zone_id} value={z.zone_id}>
+                                  {z.zone_name} ({z.zone_id}) - {z.status}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        ) : (
+                          <Input className="flex-1" placeholder="zone-xxxxxxx" value={config.accel_eo_zone_id || ''} onChange={(e) => setConfig({...config, accel_eo_zone_id: e.target.value})} />
+                        )}
+                        <Button type="button" variant="outline" size="sm" onClick={handleFetchEOZones} disabled={eoZonesLoading}>
+                          {eoZonesLoading ? '获取中...' : '获取站点'}
+                        </Button>
+                      </div>
+                    </div>
+                    <div className="space-y-2">
+                      <Label>API 端点</Label>
+                      <Select value={config.accel_eo_endpoint || 'cn'} onValueChange={(v) => setConfig({...config, accel_eo_endpoint: v})}>
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="cn">国内 (teo.tencentcloudapi.com)</SelectItem>
+                          <SelectItem value="intl">国际 (teo.intl.tencentcloudapi.com)</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <Separator />
+
+              <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h4 className="font-medium">阿里云 ESA</h4>
+                    <p className="text-sm text-muted-foreground">自动创建 ESA 加速记录，获取 CNAME 配置解析</p>
+                  </div>
+                  <Switch checked={config.accel_esa_enabled === 'true'} onCheckedChange={(v) => setConfig({...config, accel_esa_enabled: v ? 'true' : 'false'})} />
+                </div>
+                {config.accel_esa_enabled === 'true' && (
+                  <div className="space-y-4 pl-4 border-l-2 border-muted">
+                    {accelAccounts.aliyun.length > 0 && (
+                      <div className="space-y-2">
+                        <Label>从已有阿里云账号同步密钥</Label>
+                        <div className="flex gap-2">
+                          <Select onValueChange={(v) => handleApplyAccount(Number(v), 'esa')}>
+                            <SelectTrigger className="flex-1">
+                              <SelectValue placeholder="选择阿里云账号" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {accelAccounts.aliyun.map(a => (
+                                <SelectItem key={a.id} value={String(a.id)}>{a.name}</SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <p className="text-xs text-muted-foreground">选择后自动同步该账号的 AccessKey 到加速配置</p>
+                      </div>
+                    )}
+                    <div className="space-y-2">
+                      <Label>AccessKey ID</Label>
+                      <Input value={config.accel_esa_access_key_id || ''} onChange={(e) => setConfig({...config, accel_esa_access_key_id: e.target.value})} placeholder={config.accel_esa_access_key_id ? '' : '未配置，请从上方选择账号同步'} />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>站点 ID (SiteId)</Label>
+                      <div className="flex gap-2">
+                        {esaSites.length > 0 ? (
+                          <Select value={config.accel_esa_site_id || ''} onValueChange={(v) => setConfig({...config, accel_esa_site_id: v})}>
+                            <SelectTrigger className="flex-1">
+                              <SelectValue placeholder="选择站点" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {esaSites.map((s) => (
+                                <SelectItem key={s.site_id} value={s.site_id}>
+                                  {s.site_name} ({s.site_id}) - {s.status}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        ) : (
+                          <Input className="flex-1" value={config.accel_esa_site_id || ''} onChange={(e) => setConfig({...config, accel_esa_site_id: e.target.value})} />
+                        )}
+                        <Button type="button" variant="outline" size="sm" onClick={handleFetchESASites} disabled={esaSitesLoading}>
+                          {esaSitesLoading ? '获取中...' : '获取站点'}
+                        </Button>
+                      </div>
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Region</Label>
+                      <Select value={config.accel_esa_region || 'cn-hangzhou'} onValueChange={(v) => setConfig({...config, accel_esa_region: v})}>
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="cn-hangzhou">cn-hangzhou（国内）</SelectItem>
+                          <SelectItem value="ap-southeast-1">ap-southeast-1（海外）</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <Button onClick={handleSave} disabled={saving}>
+                {saving ? '保存中...' : '保存加速配置'}
+              </Button>
             </CardContent>
           </Card>
         </TabsContent>

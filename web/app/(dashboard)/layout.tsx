@@ -38,6 +38,7 @@ import { cn, hasModuleAccess } from '@/lib/utils'
 import { api, authApi, User } from '@/lib/api'
 import { toast } from 'sonner'
 import { DashboardUserProvider } from '@/contexts/dashboard-user-context'
+import { PageTabs } from '@/components/page-tabs'
 
 type NavItem = {
   name: string
@@ -398,6 +399,9 @@ export default function DashboardLayout({
             </DropdownMenuContent>
           </DropdownMenu>
         </header>
+
+        {/* Page tabs */}
+        <PageTabs />
 
         {/* Page content */}
         <main className="p-4 sm:p-6">{children}</main>

@@ -457,6 +457,10 @@ func ProcessCertOrder(c *gin.Context) {
 		return
 	}
 
+	order.Info = ""
+	order.Error = ""
+	database.DB.Model(&order).Updates(map[string]interface{}{"info": "", "error": ""})
+
 	appendOrderLog(&order, "开始处理证书申请...")
 	appendOrderLog(&order, "域名: "+joinDomains(domains))
 	appendOrderLog(&order, "证书账户: "+account.Name+" ("+account.Type+")")
@@ -500,8 +504,10 @@ func ProcessCertOrder(c *gin.Context) {
 
 	// 安全审计 R-6：CAS 状态占位，避免并发重复签发烧 Let's Encrypt 配额。
 	// 仅当当前 status != 1 时才能切换到处理中；若已被并发请求抢占则直接拒绝。
+	// 如果 status=1 超过 5 分钟视为卡死，允许强制覆盖。
+	staleThreshold := time.Now().Add(-5 * time.Minute)
 	res := database.DB.Model(&models.CertOrder{}).
-		Where("id = ? AND status != ?", order.ID, 1).
+		Where("id = ? AND (status != ? OR updated_at < ?)", order.ID, 1, staleThreshold).
 		Update("status", 1)
 	if res.RowsAffected == 0 {
 		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "订单正在处理中，请勿重复提交"})
@@ -540,6 +546,10 @@ func TriggerCertOrderProcessing(orderID uint) {
 		return
 	}
 
+	order.Info = ""
+	order.Error = ""
+	database.DB.Model(&order).Updates(map[string]interface{}{"info": "", "error": ""})
+
 	appendOrderLog(&order, "自动续期触发处理...")
 	appendOrderLog(&order, "域名: "+joinDomains(domains))
 	appendOrderLog(&order, "证书账户: "+account.Name+" ("+account.Type+")")
@@ -574,8 +584,9 @@ func TriggerCertOrderProcessing(orderID uint) {
 	})
 	appendOrderLog(&order, "正在创建证书订单...")
 	// 安全审计 R-6：自动续期路径同样走 CAS，防止与手动 ProcessCertOrder 重叠
+	staleThreshold2 := time.Now().Add(-5 * time.Minute)
 	res := database.DB.Model(&models.CertOrder{}).
-		Where("id = ? AND status != ?", order.ID, 1).
+		Where("id = ? AND (status != ? OR updated_at < ?)", order.ID, 1, staleThreshold2).
 		Update("status", 1)
 	if res.RowsAffected == 0 {
 		logger.Warn("[Cert] 自动续期被并发抢占，跳过 (orderID=%d)", order.ID)
@@ -700,6 +711,11 @@ func processCertOrderAsync(order *models.CertOrder, provider cert.Provider, doma
 			appendOrderLog(order, fmt.Sprintf("已自动添加 %d 条DNS验证记录", addedRecords))
 			appendOrderLog(order, "等待DNS记录生效...")
 			time.Sleep(10 * time.Second)
+
+			// 本地 DNS 预检查：确认所有 TXT 记录已正确生效
+			if dnsRecCount > 0 {
+				certPreVerifyDNS(ctx, order, dnsRecords, useCNAME)
+			}
 		} else {
 			appendOrderLog(order, "HTTP-01：将向 CA 发起验证，请确认已对公网开放 80 端口并能返回上述校验内容")
 			time.Sleep(5 * time.Second)
@@ -1321,4 +1337,112 @@ func GetCertProviders(c *gin.Context) {
 			"deploy": deployProviders,
 		},
 	})
+}
+
+// certPreVerifyDNS 在触发 CA 验证前，用公共 DNS 查询确认 TXT 记录已正确生效。
+// 仅做等待确认，不做无效修复（记录已通过 provider API 写入成功，公共 DNS 传播需要时间）。
+func certPreVerifyDNS(_ context.Context, order *models.CertOrder, dnsRecords map[string][]cert.DNSRecord, _ bool) {
+	type challenge struct {
+		fqdn  string
+		value string
+	}
+
+	var challenges []challenge
+	for domainName, records := range dnsRecords {
+		for _, r := range records {
+			if strings.EqualFold(r.Type, "HTTP-01") {
+				continue
+			}
+			rt := r.Type
+			if rt == "" {
+				rt = "TXT"
+			}
+			if !strings.EqualFold(rt, "TXT") {
+				continue
+			}
+			challenges = append(challenges, challenge{
+				fqdn:  r.Name + "." + domainName,
+				value: r.Value,
+			})
+		}
+	}
+
+	if len(challenges) == 0 {
+		return
+	}
+
+	// 最多额外等待 3 轮 × 10 秒，一旦全部生效就提前通过
+	const maxRounds = 3
+	for round := 1; round <= maxRounds; round++ {
+		allOK := true
+		for _, ch := range challenges {
+			if !certCheckTXTRecord(ch.fqdn, ch.value) {
+				allOK = false
+				break
+			}
+		}
+		if allOK {
+			appendOrderLog(order, "DNS预检查: 所有TXT记录已确认生效")
+			return
+		}
+		if round < maxRounds {
+			appendOrderLog(order, fmt.Sprintf("DNS预检查: 部分记录尚未在公共DNS生效，额外等待10秒 (%d/%d)", round, maxRounds))
+			time.Sleep(10 * time.Second)
+		}
+	}
+
+	// 超过等待上限仍未全部确认，打印明细但不阻塞
+	var pending []string
+	for _, ch := range challenges {
+		if !certCheckTXTRecord(ch.fqdn, ch.value) {
+			pending = append(pending, ch.fqdn)
+		}
+	}
+	if len(pending) > 0 {
+		appendOrderLog(order, fmt.Sprintf("DNS预检查: %s 在公共DNS尚未查到，继续提交验证（权威NS可能已生效）", strings.Join(pending, ", ")))
+	} else {
+		appendOrderLog(order, "DNS预检查: 所有TXT记录已确认生效")
+	}
+}
+
+// certCheckTXTRecord 并行查询多个公共 DNS，任一返回期望值即通过。
+func certCheckTXTRecord(fqdn, expectedValue string) bool {
+	servers := []string{"8.8.8.8", "1.1.1.1", "223.5.5.5"}
+	expected := strings.TrimSpace(expectedValue)
+
+	type result struct{ found bool }
+	ch := make(chan result, len(servers))
+
+	for _, srv := range servers {
+		go func(s string) {
+			resolver := &net.Resolver{
+				PreferGo: true,
+				Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
+					d := net.Dialer{Timeout: 3 * time.Second}
+					return d.DialContext(ctx, "udp", s+":53")
+				},
+			}
+			qctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			records, err := resolver.LookupTXT(qctx, fqdn)
+			if err != nil {
+				ch <- result{false}
+				return
+			}
+			for _, txt := range records {
+				if strings.TrimSpace(txt) == expected {
+					ch <- result{true}
+					return
+				}
+			}
+			ch <- result{false}
+		}(srv)
+	}
+
+	for range servers {
+		if r := <-ch; r.found {
+			return true
+		}
+	}
+	return false
 }

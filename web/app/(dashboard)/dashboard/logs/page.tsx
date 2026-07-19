@@ -14,6 +14,7 @@ import { logApi, userApi, OperationLog, OperationLogStats, User } from '@/lib/ap
 import { ScrollText, Search, RefreshCw, Eye, Calendar, User as UserIcon, Globe, Activity, Trash2, Download } from 'lucide-react'
 import { TableSkeleton } from '@/components/table-skeleton'
 import { EmptyState } from '@/components/empty-state'
+import { Pagination } from '@/components/pagination'
 import { formatDate } from '@/lib/utils'
 
 const ACTION_COLORS: Record<string, string> = {
@@ -701,29 +702,13 @@ export default function LogsPage() {
 
           {/* Pagination */}
           {totalPages > 1 && (
-            <div className="flex flex-wrap items-center justify-between gap-2 mt-4">
-              <div className="text-sm text-muted-foreground">
-                共 {total} 条记录，第 {page} / {totalPages} 页
-              </div>
-              <div className="flex gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={page === 1}
-                  onClick={() => setPage(page - 1)}
-                >
-                  上一页
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={page === totalPages}
-                  onClick={() => setPage(page + 1)}
-                >
-                  下一页
-                </Button>
-              </div>
-            </div>
+            <Pagination
+              page={page}
+              pageSize={pageSize}
+              total={total}
+              onPageChange={setPage}
+              showPageSize={false}
+            />
           )}
         </CardContent>
       </Card>

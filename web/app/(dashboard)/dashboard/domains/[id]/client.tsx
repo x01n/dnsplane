@@ -23,10 +23,14 @@ import {
   List,
   Filter,
   ChevronDown,
+  ChevronsUpDown,
+  Check,
   Link2,
   Weight,
   Sparkles,
   History as HistoryIcon,
+  Globe,
+  Zap,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { TableSkeleton } from '@/components/table-skeleton'
@@ -79,9 +83,12 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Switch } from '@/components/ui/switch'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { toast } from 'sonner'
-import { domainApi, DNSRecord, RecordLine, authApi, User } from '@/lib/api'
+import { domainApi, DNSRecord, RecordLine, authApi, User, Domain } from '@/lib/api'
 import { DNS_RECORD_TYPES, copyToClipboard, cn, hasModuleAccess } from '@/lib/utils'
 import { ProviderBadge } from '@/components/provider-icon'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { Command, CommandInput, CommandList, CommandEmpty, CommandGroup, CommandItem } from '@/components/ui/command'
+import { Pagination } from '@/components/pagination'
 
 const LIST_PAGE_SIZE_OPTIONS = [10, 20, 50, 100] as const
 const LS_RECORDS_PAGE_SIZE = 'dnsplane-records-page-size'
@@ -108,12 +115,17 @@ export default function DomainRecordsClient() {
   const router = useRouter()
   
   const [domainId, setDomainId] = useState<string>('')
-  const [domainInfo, setDomainInfo] = useState<{ name: string; type_name: string; account_type: string; record_count: number } | null>(null)
+  const [domainInfo, setDomainInfo] = useState<{ name: string; type_name: string; account_type: string; record_count: number; aid: number } | null>(null)
 
   const [records, setRecords] = useState<DNSRecord[]>([])
   const [lines, setLines] = useState<RecordLine[]>([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
+
+  // 域名快速切换
+  const [switcherOpen, setSwitcherOpen] = useState(false)
+  const [siblingDomains, setSiblingDomains] = useState<Domain[]>([])
+  const [siblingLoading, setSiblingLoading] = useState(false)
   const [keyword, setKeyword] = useState('')
   const [debouncedKeyword, setDebouncedKeyword] = useState('')
   const [filterType, setFilterType] = useState('')
@@ -142,6 +154,12 @@ export default function DomainRecordsClient() {
   const [recordLogs, setRecordLogs] = useState<unknown[]>([])
   const [recordLogsLoading, setRecordLogsLoading] = useState(false)
 
+  const [dnsCheckOpen, setDnsCheckOpen] = useState(false)
+  const [dnsCheckDomain, setDnsCheckDomain] = useState('')
+  const [dnsCheckType, setDnsCheckType] = useState('A')
+  const [dnsCheckLoading, setDnsCheckLoading] = useState(false)
+  const [dnsCheckResults, setDnsCheckResults] = useState<Array<{ server: string; ip: string; results: string[]; ttl: string; cost: number; error?: string }>>([])
+
   const [formData, setFormData] = useState({
     Weight: 0,
     Name: '',
@@ -161,6 +179,10 @@ export default function DomainRecordsClient() {
   })
 
   const [currentUser, setCurrentUser] = useState<User | null>(null)
+  const [accelDialogOpen, setAccelDialogOpen] = useState(false)
+  const [accelRecord, setAccelRecord] = useState<DNSRecord | null>(null)
+  const [accelStrategy, setAccelStrategy] = useState('')
+  const [accelLoading, setAccelLoading] = useState(false)
   const canUseMonitor = currentUser != null && hasModuleAccess(currentUser, 'monitor')
   const canUseCert = currentUser != null && hasModuleAccess(currentUser, 'cert')
 
@@ -366,11 +388,37 @@ export default function DomainRecordsClient() {
           type_name: domain.type_name || domain.account_type || '',
           account_type: domain.account_type || '',
           record_count: domain.record_count || 0,
+          aid: domain.aid,
         })
       }
     } catch {
       // ignore
     }
+  }
+
+  const fetchSiblingDomains = async (aid: number) => {
+    setSiblingLoading(true)
+    try {
+      const res = await domainApi.list({ aid, page_size: 200 })
+      if (res.code === 0 && res.data) {
+        setSiblingDomains(res.data.list || [])
+      }
+    } catch {
+      // ignore
+    } finally {
+      setSiblingLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    if (domainInfo?.aid) {
+      fetchSiblingDomains(domainInfo.aid)
+    }
+  }, [domainInfo?.aid])
+
+  const handleSwitchDomain = (targetId: number) => {
+    setSwitcherOpen(false)
+    router.push(`/dashboard/domains/${targetId}`)
   }
 
   const fetchLines = async () => {
@@ -549,6 +597,53 @@ export default function DomainRecordsClient() {
     }
   }
 
+  const [accelPlatforms, setAccelPlatforms] = useState<Array<{ platform: string; enabled: boolean; available: boolean; prefer_domain?: string; domain_name?: string; zone_id?: string; site_id?: string }>>([])
+  const [accelDefaultStrategy, setAccelDefaultStrategy] = useState('')
+  const [accelResults, setAccelResults] = useState<Array<{ platform: string; line_name: string; cname: string; status: string; msg?: string }>>([])
+
+  const handleAccelerate = (record: DNSRecord) => {
+    setAccelRecord(record)
+    setAccelStrategy('')
+    setAccelResults([])
+    setAccelDialogOpen(true)
+    if (accelPlatforms.length === 0) {
+      domainApi.getAccelPlatforms().then(res => {
+        if (res.code === 0 && res.data) {
+          setAccelPlatforms(res.data.platforms)
+          setAccelDefaultStrategy(res.data.strategy)
+        }
+      })
+    }
+  }
+
+  const handleAccelConfirm = async () => {
+    if (!accelRecord) return
+    setAccelLoading(true)
+    setAccelResults([])
+    try {
+      const res = await domainApi.accelerate(domainId, {
+        record_name: accelRecord.Name,
+        record_type: accelRecord.Type,
+        record_value: Array.isArray(accelRecord.Value) ? accelRecord.Value[0] : accelRecord.Value,
+        strategy: accelStrategy || undefined,
+      })
+      if (res.code === 0) {
+        const data = res.data as Record<string, unknown>
+        const accelRes = (data?.accel_results || []) as Array<{ platform: string; line_name: string; cname: string; status: string; msg?: string }>
+        const dnsRes = (data?.dns_results || []) as Array<{ platform: string; line_name: string; cname: string; status: string; msg?: string }>
+        setAccelResults([...accelRes, ...dnsRes])
+        toast.success(res.msg || '加速配置完成')
+        fetchRecords()
+      } else {
+        toast.error(res.msg || '加速失败')
+      }
+    } catch {
+      toast.error('加速请求失败')
+    } finally {
+      setAccelLoading(false)
+    }
+  }
+
   const handleBatchAdd = async () => {
     if (!batchData.records.trim()) {
       toast.error('请输入记录内容')
@@ -638,6 +733,34 @@ export default function DomainRecordsClient() {
     }
   }
 
+  const handleDnsCheck = async () => {
+    if (!dnsCheckDomain.trim()) {
+      toast.error('请输入域名')
+      return
+    }
+    setDnsCheckLoading(true)
+    setDnsCheckResults([])
+    try {
+      const res = await domainApi.dnsCheck({ domain: dnsCheckDomain.trim(), type: dnsCheckType })
+      if (res.code === 0 && res.data) {
+        setDnsCheckResults(res.data)
+      } else {
+        toast.error(res.msg || '检测失败')
+      }
+    } catch {
+      toast.error('检测请求失败')
+    } finally {
+      setDnsCheckLoading(false)
+    }
+  }
+
+  const openDnsCheck = () => {
+    if (domainInfo?.name && !dnsCheckDomain) {
+      setDnsCheckDomain(domainInfo.name)
+    }
+    setDnsCheckOpen(true)
+  }
+
   return (
     <div className="space-y-6">
       {/* 页面头部 */}
@@ -659,12 +782,50 @@ export default function DomainRecordsClient() {
               {domainInfo ? (
                 <>
                   {(domainInfo.account_type || domainInfo.type_name) && (
-                    <ProviderBadge 
-                      type={domainInfo.account_type} 
+                    <ProviderBadge
+                      type={domainInfo.account_type}
                       name={domainInfo.type_name}
                     />
                   )}
-                  <span className="font-medium text-foreground truncate">{domainInfo.name}</span>
+                  <Popover open={switcherOpen} onOpenChange={setSwitcherOpen}>
+                    <PopoverTrigger asChild>
+                      <button className="inline-flex items-center gap-1.5 font-medium text-foreground hover:text-primary transition-colors rounded px-1.5 py-0.5 hover:bg-accent">
+                        <span className="truncate max-w-[200px]">{domainInfo.name}</span>
+                        <ChevronsUpDown className="h-3.5 w-3.5 shrink-0 opacity-60" />
+                      </button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-[280px] p-0" align="start">
+                      <Command>
+                        <CommandInput placeholder="搜索域名..." />
+                        <CommandList>
+                          <CommandEmpty>
+                            {siblingLoading ? (
+                              <span className="inline-flex items-center gap-2">
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                                加载中...
+                              </span>
+                            ) : '未找到域名'}
+                          </CommandEmpty>
+                          <CommandGroup>
+                            {siblingDomains.map((d) => (
+                              <CommandItem
+                                key={d.id}
+                                value={d.name}
+                                disabled={String(d.id) === domainId}
+                                onSelect={() => handleSwitchDomain(d.id)}
+                                className="flex items-center justify-between"
+                              >
+                                <span className="truncate">{d.name}</span>
+                                {String(d.id) === domainId && (
+                                  <Check className="h-4 w-4 shrink-0 text-primary" />
+                                )}
+                              </CommandItem>
+                            ))}
+                          </CommandGroup>
+                        </CommandList>
+                      </Command>
+                    </PopoverContent>
+                  </Popover>
                 </>
               ) : domainId ? (
                 <span>加载中...</span>
@@ -695,6 +856,11 @@ export default function DomainRecordsClient() {
               </Link>
             </Button>
           )}
+          <Button variant="outline" size="sm" className="min-h-10 flex-1 sm:flex-initial" onClick={openDnsCheck}>
+            <Globe className="h-4 w-4 sm:mr-2" />
+            <span className="hidden sm:inline">DNS检测</span>
+            <span className="sm:hidden">检测</span>
+          </Button>
           <Button variant="outline" size="sm" className="min-h-10 flex-1 sm:flex-initial" onClick={handleRefresh} disabled={refreshing}>
             <RefreshCw className={cn("h-4 w-4 sm:mr-2", refreshing && "animate-spin")} />
             <span className="hidden sm:inline">刷新</span>
@@ -1052,6 +1218,12 @@ export default function DomainRecordsClient() {
                                 智能监控向导
                               </DropdownMenuItem>
                             )}
+                            {(record.Type === 'A' || record.Type === 'AAAA' || record.Type === 'CNAME') && (
+                              <DropdownMenuItem onClick={() => handleAccelerate(record)}>
+                                <Zap className="h-4 w-4 mr-2" />
+                                一键加速
+                              </DropdownMenuItem>
+                            )}
                             <DropdownMenuSeparator />
                             <DropdownMenuItem
                               onClick={() => openDeleteDialog(record)}
@@ -1167,54 +1339,14 @@ export default function DomainRecordsClient() {
 
           {/* 分页 */}
           {recordTotal > 0 && (
-            <div className="flex flex-wrap items-center justify-between gap-3 mt-4 pt-4 border-t">
-              <div className="flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
-                <span>
-                  共 {recordTotal} 条，第 {recordPage}/{Math.max(1, Math.ceil(recordTotal / recordPageSize))} 页
-                </span>
-                <div className="flex items-center gap-2">
-                  <span className="whitespace-nowrap">每页</span>
-                  <Select value={String(recordPageSize)} onValueChange={handleRecordPageSizeChange}>
-                    <SelectTrigger className="h-8 w-[92px]" aria-label="每页条数">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {LIST_PAGE_SIZE_OPTIONS.map((n) => (
-                        <SelectItem key={n} value={String(n)}>
-                          {n} 条
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-              <div className="flex items-center gap-2 w-full sm:w-auto">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="min-h-10 flex-1 sm:flex-initial"
-                  disabled={recordPage <= 1}
-                  onClick={() => {
-                    const newPage = recordPage - 1
-                    setRecordPage(newPage)
-                  }}
-                >
-                  上一页
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="min-h-10 flex-1 sm:flex-initial"
-                  disabled={recordPage >= Math.max(1, Math.ceil(recordTotal / recordPageSize))}
-                  onClick={() => {
-                    const newPage = recordPage + 1
-                    setRecordPage(newPage)
-                  }}
-                >
-                  下一页
-                </Button>
-              </div>
-            </div>
+            <Pagination
+              page={recordPage}
+              pageSize={recordPageSize}
+              total={recordTotal}
+              onPageChange={setRecordPage}
+              onPageSizeChange={(size) => handleRecordPageSizeChange(String(size))}
+              pageSizeOptions={LIST_PAGE_SIZE_OPTIONS}
+            />
           )}
         </CardContent>
       </Card>
@@ -1474,6 +1606,191 @@ export default function DomainRecordsClient() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* DNS检测弹窗 */}
+      <Dialog open={dnsCheckOpen} onOpenChange={setDnsCheckOpen}>
+        <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>DNS检测工具</DialogTitle>
+            <DialogDescription>查询域名在各个公共DNS服务器上的解析结果</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto_auto] gap-3 items-end">
+              <div className="space-y-2">
+                <Label>域名</Label>
+                <Input
+                  value={dnsCheckDomain}
+                  onChange={(e) => setDnsCheckDomain(e.target.value)}
+                  placeholder="example.com"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>类型</Label>
+                <Select value={dnsCheckType} onValueChange={setDnsCheckType}>
+                  <SelectTrigger className="w-[100px]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {['A', 'AAAA', 'CNAME', 'MX', 'TXT', 'NS'].map((t) => (
+                      <SelectItem key={t} value={t}>{t}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <Button onClick={handleDnsCheck} disabled={dnsCheckLoading}>
+                {dnsCheckLoading && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                检测
+              </Button>
+            </div>
+            {dnsCheckResults.length > 0 && (
+              <div className="rounded-md border">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>DNS服务器</TableHead>
+                      <TableHead>IP</TableHead>
+                      <TableHead>解析结果</TableHead>
+                      <TableHead className="text-right">耗时</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {dnsCheckResults.map((r, idx) => (
+                      <TableRow key={idx}>
+                        <TableCell className="font-medium">{r.server}</TableCell>
+                        <TableCell className="text-muted-foreground text-xs">{r.ip}</TableCell>
+                        <TableCell>
+                          {r.error ? (
+                            <span className="text-destructive text-sm">{r.error}</span>
+                          ) : r.results.length > 0 ? (
+                            <div className="space-y-0.5">
+                              {r.results.map((v, vi) => (
+                                <div key={vi} className="text-sm font-mono">{v}</div>
+                              ))}
+                            </div>
+                          ) : (
+                            <span className="text-muted-foreground text-sm">无结果</span>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-right text-sm">{r.cost}ms</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* 加速策略选择对话框 */}
+      <Dialog open={accelDialogOpen} onOpenChange={setAccelDialogOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>一键加速</DialogTitle>
+            <DialogDescription>
+              {accelRecord && `为 ${accelRecord.Name} 配置加速`}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            {accelResults.length > 0 ? (
+              <div className="space-y-2">
+                <Label className="text-xs text-muted-foreground">加速结果</Label>
+                <div className="space-y-1">
+                  {accelResults.map((r, i) => (
+                    <div key={i} className={`rounded border p-2 text-xs ${r.status === 'error' || r.status === 'failed' ? 'border-red-500/50 bg-red-50 dark:bg-red-950/20' : r.status === 'skipped' ? 'border-yellow-500/50 bg-yellow-50 dark:bg-yellow-950/20' : 'border-green-500/50 bg-green-50 dark:bg-green-950/20'}`}>
+                      <div className="flex items-center justify-between">
+                        <span className="font-medium">{r.platform === 'cloudflare' ? 'CF' : r.platform === 'tencenteo' ? 'EO' : 'ESA'}{r.line_name ? ` (${r.line_name})` : ''}</span>
+                        <span className={r.status === 'error' || r.status === 'failed' ? 'text-red-600' : r.status === 'skipped' ? 'text-yellow-600' : 'text-green-600'}>
+                          {{success: '成功', added: '已添加', exists: '已存在', skipped: '跳过', error: '失败', failed: '失败'}[r.status] || r.status}
+                        </span>
+                      </div>
+                      {r.cname && <div className="text-muted-foreground mt-1 truncate" title={r.cname}>CNAME → {r.cname}</div>}
+                      {r.msg && <div className="text-red-600 mt-1">{r.msg}</div>}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <>
+                {accelPlatforms.length > 0 && (
+                  <div className="space-y-2">
+                    <Label className="text-xs text-muted-foreground">平台状态</Label>
+                    <div className="grid grid-cols-3 gap-2 text-xs">
+                      {accelPlatforms.map(p => (
+                        <div key={p.platform} className={`rounded border p-2 ${p.available ? 'border-green-500/50 bg-green-50 dark:bg-green-950/20' : 'border-muted opacity-50'}`}>
+                          <div className="font-medium">
+                            {p.platform === 'cloudflare' ? 'Cloudflare' : p.platform === 'tencenteo' ? '腾讯云 EO' : '阿里云 ESA'}
+                          </div>
+                          <div className={p.available ? 'text-green-600' : 'text-muted-foreground'}>
+                            {p.available ? '已配置' : '未配置'}
+                          </div>
+                          {p.available && p.platform === 'cloudflare' && p.prefer_domain && (
+                            <div className="text-muted-foreground truncate" title={p.prefer_domain}>{p.prefer_domain}</div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {accelPlatforms.length > 0 && !accelPlatforms.some(p => p.available) ? (
+                  <div className="rounded-md bg-yellow-50 dark:bg-yellow-950/20 border border-yellow-200 dark:border-yellow-800 p-3 text-sm text-yellow-800 dark:text-yellow-200">
+                    尚未配置任何加速平台，请前往 <a href="/dashboard/settings" className="underline font-medium">系统设置 → 一键加速</a> 完成配置
+                  </div>
+                ) : (
+                  <>
+                    <div className="space-y-2">
+                      <Label>加速策略</Label>
+                      <Select value={accelStrategy} onValueChange={setAccelStrategy}>
+                        <SelectTrigger>
+                          <SelectValue placeholder={`使用系统默认（${
+                            {cf_only: '仅 CF', eo_only: '仅 EO', esa_only: '仅 ESA', mixed_cf_eo: 'CF+EO', mixed_cf_esa: 'CF+ESA'}[accelDefaultStrategy] || accelDefaultStrategy
+                          }）`} />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {accelPlatforms.find(p => p.platform === 'cloudflare')?.available && (
+                            <SelectItem value="cf_only">仅 Cloudflare（海外优选）</SelectItem>
+                          )}
+                          {accelPlatforms.find(p => p.platform === 'tencenteo')?.available && (
+                            <SelectItem value="eo_only">仅腾讯云 EO</SelectItem>
+                          )}
+                          {accelPlatforms.find(p => p.platform === 'aliyunesa')?.available && (
+                            <SelectItem value="esa_only">仅阿里云 ESA</SelectItem>
+                          )}
+                          {accelPlatforms.find(p => p.platform === 'cloudflare')?.available && accelPlatforms.find(p => p.platform === 'tencenteo')?.available && (
+                            <SelectItem value="mixed_cf_eo">混合：国内 EO + 海外 CF</SelectItem>
+                          )}
+                          {accelPlatforms.find(p => p.platform === 'cloudflare')?.available && accelPlatforms.find(p => p.platform === 'aliyunesa')?.available && (
+                            <SelectItem value="mixed_cf_esa">混合：国内 ESA + 海外 CF</SelectItem>
+                          )}
+                        </SelectContent>
+                      </Select>
+                      <p className="text-xs text-muted-foreground">留空则使用系统默认策略，仅显示已配置账号的可用选项</p>
+                    </div>
+                    {accelRecord && (
+                      <div className="text-sm text-muted-foreground space-y-1">
+                        <p>记录类型：{accelRecord.Type}</p>
+                        <p>源站地址：{Array.isArray(accelRecord.Value) ? accelRecord.Value[0] : accelRecord.Value}</p>
+                      </div>
+                    )}
+                  </>
+                )}
+              </>
+            )}
+          </div>
+          <DialogFooter>
+            {accelResults.length > 0 ? (
+              <Button onClick={() => setAccelDialogOpen(false)}>完成</Button>
+            ) : (
+              <>
+                <Button variant="outline" onClick={() => setAccelDialogOpen(false)}>取消</Button>
+                <Button onClick={handleAccelConfirm} disabled={accelLoading || (accelPlatforms.length > 0 && !accelPlatforms.some(p => p.available))}>
+                  {accelLoading ? '加速中...' : '确认加速'}
+                </Button>
+              </>
+            )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
     </div>
   )

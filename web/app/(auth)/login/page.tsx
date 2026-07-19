@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, lazy, Suspense } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { toast } from 'sonner'
@@ -15,14 +15,19 @@ import {
 import { AuthFooterNav } from '@/components/auth/auth-footer-nav'
 import shell from '@/components/auth/animated-login-shell.module.css'
 
+const GoCaptchaDialog = lazy(() => import('@/components/go-captcha-dialog'))
+
 export default function LoginPage() {
   const router = useRouter()
   const [loading, setLoading] = useState(false)
   const [showPassword, setShowPassword] = useState(false)
   const [captchaEnabled, setCaptchaEnabled] = useState(false)
+  const [captchaType, setCaptchaType] = useState('image')
   const [captchaId, setCaptchaId] = useState('')
   const [captchaImage, setCaptchaImage] = useState('')
   const [captchaLoading, setCaptchaLoading] = useState(false)
+  const [verifyToken, setVerifyToken] = useState('')
+  const [showGoCaptcha, setShowGoCaptcha] = useState(false)
   const [needTotp, setNeedTotp] = useState(false)
   const [installed, setInstalled] = useState(true)
   const [checkingInstall, setCheckingInstall] = useState(true)
@@ -80,7 +85,9 @@ export default function LoginPage() {
       if (res.code === 0 && res.data) {
         const needCaptcha = !!(res.data.login_captcha ?? res.data.captcha_enabled)
         setCaptchaEnabled(needCaptcha)
-        if (needCaptcha) {
+        const type = (res.data as Record<string, unknown>).captcha_type as string || 'image'
+        setCaptchaType(type)
+        if (needCaptcha && (type === 'image' || !type)) {
           loadCaptcha()
         }
       }
@@ -140,7 +147,11 @@ export default function LoginPage() {
       bumpCharacterError()
       return
     }
-    if (captchaEnabled && !formData.captcha) {
+    if (captchaEnabled && captchaType === 'behavioral' && !verifyToken) {
+      setShowGoCaptcha(true)
+      return
+    }
+    if (captchaEnabled && captchaType !== 'behavioral' && !formData.captcha) {
       toast.error('请输入验证码')
       bumpCharacterError()
       return
@@ -158,6 +169,7 @@ export default function LoginPage() {
         password: formData.password,
         captcha_id: captchaId,
         captcha: formData.captcha,
+        verify_token: verifyToken,
         totp_code: formData.totp_code,
       })
 
@@ -175,15 +187,23 @@ export default function LoginPage() {
         toast.error(res.msg || '登录失败')
         bumpCharacterError()
         if (captchaEnabled) {
-          loadCaptcha()
-          setFormData((prev) => ({ ...prev, captcha: '' }))
+          if (captchaType === 'behavioral') {
+            setVerifyToken('')
+          } else {
+            loadCaptcha()
+            setFormData((prev) => ({ ...prev, captcha: '' }))
+          }
         }
       }
     } catch {
       toast.error('登录失败')
       bumpCharacterError()
       if (captchaEnabled) {
-        loadCaptcha()
+        if (captchaType === 'behavioral') {
+          setVerifyToken('')
+        } else {
+          loadCaptcha()
+        }
       }
     } finally {
       setLoading(false)
@@ -268,7 +288,7 @@ export default function LoginPage() {
           </div>
         </div>
 
-        {installed && captchaEnabled && (
+        {installed && captchaEnabled && captchaType !== 'behavioral' && (
           <div className={shell.formGroupClassic}>
             <label className={shell.labelClassic} htmlFor="captcha">
               验证码
@@ -306,6 +326,24 @@ export default function LoginPage() {
                   <span className="text-xs text-neutral-500">获取</span>
                 )}
               </button>
+            </div>
+          </div>
+        )}
+
+        {installed && captchaEnabled && captchaType === 'behavioral' && (
+          <div className={shell.formGroupClassic}>
+            <div className="flex items-center gap-2">
+              {verifyToken ? (
+                <span className="text-sm text-green-600">验证已通过</span>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setShowGoCaptcha(true)}
+                  className="text-sm text-primary underline-offset-2 hover:underline"
+                >
+                  点击完成安全验证
+                </button>
+              )}
             </div>
           </div>
         )}
@@ -368,6 +406,18 @@ export default function LoginPage() {
         )}
         {installed && <AuthFooterNav current="login" />}
       </form>
+      {captchaType === 'behavioral' && (
+        <Suspense fallback={null}>
+          <GoCaptchaDialog
+            open={showGoCaptcha}
+            onClose={() => setShowGoCaptcha(false)}
+            onSuccess={(token) => {
+              setVerifyToken(token)
+              setShowGoCaptcha(false)
+            }}
+          />
+        </Suspense>
+      )}
     </AuthAnimatedLayout>
   )
 }

@@ -38,6 +38,7 @@ func init() {
 			{Name: "产品类型", Key: "product", Type: "select", Options: []cert.ConfigOption{
 				{Value: "cdn", Label: "CDN加速"},
 				{Value: "cdnpro", Label: "CDN Pro"},
+				{Value: "cdnpro_certificate", Label: "CDN Pro（仅部署证书）"},
 				{Value: "certificate", Label: "仅更新证书"},
 			}, Value: "cdn"},
 			{Name: "域名", Key: "domain", Type: "input", Note: "CDN Pro需填写域名"},
@@ -85,6 +86,8 @@ func (p *WangsuCDNProvider) Deploy(ctx context.Context, fullchain, privateKey st
 		return p.deployCDNPro(ctx, fullchain, privateKey, config)
 	case "cdn":
 		return p.deployCDN(ctx, fullchain, privateKey, config)
+	case "cdnpro_certificate":
+		return p.deployCDNProCertificate(ctx, fullchain, privateKey, config)
 	case "certificate":
 		return p.deployCertOnly(ctx, fullchain, privateKey, config)
 	default:
@@ -297,6 +300,101 @@ func (p *WangsuCDNProvider) deployCertOnly(ctx context.Context, fullchain, priva
 
 	_, err = p.getCertID(ctx, fullchain, privateKey, certInfo.certName, certID, certInfo.serialNo, true)
 	return err
+}
+
+func (p *WangsuCDNProvider) deployCDNProCertificate(ctx context.Context, fullchain, privateKey string, config map[string]interface{}) error {
+	certID := base.GetConfigString(config, "cert_id")
+	if certID == "" {
+		certID = p.GetString("cert_id")
+	}
+	if certID == "" {
+		return fmt.Errorf("证书ID不能为空")
+	}
+
+	certInfo, err := p.parseCertInfo(fullchain)
+	if err != nil {
+		return err
+	}
+
+	result, err := p.updateCDNProCert(ctx, fullchain, privateKey, certInfo.certName, certID)
+	if err != nil {
+		return err
+	}
+
+	if !result.updated {
+		p.Log("证书已是最新，无需部署")
+		return nil
+	}
+
+	deployParams := map[string]interface{}{
+		"target": "production",
+		"actions": []map[string]interface{}{
+			{
+				"action":        "deploy_cert",
+				"certificateId": certID,
+				"version":       result.version,
+			},
+		},
+		"name": fmt.Sprintf("Deploy certificate %s", certInfo.certName),
+	}
+
+	deployResp, err := p.request(ctx, "POST", "/cdn/deploymentTasks", deployParams, nil, "")
+	if err != nil {
+		return fmt.Errorf("下发证书部署任务失败：%v", err)
+	}
+
+	deployLocation, _ := deployResp["location"].(string)
+	deployParts := strings.Split(deployLocation, "/")
+	deployTaskID := deployParts[len(deployParts)-1]
+
+	p.Log(fmt.Sprintf("证书部署任务下发成功，部署任务ID：%s", deployTaskID))
+	return nil
+}
+
+type cdnProCertResult struct {
+	version int
+	updated bool
+}
+
+func (p *WangsuCDNProvider) updateCDNProCert(ctx context.Context, fullchain, privateKey, certName, certID string) (*cdnProCertResult, error) {
+	resp, err := p.request(ctx, "GET", "/cdn/certificates/"+certID, nil, nil, "")
+	if err != nil {
+		return nil, fmt.Errorf("证书ID %s 不存在或获取失败：%v", certID, err)
+	}
+
+	if name, _ := resp["name"].(string); name == certName {
+		p.Log(fmt.Sprintf("证书已是最新，无需更新，证书ID：%s", certID))
+		return &cdnProCertResult{updated: false}, nil
+	}
+
+	p.Log("证书已过期，准备更新...")
+
+	date := time.Now().UTC().Format(time.RFC1123)
+	encryptedKey := p.encryptPrivateKey(privateKey, date)
+	params := map[string]interface{}{
+		"name": certName,
+		"newVersion": map[string]interface{}{
+			"privateKey":  encryptedKey,
+			"certificate": fullchain,
+			"comments":    certName,
+		},
+	}
+
+	location, err := p.request(ctx, "PATCH", "/cdn/certificates/"+certID, params, nil, date)
+	if err != nil {
+		return nil, fmt.Errorf("更新证书失败：%v", err)
+	}
+
+	version := 1
+	if locationStr, _ := location["location"].(string); locationStr != "" {
+		parts := strings.Split(locationStr, "/")
+		if v := parts[len(parts)-1]; v != "" {
+			fmt.Sscanf(v, "%d", &version)
+		}
+	}
+
+	p.Log(fmt.Sprintf("更新证书成功，证书ID：%s，版本号：%d", certID, version))
+	return &cdnProCertResult{version: version, updated: true}, nil
 }
 
 func (p *WangsuCDNProvider) getCertID(ctx context.Context, fullchain, privateKey, certName, certID, serialNo string, overwrite bool) (string, error) {

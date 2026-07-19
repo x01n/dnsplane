@@ -37,12 +37,18 @@ func init() {
 				{Value: "dcdn", Label: "DCDN（全站加速）"},
 				{Value: "tos", Label: "TOS（对象存储）"},
 				{Value: "live", Label: "视频直播"},
+				{Value: "vod", Label: "视频点播VOD"},
 				{Value: "imagex", Label: "veImageX"},
 				{Value: "clb", Label: "CLB（负载均衡）"},
 				{Value: "alb", Label: "ALB（应用负载均衡）"},
 			}, Value: "cdn"},
 			{Name: "域名", Key: "domain", Type: "input", Required: true, Note: "多个域名用逗号分隔"},
 			{Name: "Bucket域名", Key: "bucket_domain", Type: "input", Note: "TOS产品需要", Show: "product=='tos'"},
+			{Name: "点播空间名称", Key: "vod_space_name", Type: "input", Note: "VOD产品需要", Show: "product=='vod'"},
+			{Name: "域名类型", Key: "vod_domain_type", Type: "select", Options: []cert.ConfigOption{
+				{Value: "play", Label: "播放域名"},
+				{Value: "push", Label: "推流域名"},
+			}, Value: "play", Note: "VOD产品需要", Show: "product=='vod'"},
 			{Name: "监听器ID", Key: "listener_id", Type: "input", Note: "CLB/ALB产品需要", Show: "product=='clb'||product=='alb'"},
 		},
 	})
@@ -291,6 +297,15 @@ func (p *HuoshanCDNProvider) Deploy(ctx context.Context, fullchain, privateKey s
 		return p.deployCLB(ctx, fullchain, privateKey, config)
 	case "alb":
 		return p.deployALB(ctx, fullchain, privateKey, config)
+	case "vod":
+		return p.deployVOD(ctx, fullchain, privateKey, config)
+	case "upload":
+		_, err := p.getCertID(ctx, fullchain, privateKey)
+		if err != nil {
+			return err
+		}
+		p.Log("证书上传到火山引擎证书管理成功")
+		return nil
 	default:
 		return fmt.Errorf("不支持的产品类型: %s", product)
 	}
@@ -594,6 +609,60 @@ func (p *HuoshanCDNProvider) deployALB(ctx context.Context, fullchain, privateKe
 	}
 
 	p.Log("ALB监听器 " + listenerID + " 部署证书成功")
+	return nil
+}
+
+func (p *HuoshanCDNProvider) deployVOD(ctx context.Context, fullchain, privateKey string, config map[string]interface{}) error {
+	domains := p.getDomains(config)
+	if len(domains) == 0 {
+		return fmt.Errorf("域名不能为空")
+	}
+
+	certID, err := p.getCertID(ctx, fullchain, privateKey)
+	if err != nil {
+		return err
+	}
+
+	spaceName := base.GetConfigString(config, "vod_space_name")
+	if spaceName == "" {
+		spaceName = p.GetString("vod_space_name")
+	}
+	if spaceName == "" {
+		return fmt.Errorf("点播空间名称不能为空")
+	}
+
+	domainType := base.GetConfigString(config, "vod_domain_type")
+	if domainType == "" {
+		domainType = p.GetString("vod_domain_type")
+	}
+	if domainType == "" {
+		domainType = "play"
+	}
+
+	client := p.getClient("vod.volcengineapi.com", "vod", "2023-07-01", "cn-north-1")
+
+	for _, domain := range domains {
+		param := map[string]interface{}{
+			"SpaceName":  spaceName,
+			"DomainType": domainType,
+			"Domain":     domain,
+			"Config": map[string]interface{}{
+				"HTTPS": map[string]interface{}{
+					"Switch": true,
+					"CertInfo": map[string]interface{}{
+						"CertId": certID,
+					},
+				},
+			},
+		}
+
+		_, err := client.Request(ctx, "POST", "UpdateDomainConfig", param)
+		if err != nil {
+			return fmt.Errorf("VOD域名 %s 部署失败: %v", domain, err)
+		}
+		p.Log("VOD域名 " + domain + " 部署证书成功")
+	}
+
 	return nil
 }
 

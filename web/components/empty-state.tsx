@@ -38,14 +38,14 @@ export function EmptyState({
   children,
 }: EmptyStateProps) {
   return (
-    <div className={cn('flex flex-col items-center justify-center py-12 px-4 text-center', className)}>
-      <div className="mx-auto mb-4 h-14 w-14 rounded-full bg-muted/50 flex items-center justify-center">
-        <Icon className="h-7 w-7 text-muted-foreground/60" />
+    <div className={cn('flex flex-col items-center justify-center py-16 px-4 text-center animate-in fade-in-0 slide-in-from-bottom-4 duration-300', className)}>
+      <div className="mx-auto mb-5 h-16 w-16 rounded-full bg-muted/60 dark:bg-muted/30 flex items-center justify-center ring-1 ring-border/50">
+        <Icon className="h-8 w-8 text-muted-foreground/50" />
       </div>
-      <h3 className="text-base font-medium text-foreground mb-1">{title}</h3>
-      <p className="text-sm text-muted-foreground max-w-sm mb-4">{description}</p>
+      <h3 className="text-base font-semibold text-foreground mb-1.5">{title}</h3>
+      <p className="text-sm text-muted-foreground max-w-sm mb-5">{description}</p>
       {action && onAction && (
-        <Button onClick={onAction} size="sm" variant="outline">
+        <Button onClick={onAction} size="sm" variant="outline" className="shadow-sm">
           {ActionIcon && <ActionIcon className="h-4 w-4 mr-2" />}
           {action}
         </Button>

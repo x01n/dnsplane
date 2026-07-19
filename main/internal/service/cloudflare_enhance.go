@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"main/internal/logger"
 	"net"
 	"net/http"
 	"net/url"
@@ -34,7 +35,7 @@ func NewEnhanceService(email, apiKey string, auth int, proxy bool, accountID str
 		auth:      auth,
 		proxy:     proxy,
 		accountID: accountID,
-		client:    &http.Client{Timeout: 20 * time.Second},
+		client:    &http.Client{Timeout: 30 * time.Second},
 	}
 }
 
@@ -109,7 +110,7 @@ func (s *EnhanceService) requestRaw(method, path string, query map[string]string
 		} else if resp.StatusCode == 429 {
 			errMsg = "请求频率超限"
 		} else if resp.StatusCode >= 500 {
-			errMsg = "服务器不可用"
+			errMsg = fmt.Sprintf("Cloudflare API 服务器错误 (HTTP %d)", resp.StatusCode)
 		} else {
 			var result map[string]interface{}
 			if json.Unmarshal(respBody, &result) == nil {
@@ -125,6 +126,7 @@ func (s *EnhanceService) requestRaw(method, path string, query map[string]string
 				errMsg = fmt.Sprintf("HTTP %d", resp.StatusCode)
 			}
 		}
+		logger.Error("[CF API] %s %s → HTTP %d: %s", method, path, resp.StatusCode, string(respBody))
 		return resp, respBody, fmt.Errorf("%s", errMsg)
 	}
 

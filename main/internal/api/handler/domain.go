@@ -11,12 +11,14 @@ import (
 	"main/internal/api/middleware"
 	"main/internal/database"
 	"main/internal/dns"
+	dnspodProvider "main/internal/dns/providers/dnspod"
 	"main/internal/models"
 	"main/internal/service"
 	"main/internal/utils"
 	"sync"
 
 	"github.com/gin-gonic/gin"
+	"golang.org/x/net/publicsuffix"
 	"gorm.io/gorm"
 )
 
@@ -74,10 +76,21 @@ func normalizeDNSListStatusForAPI(status string) string {
 }
 
 type GetDomainsRequest struct {
-	Keyword  string `json:"keyword"`
-	AID      string `json:"aid"`
-	Page     int    `json:"page"`
-	PageSize int    `json:"page_size"`
+	Keyword   string `json:"keyword"`
+	AID       string `json:"aid"`
+	CID       string `json:"cid"`
+	Page      int    `json:"page"`
+	PageSize  int    `json:"page_size"`
+	SortField string `json:"sort_field"`
+	SortOrder string `json:"sort_order"`
+}
+
+// domainSortFieldWhitelist 排序字段白名单，防止 SQL 注入
+var domainSortFieldWhitelist = map[string]string{
+	"name":         "domains.name",
+	"record_count": "domains.record_count",
+	"expire_time":  "domains.expire_time",
+	"created_at":   "domains.created_at",
 }
 
 func buildDomainsListQuery(c *gin.Context, req *GetDomainsRequest) *gorm.DB {
@@ -100,6 +113,9 @@ func buildDomainsListQuery(c *gin.Context, req *GetDomainsRequest) *gorm.DB {
 	}
 	if req.AID != "" {
 		q = q.Where("domains.aid = ?", req.AID)
+	}
+	if req.CID != "" {
+		q = q.Where("domains.cid = ?", req.CID)
 	}
 	return q
 }
@@ -139,7 +155,15 @@ func GetDomains(c *gin.Context) {
 	}()
 	go func() {
 		defer wg.Done()
-		buildDomainsListQuery(c, &req).Order("domains.id DESC").Offset((req.Page - 1) * req.PageSize).Limit(req.PageSize).Find(&domains)
+		orderClause := "domains.id DESC"
+		if col, ok := domainSortFieldWhitelist[req.SortField]; ok {
+			dir := "ASC"
+			if strings.ToLower(req.SortOrder) == "desc" {
+				dir = "DESC"
+			}
+			orderClause = col + " " + dir
+		}
+		buildDomainsListQuery(c, &req).Order(orderClause).Offset((req.Page - 1) * req.PageSize).Limit(req.PageSize).Find(&domains)
 	}()
 	wg.Wait()
 
@@ -193,6 +217,7 @@ func GetDomains(c *gin.Context) {
 		item := gin.H{
 			"id":           d.ID,
 			"aid":          d.AccountID,
+			"cid":          d.CategoryID,
 			"name":         d.Name,
 			"third_id":     d.ThirdID,
 			"is_hide":      d.IsHide,
@@ -320,7 +345,34 @@ func CreateDomain(c *gin.Context) {
 		return
 	}
 
-	provider, err := dns.GetProvider(account.Type, config, req.Name, "")
+	domainName := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(req.Name), "."))
+
+	// DNSPod 子域托管自动委派
+	if account.Type == "dnspod" && getMainDomainByPSL(domainName) != domainName {
+		result, err := addDnsPodDelegatedSubdomain(c.Request.Context(), config, &account, domainName)
+		if err != nil {
+			middleware.ErrorResponse(c, err.Error())
+			return
+		}
+		aid, _ := strconv.ParseUint(req.AccountID, 10, 32)
+		domain := models.Domain{
+			AccountID: uint(aid),
+			Name:      result.Name,
+			ThirdID:   result.ThirdID,
+		}
+		if err := database.WithContext(c).Create(&domain).Error; err != nil {
+			middleware.ErrorResponse(c, "创建失败")
+			return
+		}
+		msg := "添加域名成功！"
+		if result.Msg != "" {
+			msg += " " + result.Msg
+		}
+		middleware.SuccessResponse(c, gin.H{"id": domain.ID, "msg": msg})
+		return
+	}
+
+	provider, err := dns.GetProvider(account.Type, config, domainName, "")
 	if err != nil {
 		middleware.ErrorResponse(c, err.Error())
 		return
@@ -328,7 +380,7 @@ func CreateDomain(c *gin.Context) {
 
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
 	defer cancel()
-	result, err := provider.GetDomainList(ctx, req.Name, 1, 100)
+	result, err := provider.GetDomainList(ctx, domainName, 1, 100)
 	if err != nil {
 		middleware.ErrorResponse(c, "获取域名失败: "+err.Error())
 		return
@@ -341,7 +393,7 @@ func CreateDomain(c *gin.Context) {
 	}
 	var thirdID string
 	for _, d := range domainList {
-		if d.Name == req.Name {
+		if d.Name == domainName {
 			thirdID = d.ID
 			break
 		}
@@ -360,7 +412,7 @@ func CreateDomain(c *gin.Context) {
 
 	domain := models.Domain{
 		AccountID: uint(aid),
-		Name:      req.Name,
+		Name:      domainName,
 		ThirdID:   thirdID,
 	}
 
@@ -577,6 +629,7 @@ type GetRecordsRequest struct {
 	Status     string `json:"status" form:"status"`       // 1/0、enable/disable，或 ENABLE/DISABLE
 	SubDomain  string `json:"subdomain" form:"subdomain"` // 主机记录（前缀）筛选，与 dnsmgr subdomain 一致
 	Value      string `json:"value" form:"value"`         // 记录值模糊
+	GroupID    string `json:"group_id" form:"group_id"`   // 记录分组 ID
 }
 
 /*
@@ -750,7 +803,19 @@ func GetRecords(c *gin.Context) {
 		}
 	} else {
 		subForAPI := strings.TrimSpace(req.SubDomain)
-		result, err := provider.GetDomainRecords(ctx, page, pageSize, req.Keyword, subForAPI, req.Value, req.RecordType, req.Line, statusAPI)
+		groupID := strings.TrimSpace(req.GroupID)
+
+		var result *dns.PageResult
+		var err error
+		if groupID != "" {
+			if grouper, ok := provider.(dns.RecordGrouper); ok {
+				result, err = grouper.GetDomainRecordsByGroup(ctx, groupID, page, pageSize, req.Keyword, subForAPI, req.Value, req.RecordType, req.Line, statusAPI)
+			} else {
+				result, err = provider.GetDomainRecords(ctx, page, pageSize, req.Keyword, subForAPI, req.Value, req.RecordType, req.Line, statusAPI)
+			}
+		} else {
+			result, err = provider.GetDomainRecords(ctx, page, pageSize, req.Keyword, subForAPI, req.Value, req.RecordType, req.Line, statusAPI)
+		}
 		if err != nil {
 			middleware.ErrorResponse(c, "获取记录失败: "+err.Error())
 			return
@@ -1064,6 +1129,10 @@ func SetRecordStatus(c *gin.Context) {
 	userLevel := c.GetInt("level")
 	if !middleware.CheckDomainPermission(userID, userLevel, req.DomainID) {
 		middleware.ErrorResponse(c, "无权操作该域名")
+		return
+	}
+	if readOnly, exists := c.Get("perm_read_only"); exists && readOnly.(bool) {
+		middleware.ErrorResponse(c, "您对该域名仅有只读权限")
 		return
 	}
 
@@ -1473,4 +1542,170 @@ func BatchUpdateDomainExpire(c *gin.Context) {
 
 	count := database.WithContext(c).Model(&models.Domain{}).Where("id IN ?", req.IDs).Update("check_status", 0).RowsAffected
 	middleware.SuccessMsg(c, fmt.Sprintf("已提交%d个域名，约%d分钟后刷新完成", count, (count/5)+1))
+}
+
+/* getMainDomainByPSL 使用 Public Suffix List 获取域名的注册域 */
+func getMainDomainByPSL(domain string) string {
+	domain = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(domain), "."))
+	eTLD1, err := publicsuffix.EffectiveTLDPlusOne(domain)
+	if err != nil {
+		parts := strings.Split(domain, ".")
+		if len(parts) >= 2 {
+			return parts[len(parts)-2] + "." + parts[len(parts)-1]
+		}
+		return domain
+	}
+	return eTLD1
+}
+
+/* findManagedParentDomain 在数据库中查找已管理的父域名（最长匹配优先） */
+func findManagedParentDomain(domain string) *models.Domain {
+	domain = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(domain), "."))
+	var domains []models.Domain
+	database.DB.Find(&domains)
+
+	var best *models.Domain
+	for i := range domains {
+		parent := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(domains[i].Name), "."))
+		if parent == domain {
+			continue
+		}
+		if strings.HasSuffix(domain, "."+parent) {
+			if best == nil || len(parent) > len(best.Name) {
+				best = &domains[i]
+			}
+		}
+	}
+	return best
+}
+
+/* buildRelativeRecordName 构建子域名相对于父域名的主机记录名 */
+func buildRelativeRecordName(subdomain, parentDomain string) string {
+	subdomain = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(subdomain), "."))
+	parentDomain = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(parentDomain), "."))
+	if subdomain == parentDomain {
+		return "@"
+	}
+	suffix := "." + parentDomain
+	if !strings.HasSuffix(subdomain, suffix) {
+		return ""
+	}
+	return subdomain[:len(subdomain)-len(suffix)]
+}
+
+type delegateResult struct {
+	Name    string
+	ThirdID string
+	Msg     string
+}
+
+/* addDnsPodDelegatedSubdomain 执行 DNSPod 子域托管自动委派流程 */
+func addDnsPodDelegatedSubdomain(ctx context.Context, config map[string]string, account *models.Account, domain string) (*delegateResult, error) {
+	parentDomain := findManagedParentDomain(domain)
+	if parentDomain == nil {
+		return nil, fmt.Errorf("未找到可写的父域名，请先把父域添加到系统后再创建子域托管")
+	}
+
+	relativeName := buildRelativeRecordName(domain, parentDomain.Name)
+	if relativeName == "@" || relativeName == "" {
+		return nil, fmt.Errorf("当前输入看起来是根域名，请直接按普通新域名方式添加")
+	}
+
+	// 创建 dnspod provider（以子域为操作对象）
+	delegator := dnspodProvider.NewProvider(config, domain, "")
+	sd, ok := delegator.(dns.SubdomainDelegator)
+	if !ok {
+		return nil, fmt.Errorf("当前腾讯云账户不支持子域托管自动委派")
+	}
+
+	validation, err := sd.CreateSubdomainValidateTxtValue(ctx, domain)
+	if err != nil {
+		return nil, fmt.Errorf("获取腾讯云子域校验 TXT 失败，%v", err)
+	}
+	if validation.Value == "" {
+		return nil, fmt.Errorf("腾讯云未返回子域校验 TXT 值，请稍后重试")
+	}
+
+	validationRecordName := validation.Subdomain
+	if validationRecordName == "" {
+		validationRecordName = "_dnsauth." + relativeName
+	}
+
+	// 在父域名上添加验证 TXT 记录
+	parentProvider, err := dns.GetProvider(account.Type, config, parentDomain.Name, parentDomain.ThirdID)
+	if err != nil {
+		return nil, fmt.Errorf("父域 DNS 驱动初始化失败，%v", err)
+	}
+	defaultLine := dns.DefaultDNSLine(account.Type)
+	_, _, err = dns.EnsureChallengeRecord(ctx, parentProvider, validationRecordName, "TXT", validation.Value, defaultLine, 600, "DNSPod子域托管校验")
+	if err != nil {
+		return nil, fmt.Errorf("父域自动添加校验 TXT 失败，%v", err)
+	}
+
+	// 轮询等待验证通过
+	validated := false
+	for i := 0; i < 4; i++ {
+		if err := sd.DescribeSubdomainValidateStatus(ctx, domain); err == nil {
+			validated = true
+			break
+		}
+		if i < 3 {
+			time.Sleep(3 * time.Second)
+		}
+	}
+	if !validated {
+		return nil, fmt.Errorf("已自动向父域添加腾讯云校验 TXT，但腾讯云暂未检测到生效。请等待 DNS 生效后再次点击添加。校验主机：%s；校验值：%s", validationRecordName, validation.Value)
+	}
+
+	// 创建子域托管
+	domainID, nameServers, err := sd.AddDomainWithNS(ctx, domain)
+	if err != nil {
+		return nil, fmt.Errorf("腾讯云创建子域托管失败，%v", err)
+	}
+
+	if len(nameServers) == 0 {
+		return &delegateResult{
+			Name:    domain,
+			ThirdID: domainID,
+			Msg:     "腾讯云子域已创建，但未返回 NS 服务器，请到腾讯云控制台查看后手动补父域委派。",
+		}, nil
+	}
+
+	// 在父域名上添加 NS 委派记录
+	for _, ns := range nameServers {
+		if err := ensureNSRecord(ctx, parentProvider, relativeName, ns, defaultLine); err != nil {
+			return nil, fmt.Errorf("腾讯云子域已创建，但父域自动添加 NS 委派失败，%v。请手动添加 NS：%s", err, strings.Join(nameServers, ", "))
+		}
+	}
+
+	return &delegateResult{
+		Name:    domain,
+		ThirdID: domainID,
+		Msg:     "已自动完成父域校验 TXT 和 NS 委派。",
+	}, nil
+}
+
+/* ensureNSRecord 确保 NS 记录存在（不删除已有的其他 NS 记录） */
+func ensureNSRecord(ctx context.Context, provider dns.Provider, name, nsValue, line string) error {
+	pr, err := provider.GetSubDomainRecords(ctx, name, 1, 100, "NS", "")
+	if err != nil {
+		if dns.TreatAsEmptySubDomainRecordListError(err) {
+			pr = &dns.PageResult{Total: 0, Records: []dns.Record{}}
+		} else {
+			return err
+		}
+	}
+	if pr != nil && pr.Records != nil {
+		if list, ok := pr.Records.([]dns.Record); ok {
+			normalizedWant := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(nsValue), "."))
+			for _, rec := range list {
+				existing := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(rec.Value), "."))
+				if existing == normalizedWant {
+					return nil
+				}
+			}
+		}
+	}
+	_, err = provider.AddDomainRecord(ctx, name, "NS", nsValue, line, 600, 0, nil, "DNSPod子域托管委派")
+	return err
 }

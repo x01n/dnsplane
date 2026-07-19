@@ -21,6 +21,8 @@ import {
   CalendarClock,
   Tag,
   ChevronDown,
+  FolderOpen,
+  Settings,
 } from 'lucide-react'
 import { EmptyState } from '@/components/empty-state'
 import { TableSkeleton } from '@/components/table-skeleton'
@@ -73,25 +75,21 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
 import { toast } from 'sonner'
-import { domainApi, accountApi, Domain, Account, DomainItem, WhoisInfo } from '@/lib/api'
+import { domainApi, accountApi, domainCategoryApi, Domain, Account, DomainItem, DomainCategory, WhoisInfo } from '@/lib/api'
 import { formatDate, getDaysRemaining } from '@/lib/utils'
+import { usePageSize } from '@/lib/hooks'
 import { ProviderBadge } from '@/components/provider-icon'
+import { SortableHeader, SortState, handleSortToggle } from '@/components/sortable-header'
+import { Pagination } from '@/components/pagination'
 
 const LIST_PAGE_SIZE_OPTIONS = [10, 20, 50, 100] as const
-const LS_DOMAINS_PAGE_SIZE = 'dnsplane-domains-page-size'
-
-function readStoredDomainsPageSize(): number {
-  if (typeof window === 'undefined') return 20
-  const n = parseInt(localStorage.getItem(LS_DOMAINS_PAGE_SIZE) || '', 10)
-  return LIST_PAGE_SIZE_OPTIONS.includes(n as (typeof LIST_PAGE_SIZE_OPTIONS)[number]) ? n : 20
-}
 
 export default function DomainsPage() {
   const router = useRouter()
   const [domains, setDomains] = useState<Domain[]>([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
-  const [pageSize, setPageSize] = useState(readStoredDomainsPageSize)
+  const [pageSize, setPageSize] = usePageSize('domains')
   const [accounts, setAccounts] = useState<Account[]>([])
   const [loading, setLoading] = useState(true)
   const [keyword, setKeyword] = useState('')
@@ -101,6 +99,7 @@ export default function DomainsPage() {
   const [selectedDomain, setSelectedDomain] = useState<Domain | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [selectedIds, setSelectedIds] = useState<number[]>([])
+  const [sort, setSort] = useState<SortState>(null)
 
   // Edit form
   const [editFormData, setEditFormData] = useState({
@@ -136,10 +135,22 @@ export default function DomainsPage() {
   const [batchRemarkText, setBatchRemarkText] = useState('')
   const [batchRemarkSubmitting, setBatchRemarkSubmitting] = useState(false)
 
+  // Category
+  const [categories, setCategories] = useState<DomainCategory[]>([])
+  const [selectedCid, setSelectedCid] = useState<string>('')
+  const [categoryDialogOpen, setCategoryDialogOpen] = useState(false)
+  const [categoryForm, setCategoryForm] = useState({ name: '', remark: '', sort: 0 })
+  const [editingCategory, setEditingCategory] = useState<DomainCategory | null>(null)
+  const [categorySubmitting, setCategorySubmitting] = useState(false)
+  const [batchCategoryOpen, setBatchCategoryOpen] = useState(false)
+  const [batchCategoryId, setBatchCategoryId] = useState<string>('')
+  const [batchCategorySubmitting, setBatchCategorySubmitting] = useState(false)
+
   // 仅挂载时拉取；分页/筛选由显式操作触发 fetchDomains
   useEffect(() => {
     fetchAccounts()
     fetchDomains()
+    fetchCategories()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -154,14 +165,31 @@ export default function DomainsPage() {
     }
   }
 
-  const fetchDomains = async (p?: number, sizeOverride?: number) => {
+  const fetchCategories = async () => {
+    try {
+      const res = await domainCategoryApi.list()
+      if (res.code === 0 && res.data) {
+        setCategories(res.data.list || [])
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  const fetchDomains = async (p?: number, sizeOverride?: number, sortOverride?: SortState | undefined) => {
     setLoading(true)
     try {
       const currentPage = p ?? page
       const ps = sizeOverride ?? pageSize
+      const currentSort = sortOverride !== undefined ? sortOverride : sort
       const params: Record<string, string | number> = { page: currentPage, page_size: ps }
       if (keyword) params.keyword = keyword
       if (selectedAid) params.aid = selectedAid
+      if (selectedCid) params.cid = selectedCid
+      if (currentSort) {
+        params.sort_field = currentSort.field
+        params.sort_order = currentSort.order
+      }
       const res = await domainApi.list(params)
       if (res.code === 0 && res.data) {
         setDomains(res.data.list || [])
@@ -196,13 +224,20 @@ export default function DomainsPage() {
     const next = parseInt(value, 10)
     if (!LIST_PAGE_SIZE_OPTIONS.includes(next as (typeof LIST_PAGE_SIZE_OPTIONS)[number])) return
     setPageSize(next)
-    try {
-      localStorage.setItem(LS_DOMAINS_PAGE_SIZE, String(next))
-    } catch {
-      // ignore
-    }
     setPage(1)
     fetchDomains(1, next)
+  }
+
+  const handleSort = (field: string) => {
+    let nextSort: SortState
+    if (sort?.field === field) {
+      nextSort = sort.order === 'asc' ? { field, order: 'desc' } : null
+    } else {
+      nextSort = { field, order: 'asc' }
+    }
+    setSort(nextSort)
+    setPage(1)
+    fetchDomains(1, undefined, nextSort)
   }
 
   /* 根据到期天数返回表格行高亮 className */
@@ -736,6 +771,23 @@ export default function DomainsPage() {
                   ))}
                 </SelectContent>
               </Select>
+              <Select value={selectedCid || 'all'} onValueChange={(v) => { setSelectedCid(v === 'all' ? '' : v); setPage(1); fetchDomains(1) }}>
+                <SelectTrigger className="w-36">
+                  <SelectValue placeholder="全部分类" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">全部分类</SelectItem>
+                  <SelectItem value="0">未分类</SelectItem>
+                  {categories.map((cat) => (
+                    <SelectItem key={cat.id} value={cat.id.toString()}>
+                      {cat.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Button type="button" variant="ghost" size="icon" onClick={() => setCategoryDialogOpen(true)} title="管理分类">
+                <Settings className="h-4 w-4" />
+              </Button>
               <Button type="submit" variant="secondary">搜索</Button>
             </form>
             {selectedIds.length > 0 && (
@@ -770,6 +822,15 @@ export default function DomainsPage() {
                       <Tag className="h-4 w-4 mr-2" />
                       统一设置备注
                     </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onClick={() => {
+                        setBatchCategoryId('')
+                        setBatchCategoryOpen(true)
+                      }}
+                    >
+                      <FolderOpen className="h-4 w-4 mr-2" />
+                      设置分类
+                    </DropdownMenuItem>
                   </DropdownMenuContent>
                 </DropdownMenu>
                 <Button variant="destructive" size="sm" onClick={handleBatchDelete}>
@@ -799,10 +860,11 @@ export default function DomainsPage() {
                       onCheckedChange={toggleSelectAll}
                     />
                   </TableHead>
-                  <TableHead>域名</TableHead>
+                  <SortableHeader field="name" label="域名" currentSort={sort} onSort={handleSort} />
                   <TableHead>账户</TableHead>
-                  <TableHead>记录数</TableHead>
-                  <TableHead>过期时间</TableHead>
+                  <SortableHeader field="record_count" label="记录数" currentSort={sort} onSort={handleSort} />
+                  <SortableHeader field="expire_time" label="过期时间" currentSort={sort} onSort={handleSort} />
+                  <TableHead>分类</TableHead>
                   <TableHead>备注</TableHead>
                   <TableHead className="w-[100px]">操作</TableHead>
                 </TableRow>
@@ -851,6 +913,15 @@ export default function DomainsPage() {
                         </div>
                       ) : (
                         '-'
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      {domain.cid ? (
+                        <Badge variant="secondary" className="text-xs">
+                          {categories.find(c => c.id === domain.cid)?.name || '未知'}
+                        </Badge>
+                      ) : (
+                        <span className="text-muted-foreground text-xs">-</span>
                       )}
                     </TableCell>
                     <TableCell className="text-muted-foreground">{domain.remark || '-'}</TableCell>
@@ -914,52 +985,14 @@ export default function DomainsPage() {
 
           {/* Pagination */}
           {total > 0 && (
-            <div className="flex flex-wrap items-center justify-between gap-3 mt-4 pt-4 border-t">
-              <div className="flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
-                <span>
-                  共 {total} 条，第 {page}/{Math.max(1, Math.ceil(total / pageSize))} 页
-                </span>
-                <div className="flex items-center gap-2">
-                  <span className="text-muted-foreground whitespace-nowrap">每页</span>
-                  <Select value={String(pageSize)} onValueChange={handlePageSizeChange}>
-                    <SelectTrigger className="h-8 w-[92px]" aria-label="每页条数">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {LIST_PAGE_SIZE_OPTIONS.map((n) => (
-                        <SelectItem key={n} value={String(n)}>
-                          {n} 条
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-              <div className="flex items-center gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={page <= 1}
-                  onClick={() => {
-                    setPage(page - 1)
-                    fetchDomains(page - 1)
-                  }}
-                >
-                  上一页
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={page >= Math.max(1, Math.ceil(total / pageSize))}
-                  onClick={() => {
-                    setPage(page + 1)
-                    fetchDomains(page + 1)
-                  }}
-                >
-                  下一页
-                </Button>
-              </div>
-            </div>
+            <Pagination
+              page={page}
+              pageSize={pageSize}
+              total={total}
+              onPageChange={(p) => { setPage(p); fetchDomains(p) }}
+              onPageSizeChange={(size) => { handlePageSizeChange(String(size)) }}
+              pageSizeOptions={LIST_PAGE_SIZE_OPTIONS}
+            />
           )}
         </CardContent>
       </Card>
@@ -1342,6 +1375,144 @@ export default function DomainsPage() {
             <Button onClick={handleBatchRemarkSubmit} disabled={batchRemarkSubmitting}>
               {batchRemarkSubmitting && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
               保存
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ============== Category Management Dialog ============== */}
+      <Dialog open={categoryDialogOpen} onOpenChange={setCategoryDialogOpen}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>分类管理</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              {categories.length === 0 ? (
+                <p className="text-sm text-muted-foreground">暂无分类，请添加</p>
+              ) : (
+                <div className="border rounded-md divide-y max-h-60 overflow-y-auto">
+                  {categories.map((cat) => (
+                    <div key={cat.id} className="flex items-center justify-between px-3 py-2">
+                      <div>
+                        <span className="font-medium text-sm">{cat.name}</span>
+                        {cat.remark && <span className="text-xs text-muted-foreground ml-2">{cat.remark}</span>}
+                        <span className="text-xs text-muted-foreground ml-2">({cat.domain_count} 个域名)</span>
+                      </div>
+                      <div className="flex gap-1">
+                        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => {
+                          setEditingCategory(cat)
+                          setCategoryForm({ name: cat.name, remark: cat.remark, sort: cat.sort })
+                        }}>
+                          <Pencil className="h-3.5 w-3.5" />
+                        </Button>
+                        <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={async () => {
+                          if (cat.domain_count > 0) { toast.error('该分类下存在域名，无法删除'); return }
+                          const res = await domainCategoryApi.delete(cat.id)
+                          if (res.code === 0) { toast.success('删除成功'); fetchCategories() } else { toast.error(res.msg || '删除失败') }
+                        }}>
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </Button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+            <Separator />
+            <div className="space-y-2">
+              <p className="text-sm font-medium">{editingCategory ? '编辑分类' : '添加分类'}</p>
+              <div className="flex gap-2">
+                <Input
+                  placeholder="分类名称"
+                  value={categoryForm.name}
+                  onChange={(e) => setCategoryForm({ ...categoryForm, name: e.target.value })}
+                  className="flex-1"
+                />
+                <Input
+                  placeholder="备注（可选）"
+                  value={categoryForm.remark}
+                  onChange={(e) => setCategoryForm({ ...categoryForm, remark: e.target.value })}
+                  className="flex-1"
+                />
+                <Input
+                  type="number"
+                  placeholder="排序"
+                  value={categoryForm.sort}
+                  onChange={(e) => setCategoryForm({ ...categoryForm, sort: parseInt(e.target.value) || 0 })}
+                  className="w-20"
+                />
+              </div>
+              <div className="flex gap-2">
+                {editingCategory && (
+                  <Button variant="outline" size="sm" onClick={() => { setEditingCategory(null); setCategoryForm({ name: '', remark: '', sort: 0 }) }}>
+                    取消编辑
+                  </Button>
+                )}
+                <Button size="sm" disabled={categorySubmitting || !categoryForm.name} onClick={async () => {
+                  setCategorySubmitting(true)
+                  try {
+                    const res = editingCategory
+                      ? await domainCategoryApi.update(editingCategory.id, categoryForm)
+                      : await domainCategoryApi.create(categoryForm)
+                    if (res.code === 0) {
+                      toast.success(editingCategory ? '修改成功' : '添加成功')
+                      setCategoryForm({ name: '', remark: '', sort: 0 })
+                      setEditingCategory(null)
+                      fetchCategories()
+                    } else {
+                      toast.error(res.msg || '操作失败')
+                    }
+                  } catch { toast.error('操作失败') } finally { setCategorySubmitting(false) }
+                }}>
+                  {categorySubmitting && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                  {editingCategory ? '保存' : '添加'}
+                </Button>
+              </div>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* ============== Batch Set Category Dialog ============== */}
+      <Dialog open={batchCategoryOpen} onOpenChange={setBatchCategoryOpen}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>设置分类</DialogTitle>
+            <DialogDescription>为已选的 {selectedIds.length} 个域名设置分类</DialogDescription>
+          </DialogHeader>
+          <Select value={batchCategoryId} onValueChange={setBatchCategoryId}>
+            <SelectTrigger>
+              <SelectValue placeholder="选择分类" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="0">取消分类</SelectItem>
+              {categories.map((cat) => (
+                <SelectItem key={cat.id} value={cat.id.toString()}>
+                  {cat.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setBatchCategoryOpen(false)}>取消</Button>
+            <Button disabled={batchCategorySubmitting || batchCategoryId === ''} onClick={async () => {
+              setBatchCategorySubmitting(true)
+              try {
+                const res = await domainCategoryApi.setDomainCategory(selectedIds, parseInt(batchCategoryId))
+                if (res.code === 0) {
+                  toast.success(res.msg || '设置成功')
+                  setBatchCategoryOpen(false)
+                  setSelectedIds([])
+                  fetchDomains()
+                  fetchCategories()
+                } else {
+                  toast.error(res.msg || '设置失败')
+                }
+              } catch { toast.error('设置失败') } finally { setBatchCategorySubmitting(false) }
+            }}>
+              {batchCategorySubmitting && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+              确定
             </Button>
           </DialogFooter>
         </DialogContent>

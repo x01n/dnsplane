@@ -142,11 +142,25 @@ func extractModule(path string) string {
 // formatLatency 格式化耗时显示
 func formatLatency(d time.Duration) string {
 	if d < time.Millisecond {
-		return fmt.Sprintf("%.2fµs", float64(d.Microseconds()))
+		return fmt.Sprintf("%6.0fµs", float64(d.Microseconds()))
 	} else if d < time.Second {
-		return fmt.Sprintf("%.2fms", float64(d.Microseconds())/1000)
+		return fmt.Sprintf("%6.2fms", float64(d.Microseconds())/1000)
 	}
-	return fmt.Sprintf("%.2fs", d.Seconds())
+	return fmt.Sprintf("%6.2fs ", d.Seconds())
+}
+
+// getLatencyColor 根据耗时返回颜色
+func getLatencyColor(d time.Duration) string {
+	switch {
+	case d < 10*time.Millisecond:
+		return colorGreen
+	case d < 100*time.Millisecond:
+		return colorCyan
+	case d < time.Second:
+		return colorYellow
+	default:
+		return colorRed
+	}
 }
 
 // Logger 自定义日志中间件
@@ -185,14 +199,15 @@ func Logger() gin.HandlerFunc {
 		// ---- 控制台彩色输出 ----
 		statusColor := getStatusColor(status)
 		methodColor := getMethodColor(method)
+		latencyColor := getLatencyColor(latency)
 
-		// 基础格式: 14:20:24 200 1.99ms POST /api/domains/list
-		consoleLine := fmt.Sprintf("%s%s%s %s%-3s%s %s%10s%s %s%-6s%s %s%s%s",
+		// 格式: 14:20:24 200  1.99ms GET    /api/domains/list
+		consoleLine := fmt.Sprintf("%s%s%s %s%s%s %s%s%s %s%-7s%s%s",
 			colorGray, timeStr, colorReset,
 			statusColor, statusStr, colorReset,
-			colorGray, latencyStr, colorReset,
+			latencyColor, latencyStr, colorReset,
 			methodColor, method, colorReset,
-			colorWhite, path, colorReset,
+			path,
 		)
 
 		// 如果有错误，在末尾追加错误标识

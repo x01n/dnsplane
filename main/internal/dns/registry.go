@@ -66,6 +66,8 @@ var DefaultLineMapping = map[string]map[string]string{
 	"jdcloud":    {"DEF": "-1", "CT": "1", "CU": "2", "CM": "3", "AB": "4"},
 	"bt":         {"DEF": "0", "CT": "285344768", "CU": "285345792", "CM": "285346816"},
 	"cloudflare": {"DEF": "0"},
+	"dnsmgr":     {"DEF": "0"},
+	"henet":      {"DEF": "default"},
 	"namesilo":   {"DEF": "default"},
 	"powerdns":   {"DEF": "default"},
 	"spaceship":  {"DEF": "default"},

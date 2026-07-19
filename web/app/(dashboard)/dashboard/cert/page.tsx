@@ -33,16 +33,16 @@ import { EmptyState } from '@/components/empty-state'
 import { ShieldCheck, Plus, Search, RefreshCw, Download, Eye, Trash2, Play, FileText, CheckCircle, XCircle, Clock, AlertTriangle, Server, Rocket, Upload, Loader2, RotateCcw, KeyRound, Globe, Copy, Check, Info } from 'lucide-react'
 import Link from 'next/link'
 
-const CERT_STATUS_MAP: Record<number, { label: string; color: string; icon: React.ReactNode }> = {
-  0: { label: '待申请', color: 'bg-gray-500', icon: <Clock className="h-4 w-4" /> },
-  1: { label: '申请中', color: 'bg-blue-500', icon: <RefreshCw className="h-4 w-4 animate-spin" /> },
-  2: { label: '待验证', color: 'bg-yellow-500', icon: <AlertTriangle className="h-4 w-4" /> },
-  3: { label: '已签发', color: 'bg-green-500', icon: <CheckCircle className="h-4 w-4" /> },
-  [-1]: { label: '创建失败', color: 'bg-red-500', icon: <XCircle className="h-4 w-4" /> },
-  [-2]: { label: '订单创建失败', color: 'bg-red-500', icon: <XCircle className="h-4 w-4" /> },
-  [-3]: { label: '验证失败', color: 'bg-red-500', icon: <XCircle className="h-4 w-4" /> },
-  [-4]: { label: '验证超时', color: 'bg-orange-500', icon: <XCircle className="h-4 w-4" /> },
-  [-5]: { label: '签发失败', color: 'bg-red-500', icon: <XCircle className="h-4 w-4" /> },
+const CERT_STATUS_MAP: Record<number, { label: string; variant: 'default' | 'secondary' | 'destructive' | 'outline'; className: string; icon: React.ReactNode }> = {
+  0: { label: '待申请', variant: 'secondary', className: '', icon: <Clock className="h-4 w-4" /> },
+  1: { label: '申请中', variant: 'outline', className: 'bg-blue-50 dark:bg-blue-950 text-blue-700 dark:text-blue-300 border-blue-200 dark:border-blue-800', icon: <RefreshCw className="h-4 w-4 animate-spin" /> },
+  2: { label: '待验证', variant: 'outline', className: 'bg-yellow-50 dark:bg-yellow-950 text-yellow-700 dark:text-yellow-300 border-yellow-200 dark:border-yellow-800', icon: <AlertTriangle className="h-4 w-4" /> },
+  3: { label: '已签发', variant: 'outline', className: 'bg-green-50 dark:bg-green-950 text-green-700 dark:text-green-300 border-green-200 dark:border-green-800', icon: <CheckCircle className="h-4 w-4" /> },
+  [-1]: { label: '创建失败', variant: 'destructive', className: '', icon: <XCircle className="h-4 w-4" /> },
+  [-2]: { label: '订单创建失败', variant: 'destructive', className: '', icon: <XCircle className="h-4 w-4" /> },
+  [-3]: { label: '验证失败', variant: 'destructive', className: '', icon: <XCircle className="h-4 w-4" /> },
+  [-4]: { label: '验证超时', variant: 'outline', className: 'bg-orange-50 dark:bg-orange-950 text-orange-700 dark:text-orange-300 border-orange-200 dark:border-orange-800', icon: <XCircle className="h-4 w-4" /> },
+  [-5]: { label: '签发失败', variant: 'destructive', className: '', icon: <XCircle className="h-4 w-4" /> },
 }
 
 const KEY_TYPES = ['RSA', 'ECC']
@@ -160,6 +160,20 @@ export default function CertPage() {
     loadData()
   }, [])
 
+  useEffect(() => {
+    const hasProcessing = orders.some(o => o.status === 1)
+    if (!hasProcessing) return
+    const timer = setInterval(async () => {
+      try {
+        const res = await certApi.getOrders()
+        if (res.code === 0 && res.data) {
+          setOrders(Array.isArray(res.data) ? res.data : (res.data as { list: CertOrder[] }).list || [])
+        }
+      } catch { /* ignore */ }
+    }, 5000)
+    return () => clearInterval(timer)
+  }, [orders])
+
   /* 域名管理跳转：/dashboard/cert?domain=example.com 或 ?domains=a.com,b.com */
   useEffect(() => {
     if (certUrlPrefillDone.current) return
@@ -183,7 +197,7 @@ export default function CertPage() {
   }, [searchParams, router, pathname])
 
   const loadData = async () => {
-    setLoading(true)
+    if (orders.length === 0) setLoading(true)
     try {
       const [ordersRes, accountsRes, deployAccountsRes, providersRes] = await Promise.all([
         certApi.getOrders(),
@@ -669,9 +683,9 @@ export default function CertPage() {
   const expiringCount = orders.filter(o => o.end_day !== undefined && o.end_day > 0 && o.end_day <= 7).length
 
   const getStatusBadge = (status: number) => {
-    const statusInfo = CERT_STATUS_MAP[status] || { label: '未知', color: 'bg-gray-500', icon: null }
+    const statusInfo = CERT_STATUS_MAP[status] || { label: '未知', variant: 'secondary' as const, className: '', icon: null }
     return (
-      <Badge className={`${statusInfo.color} text-white flex items-center gap-1`}>
+      <Badge variant={statusInfo.variant} className={cn('flex items-center gap-1', statusInfo.className)}>
         {statusInfo.icon}
         {statusInfo.label}
       </Badge>
@@ -869,7 +883,7 @@ export default function CertPage() {
                           <Button size="sm" variant="outline" className="min-h-10" onClick={() => handleDownload(order, 'zip')}>下载</Button>
                         </>
                       )}
-                      {order.status !== 3 && order.status >= 0 && (
+                      {order.status !== 3 && (
                         <Button size="sm" variant="outline" className="min-h-10" onClick={() => handleProcess(order)}>处理</Button>
                       )}
                       <Button size="sm" variant="outline" className="min-h-10" onClick={() => handleViewLog(order)}>日志</Button>
@@ -941,7 +955,7 @@ export default function CertPage() {
                         <div className="space-y-1">
                           {getStatusBadge(order.status)}
                           {order.status < 0 && order.error && (
-                            <p className="text-xs text-destructive max-w-[220px] break-words">{order.error}</p>
+                            <p className="text-xs text-destructive max-w-[260px] truncate cursor-help" title={order.error}>{order.error}</p>
                           )}
                         </div>
                       </TableCell>
@@ -985,8 +999,8 @@ export default function CertPage() {
                               </Button>
                             </>
                           )}
-                          {order.status !== 3 && order.status >= 0 && (
-                            <Button size="sm" variant="ghost" onClick={() => handleProcess(order)} title="处理证书">
+                          {order.status !== 3 && (
+                            <Button size="sm" variant="ghost" onClick={() => handleProcess(order)} title="重新处理">
                               <Play className="h-4 w-4" />
                             </Button>
                           )}

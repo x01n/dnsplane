@@ -85,6 +85,47 @@ type Provider interface {
 	AddDomain(ctx context.Context, domain string) error
 }
 
+/* RecordGroup 解析记录分组 */
+type RecordGroup struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+/* DomainAlias 域名别名 */
+type DomainAlias struct {
+	ID    string `json:"id"`
+	Name  string `json:"name"`
+	Status int   `json:"status"`
+}
+
+/* RecordGrouper 支持解析记录分组的 provider 扩展接口 */
+type RecordGrouper interface {
+	GetRecordGroups(ctx context.Context) ([]RecordGroup, error)
+	ChangeRecordGroup(ctx context.Context, recordIDs []string, groupID string) error
+	GetDomainRecordsByGroup(ctx context.Context, groupID string, page, pageSize int, keyword, subDomain, value, recordType, line, status string) (*PageResult, error)
+}
+
+/* DomainAliaser 支持域名别名的 provider 扩展接口 */
+type DomainAliaser interface {
+	GetDomainAliasList(ctx context.Context) ([]DomainAlias, error)
+	AddDomainAlias(ctx context.Context, alias string) error
+	DeleteDomainAlias(ctx context.Context, aliasID string) error
+}
+
+/* SubdomainValidateResult 子域验证 TXT 信息 */
+type SubdomainValidateResult struct {
+	Domain    string
+	Subdomain string
+	Value     string
+}
+
+/* SubdomainDelegator 支持子域托管自动委派的 provider 扩展接口 */
+type SubdomainDelegator interface {
+	CreateSubdomainValidateTxtValue(ctx context.Context, domain string) (*SubdomainValidateResult, error)
+	DescribeSubdomainValidateStatus(ctx context.Context, domain string) error
+	AddDomainWithNS(ctx context.Context, domain string) (domainID string, nameServers []string, err error)
+}
+
 /* ProviderConfig DNS服务商配置 */
 type ProviderConfig struct {
 	Type     string           `json:"type"`
@@ -114,11 +155,13 @@ type ConfigOption struct {
 
 /* ProviderFeatures 服务商特性 */
 type ProviderFeatures struct {
-	Remark   int  `json:"remark"`   // 0:不支持 1:单独设置 2:和记录一起设置
-	Status   bool `json:"status"`   // 是否支持启用暂停
-	Redirect bool `json:"redirect"` // 是否支持域名转发
-	Log      bool `json:"log"`      // 是否支持查看日志
-	Weight   bool `json:"weight"`   // 是否支持权重
-	Page     bool `json:"page"`     // 是否客户端分页
-	Add      bool `json:"add"`      // 是否支持添加域名
+	Remark      int  `json:"remark"`       // 0:不支持 1:单独设置 2:和记录一起设置
+	Status      bool `json:"status"`       // 是否支持启用暂停
+	Redirect    bool `json:"redirect"`     // 是否支持域名转发
+	Log         bool `json:"log"`          // 是否支持查看日志
+	Weight      bool `json:"weight"`       // 是否支持权重
+	Page        bool `json:"page"`         // 是否客户端分页
+	Add         bool `json:"add"`          // 是否支持添加域名
+	RecordGroup bool `json:"record_group"` // 是否支持记录分组
+	DomainAlias bool `json:"domain_alias"` // 是否支持域名别名
 }

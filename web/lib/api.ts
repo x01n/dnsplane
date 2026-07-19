@@ -7,6 +7,7 @@ export interface ApiResponse<T = unknown> {
   code: number
   msg?: string
   data?: T
+  total?: number
 }
 
 /** 读取 document.cookie 中指定 name 的值；SSR 下返回空串 */
@@ -306,6 +307,7 @@ export const authApi = {
     /** 图形验证码内容，将序列化为 captcha_code */
     captcha?: string
     captcha_code?: string
+    verify_token?: string
     totp_code?: string
   }) => {
     const body: Record<string, string> = {
@@ -315,6 +317,7 @@ export const authApi = {
     if (data.captcha_id) body.captcha_id = data.captcha_id
     const code = data.captcha_code ?? data.captcha
     if (code !== undefined && code !== '') body.captcha_code = code
+    if (data.verify_token) body.verify_token = data.verify_token
     if (data.totp_code) body.totp_code = data.totp_code
     return api.post<{ token: string; refresh_token: string; expires_in?: number; user: User }>(
       '/login',
@@ -371,13 +374,13 @@ export const authApi = {
   }) => api.post<{ verify_token: string }>('/auth/captcha/behavioral/verify', data),
   getGoCaptcha: () =>
     api.get<{ captcha_id: string; image_base64: string; thumb_base64?: string }>(
-      '/auth/captcha/go'
+      '/auth/captcha/behavioral'
     ),
   verifyGoCaptcha: (data: {
     captcha_id: string
     answer: unknown
     captcha_type?: string
-  }) => api.post<{ verify_token: string }>('/auth/captcha/go/verify', data),
+  }) => api.post<{ verify_token: string }>('/auth/captcha/behavioral/verify', data),
 }
 
 // 系统访问控制配置（白名单/限流/CAPTCHA 触发条件）
@@ -415,7 +418,7 @@ export const accountApi = {
 
 // Domain APIs
 export const domainApi = {
-  list: (params?: { page?: number; page_size?: number; keyword?: string; aid?: number; status?: string }) =>
+  list: (params?: { page?: number; page_size?: number; keyword?: string; aid?: number; cid?: number; status?: string; sort_field?: string; sort_order?: string }) =>
     api.get<{ total: number; list: Domain[] }>('/domains', params),
   detail: (id: number | string) => api.get<Domain>(`/domains/${id}`),
   create: (data: { aid: number; name: string; third_id: string; method?: number }) =>
@@ -467,6 +470,34 @@ export const domainApi = {
   smartParse: (value: string) => api.get<{ type: string; value: string }>(`/domains/records/smartparse`, { value }),
   getRecordQuickInfo: (id: number | string) => api.post<{ lines: RecordLine[]; min_ttl: number; supports_weight: boolean; supports_remark: number; supports_log: boolean; supports_status: boolean }>(`/domains/${id}/records/quickinfo`, {}),
   getRecordChangeLogs: (id: number | string, params?: { page?: number; page_size?: number; keyword?: string; start_date?: string; end_date?: string }) => api.get<{ total: number; list: unknown[] }>(`/domains/${id}/records/logs`, params),
+  dnsCheck: (data: { domain: string; type: string }) =>
+    api.post<Array<{ server: string; ip: string; results: string[]; ttl: string; cost: number; error?: string }>>('/domains/dns-check', data),
+  accelerate: (id: number | string, data: { record_name: string; record_type: string; record_value: string; strategy?: string }) =>
+    api.post<{ results: Array<{ platform: string; status: string; msg?: string; cname?: string }> }>(`/domains/${id}/accel`, data),
+  batchAccelerate: (id: number | string, data: { records: Array<{ record_name: string; record_type: string; record_value: string }> }) =>
+    api.post(`/domains/${id}/accel/batch`, data),
+  getAccelStatus: (id: number | string) =>
+    api.get<{ records: Array<{ name: string; platforms: Array<{ platform: string; status: string }> }> }>(`/domains/${id}/accel/status`),
+  getAccelPlatforms: () =>
+    api.get<{ platforms: Array<{ platform: string; enabled: boolean; available: boolean; prefer_domain?: string; domain_name?: string; zone_id?: string; site_id?: string }>; strategy: string }>('/system/accel/platforms'),
+}
+
+export interface DomainCategory {
+  id: number
+  name: string
+  remark: string
+  sort: number
+  domain_count: number
+  created_at: string
+}
+
+export const domainCategoryApi = {
+  list: () => api.get<{ list: DomainCategory[] }>('/domains/categories'),
+  create: (data: { name: string; remark?: string; sort?: number }) => api.post('/domains/categories', data),
+  update: (id: number | string, data: { name: string; remark?: string; sort?: number }) => api.post(`/domains/categories/${id}`, data),
+  delete: (id: number | string) => api.post(`/domains/categories/${id}/delete`, {}),
+  setDomainCategory: (ids: (number | string)[], cid: number) =>
+    api.post('/domains/category', { ids: ids.map(String), cid }),
 }
 
 // Schedule APIs
@@ -662,6 +693,16 @@ export const systemApi = {
   updateCronConfig: (data: CronConfig) => api.post('/system/cron', data),
   getDNSProviders: () => api.get<DNSProvider[]>('/dns/providers'),
   getSystemInfo: () => api.get<SystemInfo>('/dashboard/system/info'),
+  getAccelConfig: () => api.get<Record<string, unknown>>('/system/accel/config'),
+  updateAccelConfig: (data: Record<string, unknown>) => api.post('/system/accel/config', data),
+  listEOZones: (data: { secret_id: string; secret_key: string; endpoint?: string }) =>
+    api.post<{ zones: Array<{ zone_id: string; zone_name: string; status: string; plan_type: string }> }>('/system/accel/eo/zones', data),
+  listESASites: (data: { access_key_id: string; access_key_secret: string; region?: string }) =>
+    api.post<{ sites: Array<{ site_id: string; site_name: string; status: string; plan_name: string }> }>('/system/accel/esa/sites', data),
+  listAccelAccounts: () =>
+    api.get<{ accounts: { cloudflare: Array<{ id: number; name: string; type: string }>; dnspod: Array<{ id: number; name: string; type: string }>; aliyun: Array<{ id: number; name: string; type: string }> }; cf_domains: Array<{ id: number; name: string; third_id: string }> }>('/system/accel/accounts'),
+  applyAccountToAccel: (data: { account_id: number; platform: string }) =>
+    api.post<Record<string, string>>('/system/accel/apply-account', data),
 }
 
 // Dashboard APIs
@@ -714,8 +755,8 @@ export const requestLogApi = {
 // Cloudflare 增强功能 API
 export const cloudflareApi = {
   // 自定义主机名
-  getHostnames: (domainId: number | string) =>
-    api.get<CustomHostname[]>(`/cloudflare/hostnames/${domainId}`),
+  getHostnames: (domainId: number | string, params?: { page?: number; pageSize?: number }) =>
+    api.get<CustomHostname[]>(`/cloudflare/hostnames/${domainId}`, { page: params?.page || 1, pageSize: params?.pageSize || 20 }),
   addHostname: (domainId: number | string, data: {
     hostname: string
     custom_origin_server?: string
@@ -748,6 +789,8 @@ export const cloudflareApi = {
     api.post<CloudflareBatchResult>(`/cloudflare/hostnames/batch-delete/${domainId}`, { hostname_ids: hostnameIds }),
   getHostnameTxtTargets: (domainId: number | string, hostname: string) =>
     api.post<CloudflareTxtTargetsResult>(`/cloudflare/hostnames/txt-targets/${domainId}`, { hostname }),
+  setupHostnameValidation: (domainId: number | string, hostnameId: string) =>
+    api.post<{ added: number; results: Array<{ fqdn: string; type: string; purpose: string; status: string; msg?: string; record_id?: string }> }>(`/cloudflare/hostnames/setup-validation/${domainId}`, { hostname_id: hostnameId }),
 
   // Fallback Origin
   getFallbackOrigin: (domainId: number | string) =>
@@ -905,6 +948,7 @@ export interface Account {
 export interface Domain {
   id: number
   aid: number
+  cid?: number
   name: string
   third_id: string
   is_hide: boolean
@@ -1373,14 +1417,19 @@ export interface CustomHostname {
   id: string
   hostname: string
   custom_origin_server?: string
+  custom_origin_sni?: string
   ssl: {
     status: string
     method: string
     type: string
     min_tls_version?: string
+    certificate_authority?: string
+    expires_on?: string
     validation_records?: Array<{
       txt_name?: string
       txt_value?: string
+      cname?: string
+      cname_target?: string
       http_url?: string
       http_body?: string
     }>
@@ -1388,6 +1437,31 @@ export interface CustomHostname {
       min_tls_version?: string
     }
   }
+  ssl_status?: string
+  ssl_method?: string
+  ssl_type?: string
+  ssl_certificate_authority?: string
+  ssl_min_tls_version?: string
+  ssl_expires_on?: string
+  ssl_validation_records?: Array<{
+    txt_name?: string
+    txt_value?: string
+    cname?: string
+    cname_target?: string
+    http_url?: string
+    http_body?: string
+  }>
+  ownership_verification?: {
+    type?: string
+    name?: string
+    value?: string
+  }
+  ownership_verification_http?: {
+    http_url?: string
+    http_body?: string
+  }
+  verification_status?: string
+  validation_errors?: Array<{ message?: string }>
   status: string
   created_at?: string
   modified_at?: string

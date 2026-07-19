@@ -30,3 +30,8 @@ func Invalidate(keys ...string) {
 		cache.C.Delete(cachePrefix + key)
 	}
 }
+
+func SetValue(key, value string) {
+	database.DB.Where("`key` = ?", key).Assign(models.SysConfig{Value: value}).FirstOrCreate(&models.SysConfig{Key: key})
+	cache.C.Set(cachePrefix+key, value, cacheTTL)
+}

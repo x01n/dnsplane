@@ -95,6 +95,18 @@ const providerConfig: Record<string, { name: string; color: string; bgColor: str
     bgColor: 'bg-indigo-50 dark:bg-indigo-950',
     icon: 'SP',
   },
+  henet: {
+    name: 'HE DNS',
+    color: '#B71C1C',
+    bgColor: 'bg-red-50 dark:bg-red-950',
+    icon: 'HE',
+  },
+  dnsmgr: {
+    name: 'DNSmgr',
+    color: '#455A64',
+    bgColor: 'bg-gray-50 dark:bg-gray-900',
+    icon: 'DNS',
+  },
   // 证书服务商
   letsencrypt: {
     name: "Let's Encrypt",

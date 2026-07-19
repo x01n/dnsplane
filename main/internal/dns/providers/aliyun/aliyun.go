@@ -2,6 +2,8 @@ package aliyun
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"main/internal/dns"
 	"strings"
 
@@ -21,7 +23,7 @@ func init() {
 			{Name: "AccessKeySecret", Key: "AccessKeySecret", Type: "input", Required: true},
 		},
 		Features: dns.ProviderFeatures{
-			Remark: 1, Status: true, Redirect: true, Log: true, Weight: false, Page: false, Add: true,
+			Remark: 1, Status: true, Redirect: true, Log: true, Weight: false, Page: false, Add: true, RecordGroup: true,
 		},
 	})
 }
@@ -340,4 +342,127 @@ func (p *Provider) AddDomain(ctx context.Context, domain string) error {
 	request.DomainName = domain
 	_, err := p.client.AddDomain(request)
 	return err
+}
+
+/* GetRecordGroups 获取解析记录分组列表 */
+func (p *Provider) GetRecordGroups(ctx context.Context) ([]dns.RecordGroup, error) {
+	req := requests.NewCommonRequest()
+	req.Method = "POST"
+	req.Domain = "alidns.aliyuncs.com"
+	req.Version = "2015-01-09"
+	req.ApiName = "DescribeRecordGroups"
+	req.QueryParams["Action"] = "DescribeRecordGroups"
+	req.QueryParams["DomainName"] = p.domain
+	req.QueryParams["PageSize"] = "100"
+	req.QueryParams["Lang"] = "zh"
+
+	resp, err := p.client.ProcessCommonRequest(req)
+	if err != nil {
+		return nil, err
+	}
+
+	var result struct {
+		RecordGroups struct {
+			RecordGroup []struct {
+				GroupId   string `json:"GroupId"`
+				GroupName string `json:"GroupName"`
+			} `json:"RecordGroup"`
+		} `json:"RecordGroups"`
+	}
+	if err := json.Unmarshal(resp.GetHttpContentBytes(), &result); err != nil {
+		return nil, fmt.Errorf("解析分组列表失败: %w", err)
+	}
+
+	var groups []dns.RecordGroup
+	for _, g := range result.RecordGroups.RecordGroup {
+		groups = append(groups, dns.RecordGroup{
+			ID:   g.GroupId,
+			Name: g.GroupName,
+		})
+	}
+	return groups, nil
+}
+
+/* ChangeRecordGroup 修改解析记录所属分组 */
+func (p *Provider) ChangeRecordGroup(ctx context.Context, recordIDs []string, groupID string) error {
+	recordIDList, err := json.Marshal(recordIDs)
+	if err != nil {
+		return err
+	}
+
+	req := requests.NewCommonRequest()
+	req.Method = "POST"
+	req.Domain = "alidns.aliyuncs.com"
+	req.Version = "2015-01-09"
+	req.ApiName = "ChangeRecordGroup"
+	req.QueryParams["Action"] = "ChangeRecordGroup"
+	req.QueryParams["DomainName"] = p.domain
+	req.QueryParams["RecordIdList"] = string(recordIDList)
+	req.QueryParams["GroupId"] = groupID
+
+	_, err = p.client.ProcessCommonRequest(req)
+	return err
+}
+
+/* GetDomainRecordsByGroup 按分组获取解析记录 */
+func (p *Provider) GetDomainRecordsByGroup(ctx context.Context, groupID string, page, pageSize int, keyword, subDomain, value, recordType, line, status string) (*dns.PageResult, error) {
+	request := alidns.CreateDescribeDomainRecordsRequest()
+	request.DomainName = p.domain
+	request.PageNumber = requests.NewInteger(page)
+	request.PageSize = requests.NewInteger(pageSize)
+	request.GroupId = requests.NewInteger64(parseInt64(groupID))
+
+	if keyword != "" {
+		request.KeyWord = keyword
+	}
+	if recordType != "" {
+		request.TypeKeyWord = recordType
+	}
+	if subDomain != "" {
+		request.RRKeyWord = subDomain
+	}
+	if value != "" {
+		request.ValueKeyWord = value
+	}
+	if line != "" {
+		request.Line = line
+	}
+	if status != "" {
+		request.Status = strings.ToUpper(status)
+	}
+
+	response, err := p.client.DescribeDomainRecords(request)
+	if err != nil {
+		return nil, err
+	}
+
+	var records []dns.Record
+	for _, r := range response.DomainRecords.Record {
+		record := dns.Record{
+			ID:     r.RecordId,
+			Name:   r.RR,
+			Type:   r.Type,
+			Value:  r.Value,
+			TTL:    int(r.TTL),
+			Line:   r.Line,
+			Remark: r.Remark,
+		}
+		if r.Status == "ENABLE" {
+			record.Status = "enable"
+		} else {
+			record.Status = "disable"
+		}
+		records = append(records, record)
+	}
+
+	return &dns.PageResult{
+		Total:   int(response.TotalCount),
+		Records: records,
+	}, nil
+}
+
+func parseInt64(s string) int64 {
+	var n int64
+	fmt.Sscanf(s, "%d", &n)
+	return n
 }

@@ -214,13 +214,14 @@ export default function DashboardPage() {
               </CardHeader>
               <CardContent>
                 <div className="text-3xl font-bold tabular-nums">{card.value}</div>
+                <p className="text-xs text-muted-foreground mt-1">点击查看详情</p>
               </CardContent>
             </Card>
           </Link>
         ))}
       </div>
 
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
         {/* 容灾监控状态 */}
         <Card>
           <CardHeader>

@@ -1748,6 +1748,9 @@ export default function MonitorPage() {
           {/* Step 3: Configuration */}
           {addStep === 3 && (
             <div className="space-y-4">
+              <div className="rounded-lg border p-3 bg-muted/20 text-xs text-muted-foreground space-y-1">
+                <p>大部分场景使用默认配置即可直接创建。仅需关注「切换方式」和「检测类型」。</p>
+              </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <Label>切换方式</Label>
@@ -1759,6 +1762,7 @@ export default function MonitorPage() {
                       ))}
                     </SelectContent>
                   </Select>
+                  <p className="text-xs text-muted-foreground">暂停：故障时暂停该记录 | 切换：切到备用值 | 权重：将权重设为0</p>
                 </div>
                 <div className="space-y-2">
                   <Label>检测类型</Label>
@@ -1770,6 +1774,7 @@ export default function MonitorPage() {
                       ))}
                     </SelectContent>
                   </Select>
+                  <p className="text-xs text-muted-foreground">HTTP(S)：请求目标URL判断 | TCP：端口连通性 | Ping：ICMP回应</p>
                 </div>
               </div>
 

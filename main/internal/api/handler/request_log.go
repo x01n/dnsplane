@@ -13,7 +13,7 @@ import (
 	"gorm.io/gorm"
 )
 
-/* useRedisLogs 写入侧是否同步到 Redis（读取统一走 SQLite，避免 LRANGE 全量反序列化） */
+/* useRedisLogs 为 true 时请求日志读写均走 Redis，否则仅走 SQLite RequestDB */
 func useRedisLogs() bool {
 	return logstore.Store != nil && logstore.Store.IsRedis()
 }
@@ -120,6 +120,12 @@ func GetRequestLogs(c *gin.Context) {
 		req.PageSize = 200
 	}
 
+	if useRedisLogs() {
+		logs, total := logstore.Store.QueryRequestLogs(req.Page, req.PageSize, req.Keyword, req.Method, req.IsError, req.StartDate, req.EndDate)
+		middleware.SuccessResponse(c, gin.H{"total": total, "list": logs})
+		return
+	}
+
 	var total int64
 	var logs []models.RequestLog
 	var wg sync.WaitGroup
@@ -165,6 +171,15 @@ func GetRequestByID(c *gin.Context) {
 		return
 	}
 
+	if useRedisLogs() {
+		if log, err := logstore.Store.GetRequestByID(req.RequestID); err == nil {
+			middleware.SuccessResponse(c, log)
+			return
+		}
+		middleware.ErrorResponse(c, "请求记录不存在")
+		return
+	}
+
 	var log models.RequestLog
 	if err := database.RequestDB.Where("request_id = ?", req.RequestID).First(&log).Error; err != nil {
 		middleware.ErrorResponse(c, "请求记录不存在")
@@ -201,6 +216,15 @@ func GetErrorByID(c *gin.Context) {
 		return
 	}
 
+	if useRedisLogs() {
+		if log, err := logstore.Store.GetErrorByID(req.ErrorID); err == nil {
+			middleware.SuccessResponse(c, log)
+			return
+		}
+		middleware.ErrorResponse(c, "错误记录不存在")
+		return
+	}
+
 	var log models.RequestLog
 	if err := database.RequestDB.Where("error_id = ?", req.ErrorID).First(&log).Error; err != nil {
 		middleware.ErrorResponse(c, "错误记录不存在")
@@ -223,6 +247,20 @@ func GetRequestStats(c *gin.Context) {
 	}
 
 	if h, ok := tryRequestStatsCache(); ok {
+		middleware.SuccessResponse(c, h)
+		return
+	}
+
+	if useRedisLogs() {
+		totalCount, errorCount, todayCount, todayErrorCount, recentErrors := logstore.Store.GetRequestStats()
+		h := gin.H{
+			"total_count":       totalCount,
+			"error_count":       errorCount,
+			"today_count":       todayCount,
+			"today_error_count": todayErrorCount,
+			"recent_errors":     recentErrors,
+		}
+		setRequestStatsCache(h)
 		middleware.SuccessResponse(c, h)
 		return
 	}

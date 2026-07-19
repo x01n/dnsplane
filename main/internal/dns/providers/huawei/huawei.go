@@ -22,7 +22,7 @@ func init() {
 			{Name: "SecretAccessKey", Key: "SecretAccessKey", Type: "input", Required: true},
 		},
 		Features: dns.ProviderFeatures{
-			Remark: 2, Status: false, Redirect: false, Log: false, Weight: true, Page: false, Add: false,
+			Remark: 2, Status: false, Redirect: false, Log: false, Weight: false, Page: false, Add: false,
 		},
 	})
 }

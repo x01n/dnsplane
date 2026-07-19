@@ -13,21 +13,22 @@ interface TableSkeletonProps {
 
 export function TableSkeleton({ rows = 5, columns = 5 }: TableSkeletonProps) {
   return (
-    <div className="space-y-3 py-4">
+    <div className="space-y-3 py-4 animate-in fade-in-0 duration-300">
       {/* 表头骨架 */}
       <div className="flex gap-4 px-2">
         {Array.from({ length: columns }).map((_, i) => (
-          <Skeleton key={`h-${i}`} className="h-4 flex-1" />
+          <Skeleton key={`h-${i}`} className="h-4 flex-1 rounded-md" />
         ))}
       </div>
+      <div className="h-px bg-border" />
       {/* 数据行骨架 */}
       {Array.from({ length: rows }).map((_, row) => (
         <div key={row} className="flex gap-4 px-2 py-2">
           {Array.from({ length: columns }).map((_, col) => (
             <Skeleton
               key={`${row}-${col}`}
-              className="h-4 flex-1"
-              style={{ opacity: 1 - row * 0.12 }}
+              className="h-4 flex-1 rounded-md"
+              style={{ opacity: 1 - row * 0.15 }}
             />
           ))}
         </div>

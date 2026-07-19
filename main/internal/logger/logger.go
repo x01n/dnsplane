@@ -232,10 +232,11 @@ func (l *Logger) writeWithDepth(logLevel LogLevel, levelStr string, callerDepth 
 	showConsole := toConsole && l.consoleOutput
 
 	if showConsole && l.colorEnabled {
-		consoleMsg := fmt.Sprintf("%s%s%s %s%-5s%s %s%s",
+		consoleMsg := fmt.Sprintf("%s%s%s %s%-5s%s %s%-18s%s %s",
 			colorGray, timeStr, colorReset,
 			levelColor, levelStr, colorReset,
-			colorCyan, caller+colorReset+" "+userMsg)
+			colorCyan, caller, colorReset,
+			userMsg)
 		fmt.Fprintln(os.Stdout, consoleMsg)
 		if l.file != nil {
 			fmt.Fprintln(l.file, fileMsg)

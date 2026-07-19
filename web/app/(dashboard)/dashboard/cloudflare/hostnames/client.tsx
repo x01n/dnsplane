@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -40,9 +40,10 @@ import {
 import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
 import { toast } from 'sonner'
-import { Loader2, Plus, RefreshCw, Search, Trash2, Pencil, Copy, ExternalLink } from 'lucide-react'
+import { Loader2, Plus, RefreshCw, Search, Copy, ExternalLink, ChevronDown, ChevronRight } from 'lucide-react'
 import { TableSkeleton } from '@/components/table-skeleton'
 import { EmptyState } from '@/components/empty-state'
+import { Pagination } from '@/components/pagination'
 import { accountApi, cloudflareApi, domainApi, CustomHostname, Account, Domain } from '@/lib/api'
 
 const SSL_STATUS_MAP: Record<string, { label: string; variant: 'default' | 'destructive' | 'secondary' | 'outline' }> = {
@@ -68,9 +69,12 @@ export default function CloudflareHostnamesPage() {
   const [domainsLoading, setDomainsLoading] = useState(false)
 
   const [hostnames, setHostnames] = useState<CustomHostname[]>([])
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading] = useState(false)
   const [accountsLoading, setAccountsLoading] = useState(true)
   const [searchKeyword, setSearchKeyword] = useState('')
+  const [page, setPage] = useState(1)
+  const [pageSize] = useState(20)
+  const [total, setTotal] = useState(0)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [selectedItem, setSelectedItem] = useState<CustomHostname | null>(null)
@@ -120,7 +124,7 @@ export default function CloudflareHostnamesPage() {
     try {
       const res = await domainApi.list({ aid: Number(selectedAccountId), page_size: 100 })
       if (res.code === 0 && res.data) {
-        const domainList = res.data.list || []
+        const domainList = (res.data.list || []).filter((d: Domain) => d.third_id && d.third_id !== '')
         setDomains(domainList)
         if (domainList.length === 1) {
           setSelectedDomainId(String(domainList[0].id))
@@ -133,25 +137,25 @@ export default function CloudflareHostnamesPage() {
     }
   }, [selectedAccountId])
 
-  const fetchHostnames = useCallback(async () => {
+  const fetchHostnames = useCallback(async (p?: number) => {
     if (!selectedDomainId) return
     setLoading(true)
+    const currentPage = p ?? page
     try {
-      const res = await cloudflareApi.getHostnames(selectedDomainId)
+      const res = await cloudflareApi.getHostnames(selectedDomainId, { page: currentPage, pageSize })
       if (res.code === 0 && res.data) {
         setHostnames(res.data)
+        setTotal(res.total || res.data.length)
         setSelectedHostnameIds([])
       } else {
         toast.error(res.msg || '获取自定义主机名列表失败')
-        setHostnames([])
       }
     } catch {
       toast.error('获取自定义主机名列表失败')
-      setHostnames([])
     } finally {
       setLoading(false)
     }
-  }, [selectedDomainId])
+  }, [selectedDomainId, page, pageSize])
 
   const loadFallbackOrigin = useCallback(async () => {
     if (!selectedDomainId) return
@@ -400,6 +404,31 @@ export default function CloudflareHostnamesPage() {
     }
   }
 
+  // 验证详情 - 可展开行
+  const [expandedId, setExpandedId] = useState<string | null>(null)
+  const [setupLoading, setSetupLoading] = useState(false)
+
+  const toggleExpand = (id: string) => {
+    setExpandedId(prev => prev === id ? null : id)
+  }
+
+  const handleSetupValidation = async (item: CustomHostname) => {
+    if (!selectedDomainId) return
+    setSetupLoading(true)
+    try {
+      const res = await cloudflareApi.setupHostnameValidation(selectedDomainId, item.id)
+      if (res.code === 0) {
+        toast.success(res.msg || '配置完成')
+      } else {
+        toast.error(res.msg || '配置失败')
+      }
+    } catch {
+      toast.error('一键配置失败')
+    } finally {
+      setSetupLoading(false)
+    }
+  }
+
   const selectedDomain = domains.find(d => String(d.id) === selectedDomainId)
 
   return (
@@ -556,7 +585,7 @@ export default function CloudflareHostnamesPage() {
                   <Button size="sm" variant="destructive" onClick={handleBatchDelete} disabled={selectedHostnameIds.length === 0 || submitting}>
                     批量删除
                   </Button>
-                  <Button size="sm" variant="outline" onClick={fetchHostnames}>
+                  <Button size="sm" variant="outline" onClick={() => fetchHostnames()}>
                     <RefreshCw className="h-4 w-4 mr-1" /> 刷新
                   </Button>
                 </div>
@@ -577,8 +606,8 @@ export default function CloudflareHostnamesPage() {
               </div>
 
               {/* Table */}
-              {loading ? (
-                <TableSkeleton rows={5} columns={6} />
+              {loading && hostnames.length === 0 ? (
+                <TableSkeleton rows={5} columns={7} />
               ) : filteredHostnames.length === 0 ? (
                 <EmptyState
                   icon={ExternalLink}
@@ -586,10 +615,12 @@ export default function CloudflareHostnamesPage() {
                   description="点击上方添加按钮添加自定义主机名"
                 />
               ) : (
+                <>
                 <div className="overflow-x-auto">
                   <Table>
                     <TableHeader>
                       <TableRow>
+                        <TableHead className="w-8"></TableHead>
                         <TableHead className="w-10">
                           <Checkbox
                             checked={allFilteredSelected}
@@ -598,55 +629,81 @@ export default function CloudflareHostnamesPage() {
                           />
                         </TableHead>
                         <TableHead>主机名</TableHead>
-                        <TableHead>源站</TableHead>
                         <TableHead>证书状态</TableHead>
-                        <TableHead>验证方法</TableHead>
-                        <TableHead>最低 TLS</TableHead>
+                        <TableHead>主机名状态</TableHead>
+                        <TableHead>源服务器</TableHead>
                         <TableHead className="text-right">操作</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
                       {filteredHostnames.map((item) => {
-                        const sslStatus = SSL_STATUS_MAP[item.ssl?.status] || { label: item.ssl?.status || '未知', variant: 'secondary' }
+                        const sslStatus = SSL_STATUS_MAP[item.ssl?.status] || { label: item.ssl?.status || '未知', variant: 'secondary' as const }
+                        const isExpanded = expandedId === item.id
                         return (
-                          <TableRow key={item.id}>
-                            <TableCell>
-                              <Checkbox
-                                checked={selectedHostnameIdSet.has(item.id)}
-                                onCheckedChange={(checked) => toggleHostnameSelection(item.id, checked)}
-                                aria-label={`选择 ${item.hostname}`}
-                              />
-                            </TableCell>
-                            <TableCell className="font-mono max-w-[250px] truncate" title={item.hostname}>
-                              {item.hostname}
-                            </TableCell>
-                            <TableCell className="font-mono max-w-[200px] truncate" title={item.custom_origin_server || '-'}>
-                              {item.custom_origin_server || <span className="text-muted-foreground">Fallback</span>}
-                            </TableCell>
-                            <TableCell>
-                              <Badge variant={sslStatus.variant}>{sslStatus.label}</Badge>
-                            </TableCell>
-                            <TableCell>{SSL_METHOD_MAP[item.ssl?.method] || item.ssl?.method || '-'}</TableCell>
-                            <TableCell>{item.ssl?.min_tls_version || item.ssl?.settings?.min_tls_version || '-'}</TableCell>
-                            <TableCell className="text-right">
-                              <div className="flex justify-end gap-1">
-                                <Button size="icon" variant="ghost" onClick={() => handleRefresh(item)} disabled={refreshingId === item.id}>
-                                  {refreshingId === item.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-                                </Button>
-                                <Button size="icon" variant="ghost" onClick={() => openEditDialog(item)}>
-                                  <Pencil className="h-4 w-4" />
-                                </Button>
-                                <Button size="icon" variant="ghost" onClick={() => { setSelectedItem(item); setDeleteDialogOpen(true) }}>
-                                  <Trash2 className="h-4 w-4 text-destructive" />
-                                </Button>
-                              </div>
-                            </TableCell>
-                          </TableRow>
+                          <React.Fragment key={item.id}>
+                            <TableRow className="cursor-pointer hover:bg-muted/50" onClick={() => toggleExpand(item.id)}>
+                              <TableCell className="w-8 px-2">
+                                {isExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                              </TableCell>
+                              <TableCell onClick={(e) => e.stopPropagation()}>
+                                <Checkbox
+                                  checked={selectedHostnameIdSet.has(item.id)}
+                                  onCheckedChange={(checked) => toggleHostnameSelection(item.id, checked)}
+                                  aria-label={`选择 ${item.hostname}`}
+                                />
+                              </TableCell>
+                              <TableCell className="font-mono max-w-[250px] truncate" title={item.hostname}>
+                                {item.hostname}
+                              </TableCell>
+                              <TableCell>
+                                <Badge variant={sslStatus.variant}>{sslStatus.label}</Badge>
+                              </TableCell>
+                              <TableCell>
+                                <Badge variant={item.status === 'active' ? 'default' : 'secondary'}>
+                                  {item.status === 'active' ? '有效' : item.status || '未知'}
+                                </Badge>
+                              </TableCell>
+                              <TableCell className="font-mono max-w-[200px] truncate" title={item.custom_origin_server || '-'}>
+                                {item.custom_origin_server || <span className="text-muted-foreground">Fallback</span>}
+                              </TableCell>
+                              <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
+                                <div className="flex justify-end gap-1">
+                                  <Button size="sm" variant="link" className="h-7 px-2 text-xs" onClick={() => handleRefresh(item)} disabled={refreshingId === item.id}>
+                                    {refreshingId === item.id ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : null}
+                                    刷新
+                                  </Button>
+                                  <Button size="sm" variant="link" className="h-7 px-2 text-xs" onClick={() => openEditDialog(item)}>
+                                    编辑
+                                  </Button>
+                                  <Button size="sm" variant="link" className="h-7 px-2 text-xs text-destructive" onClick={() => { setSelectedItem(item); setDeleteDialogOpen(true) }}>
+                                    删除
+                                  </Button>
+                                </div>
+                              </TableCell>
+                            </TableRow>
+                            {isExpanded && (
+                              <TableRow>
+                                <TableCell colSpan={7} className="bg-muted/30 p-0">
+                                  <HostnameDetailPanel item={item} dcvUuid={dcvUuid} onSetupValidation={handleSetupValidation} setupLoading={setupLoading} />
+                                </TableCell>
+                              </TableRow>
+                            )}
+                          </React.Fragment>
                         )
                       })}
                     </TableBody>
                   </Table>
                 </div>
+                {total > pageSize ? (
+                  <Pagination
+                    page={page}
+                    pageSize={pageSize}
+                    total={total}
+                    onPageChange={(p) => { setPage(p); fetchHostnames(p) }}
+                    showPageSize={false}
+                  />
+                ) : null}
+                </>
               )}
             </CardContent>
           </Card>
@@ -786,6 +843,152 @@ export default function CloudflareHostnamesPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+    </div>
+  )
+}
+
+function CopyValue({ value, label }: { value: string; label?: string }) {
+  return (
+    <div className="flex items-start gap-2 py-1">
+      {label && <span className="text-muted-foreground text-sm shrink-0 w-28">{label}</span>}
+      <code className="text-xs bg-muted px-2 py-1 rounded break-all flex-1 select-all">{value}</code>
+      <Button size="icon" variant="ghost" className="h-6 w-6 shrink-0" onClick={() => {
+        navigator.clipboard.writeText(value)
+        toast.success('已复制')
+      }}>
+        <Copy className="h-3 w-3" />
+      </Button>
+    </div>
+  )
+}
+
+function HostnameDetailPanel({ item, dcvUuid, onSetupValidation, setupLoading }: {
+  item: CustomHostname
+  dcvUuid: string
+  onSetupValidation: (item: CustomHostname) => void
+  setupLoading: boolean
+}) {
+  const valRecords = item.ssl_validation_records || item.ssl?.validation_records
+
+  return (
+    <div className="px-6 py-4 space-y-4">
+      <div className="flex items-center justify-between">
+        <h4 className="font-medium text-sm">查看 {item.hostname} 的状态</h4>
+        <Button size="sm" variant="outline" onClick={() => onSetupValidation(item)} disabled={setupLoading}>
+          {setupLoading && <Loader2 className="h-3 w-3 mr-1 animate-spin" />}
+          一键配置验证解析
+        </Button>
+      </div>
+
+      {/* 验证提示 */}
+      {item.ssl?.status === 'pending_validation' && item.ssl?.method === 'http' && (
+        <p className="text-sm text-muted-foreground">
+          一旦 HTTP 令牌在 {item.hostname} 上准备就绪，即会颁发并部署 SSL 证书。添加 HTTP 令牌后，请等待几分钟，然后尝试通过 HTTPS 进行连接。
+        </p>
+      )}
+      {item.ssl?.status === 'pending_validation' && item.ssl?.method === 'txt' && (
+        <p className="text-sm text-muted-foreground">
+          请添加下方的 TXT 验证记录以完成证书验证。添加后请等待几分钟生效。
+        </p>
+      )}
+
+      {/* Validation Errors */}
+      {item.validation_errors && item.validation_errors.length > 0 && (
+        <div className="text-sm text-destructive">
+          {item.validation_errors.map((err, idx) => (
+            <p key={idx}>{err.message || JSON.stringify(err)}</p>
+          ))}
+        </div>
+      )}
+
+      {/* 证书验证记录 */}
+      {valRecords && valRecords.length > 0 && (
+        <div className="space-y-3">
+          {valRecords.map((rec, idx) => (
+            <div key={idx} className="space-y-1">
+              {rec.txt_name && rec.txt_value && (
+                <>
+                  <p className="text-sm font-medium">证书验证记录 (TXT)</p>
+                  <CopyValue label="记录名" value={rec.txt_name} />
+                  <CopyValue label="记录值" value={rec.txt_value} />
+                </>
+              )}
+              {rec.cname && rec.cname_target && (
+                <>
+                  <p className="text-sm font-medium">证书验证记录 (CNAME)</p>
+                  <CopyValue label="记录名" value={rec.cname} />
+                  <CopyValue label="目标" value={rec.cname_target} />
+                </>
+              )}
+              {rec.http_url && rec.http_body && (
+                <>
+                  <p className="text-sm font-medium">证书验证请求</p>
+                  <CopyValue label="HTTP URL" value={rec.http_url} />
+                  <p className="text-sm font-medium">证书验证响应</p>
+                  <CopyValue label="HTTP Body" value={rec.http_body} />
+                </>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Ownership Verification */}
+      {item.ownership_verification?.name && (
+        <div className="space-y-1">
+          <p className="text-sm font-medium">Ownership 验证 (TXT)</p>
+          <CopyValue label="记录名" value={item.ownership_verification.name} />
+          {item.ownership_verification.value && (
+            <CopyValue label="记录值" value={item.ownership_verification.value} />
+          )}
+        </div>
+      )}
+
+      {/* DCV Delegation */}
+      {dcvUuid && (
+        <div className="space-y-1">
+          <p className="text-sm font-medium">DCV 委派 (推荐)</p>
+          <p className="text-xs text-muted-foreground">在接入域名的 DNS 上添加以下 CNAME 记录，即可自动完成证书验证：</p>
+          <CopyValue label="CNAME 名称" value={`_acme-challenge.${item.hostname}`} />
+          <CopyValue label="CNAME 目标" value={`${item.hostname}.${dcvUuid}.dcv.cloudflare.com`} />
+        </div>
+      )}
+
+      {/* 详细信息表格 */}
+      <div className="border-t pt-3">
+        <div className="grid grid-cols-2 gap-x-8 gap-y-2 text-sm">
+          <div className="flex justify-between">
+            <span className="text-muted-foreground">最低 TLS 版本</span>
+            <span>TLS {item.ssl?.settings?.min_tls_version || item.ssl_min_tls_version || item.ssl?.min_tls_version || '1.0'}</span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-muted-foreground">证书验证方法</span>
+            <span>{SSL_METHOD_MAP[item.ssl?.method] || item.ssl?.method || '-'}</span>
+          </div>
+          {item.ssl_certificate_authority && (
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">SSL 证书颁发机构</span>
+              <span>{item.ssl_certificate_authority}</span>
+            </div>
+          )}
+          {item.ssl_type && (
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">证书类型</span>
+              <span>{item.ssl_type === 'dv' ? '由 Cloudflare 提供' : item.ssl_type}</span>
+            </div>
+          )}
+          <div className="flex justify-between">
+            <span className="text-muted-foreground">源服务器</span>
+            <span className="font-mono">{item.custom_origin_server || 'Fallback Origin'}</span>
+          </div>
+          {item.custom_origin_sni && (
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">源服务器 SNI 值</span>
+              <span className="font-mono">{item.custom_origin_sni}</span>
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   )
 }

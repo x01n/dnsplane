@@ -24,7 +24,7 @@ func init() {
 			{Name: "SecretKey", Key: "SecretKey", Type: "input", Required: true},
 		},
 		Features: dns.ProviderFeatures{
-			Remark: 1, Status: true, Redirect: true, Log: true, Weight: true, Page: false, Add: true,
+			Remark: 1, Status: true, Redirect: true, Log: true, Weight: true, Page: false, Add: true, RecordGroup: true, DomainAlias: true,
 		},
 	})
 }
@@ -335,5 +335,212 @@ func (p *Provider) AddDomain(ctx context.Context, domain string) error {
 	request := dnspod.NewCreateDomainRequest()
 	request.Domain = common.StringPtr(domain)
 	_, err := p.client.CreateDomain(request)
+	return err
+}
+
+/* CreateSubdomainValidateTxtValue 获取子域托管验证 TXT 记录值 */
+func (p *Provider) CreateSubdomainValidateTxtValue(ctx context.Context, domain string) (*dns.SubdomainValidateResult, error) {
+	request := dnspod.NewCreateSubdomainValidateTXTValueRequest()
+	request.DomainZone = common.StringPtr(domain)
+
+	response, err := p.client.CreateSubdomainValidateTXTValueWithContext(ctx, request)
+	if err != nil {
+		return nil, err
+	}
+
+	r := response.Response
+	result := &dns.SubdomainValidateResult{}
+	if r.Domain != nil {
+		result.Domain = strings.TrimSpace(*r.Domain)
+	}
+	if r.Subdomain != nil {
+		result.Subdomain = strings.TrimSpace(*r.Subdomain)
+	}
+	if r.Value != nil {
+		result.Value = strings.TrimSpace(*r.Value)
+	}
+	return result, nil
+}
+
+/* DescribeSubdomainValidateStatus 查询子域验证状态，返回 nil 表示验证通过 */
+func (p *Provider) DescribeSubdomainValidateStatus(ctx context.Context, domain string) error {
+	request := dnspod.NewDescribeSubdomainValidateStatusRequest()
+	request.DomainZone = common.StringPtr(domain)
+
+	_, err := p.client.DescribeSubdomainValidateStatusWithContext(ctx, request)
+	return err
+}
+
+/* AddDomainWithNS 添加域名并返回 NS 列表 */
+func (p *Provider) AddDomainWithNS(ctx context.Context, domain string) (domainID string, nameServers []string, err error) {
+	request := dnspod.NewCreateDomainRequest()
+	request.Domain = common.StringPtr(domain)
+
+	response, err := p.client.CreateDomainWithContext(ctx, request)
+	if err != nil {
+		return "", nil, err
+	}
+
+	info := response.Response.DomainInfo
+	if info.Id != nil {
+		domainID = strconv.FormatUint(*info.Id, 10)
+	}
+	for _, ns := range info.GradeNsList {
+		if ns != nil {
+			v := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(*ns), "."))
+			if v != "" {
+				nameServers = append(nameServers, v)
+			}
+		}
+	}
+	return domainID, nameServers, nil
+}
+
+/* GetRecordGroups 获取解析记录分组列表 */
+func (p *Provider) GetRecordGroups(ctx context.Context) ([]dns.RecordGroup, error) {
+	request := dnspod.NewDescribeRecordGroupListRequest()
+	request.Domain = common.StringPtr(p.domain)
+
+	response, err := p.client.DescribeRecordGroupList(request)
+	if err != nil {
+		return nil, err
+	}
+
+	var groups []dns.RecordGroup
+	for _, g := range response.Response.GroupList {
+		groups = append(groups, dns.RecordGroup{
+			ID:   strconv.FormatUint(*g.GroupId, 10),
+			Name: *g.GroupName,
+		})
+	}
+	return groups, nil
+}
+
+/* ChangeRecordGroup 修改解析记录所属分组 */
+func (p *Provider) ChangeRecordGroup(ctx context.Context, recordIDs []string, groupID string) error {
+	gid, err := strconv.ParseUint(groupID, 10, 64)
+	if err != nil {
+		return fmt.Errorf("无效的分组ID: %w", err)
+	}
+
+	recordIDStr := strings.Join(recordIDs, "|")
+	request := dnspod.NewModifyRecordToGroupRequest()
+	request.Domain = common.StringPtr(p.domain)
+	request.GroupId = common.Uint64Ptr(gid)
+	request.RecordId = common.StringPtr(recordIDStr)
+
+	_, err = p.client.ModifyRecordToGroup(request)
+	return err
+}
+
+/* GetDomainRecordsByGroup 按分组获取解析记录 */
+func (p *Provider) GetDomainRecordsByGroup(ctx context.Context, groupID string, page, pageSize int, keyword, subDomain, value, recordType, line, status string) (*dns.PageResult, error) {
+	gid, err := strconv.ParseUint(groupID, 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("无效的分组ID: %w", err)
+	}
+
+	request := dnspod.NewDescribeRecordListRequest()
+	request.Domain = common.StringPtr(p.domain)
+	request.Offset = common.Uint64Ptr(uint64((page - 1) * pageSize))
+	request.Limit = common.Uint64Ptr(uint64(pageSize))
+	request.GroupId = common.Uint64Ptr(gid)
+
+	if keyword != "" {
+		request.Keyword = common.StringPtr(keyword)
+	}
+	if recordType != "" {
+		request.RecordType = common.StringPtr(recordType)
+	}
+	if subDomain != "" {
+		request.Subdomain = common.StringPtr(subDomain)
+	}
+	if line != "" {
+		request.RecordLine = common.StringPtr(normalizeRecordLine(line))
+	}
+
+	response, err := p.client.DescribeRecordList(request)
+	if err != nil {
+		var sdkErr *tcerr.TencentCloudSDKError
+		if errors.As(err, &sdkErr) && sdkErr.Code == "ResourceNotFound.NoDataOfRecord" {
+			return &dns.PageResult{
+				Total:   0,
+				Records: []dns.Record{},
+			}, nil
+		}
+		return nil, err
+	}
+
+	var records []dns.Record
+	for _, r := range response.Response.RecordList {
+		record := dns.Record{
+			ID:     strconv.FormatUint(*r.RecordId, 10),
+			Name:   *r.Name,
+			Type:   *r.Type,
+			Value:  *r.Value,
+			TTL:    int(*r.TTL),
+			Line:   *r.Line,
+			Remark: *r.Remark,
+		}
+		if *r.Status == "ENABLE" {
+			record.Status = "enable"
+		} else {
+			record.Status = "disable"
+		}
+		if r.Weight != nil {
+			record.Weight = int(*r.Weight)
+		}
+		records = append(records, record)
+	}
+
+	return &dns.PageResult{
+		Total:   int(*response.Response.RecordCountInfo.TotalCount),
+		Records: records,
+	}, nil
+}
+
+/* GetDomainAliasList 获取域名别名列表 */
+func (p *Provider) GetDomainAliasList(ctx context.Context) ([]dns.DomainAlias, error) {
+	request := dnspod.NewDescribeDomainAliasListRequest()
+	request.Domain = common.StringPtr(p.domain)
+
+	response, err := p.client.DescribeDomainAliasList(request)
+	if err != nil {
+		return nil, err
+	}
+
+	var aliases []dns.DomainAlias
+	for _, a := range response.Response.DomainAliasList {
+		aliases = append(aliases, dns.DomainAlias{
+			ID:     strconv.FormatInt(*a.Id, 10),
+			Name:   *a.DomainAlias,
+			Status: int(*a.Status),
+		})
+	}
+	return aliases, nil
+}
+
+/* AddDomainAlias 添加域名别名 */
+func (p *Provider) AddDomainAlias(ctx context.Context, alias string) error {
+	request := dnspod.NewCreateDomainAliasRequest()
+	request.Domain = common.StringPtr(p.domain)
+	request.DomainAlias = common.StringPtr(alias)
+
+	_, err := p.client.CreateDomainAlias(request)
+	return err
+}
+
+/* DeleteDomainAlias 删除域名别名 */
+func (p *Provider) DeleteDomainAlias(ctx context.Context, aliasID string) error {
+	aid, err := strconv.ParseInt(aliasID, 10, 64)
+	if err != nil {
+		return fmt.Errorf("无效的别名ID: %w", err)
+	}
+
+	request := dnspod.NewDeleteDomainAliasRequest()
+	request.Domain = common.StringPtr(p.domain)
+	request.DomainAliasId = common.Int64Ptr(aid)
+
+	_, err = p.client.DeleteDomainAlias(request)
 	return err
 }

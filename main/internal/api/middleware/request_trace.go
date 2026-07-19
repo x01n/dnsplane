@@ -249,12 +249,13 @@ func RequestTrace() gin.HandlerFunc {
 			CreatedAt:   time.Now(),
 		}
 
-		// 异步：先落库拿到自增 ID，再写入 Redis（与管理端 / 排障字段一致）
+		// 异步写入：Redis 开启时仅写 Redis，避免与 SQLite 双写；否则只写 RequestDB
 		go func(l models.RequestLog) {
-			_ = database.RequestDB.Create(&l).Error
 			if logstore.Store != nil && logstore.Store.IsRedis() {
 				logstore.Store.SaveRequestLog(l)
+				return
 			}
+			_ = database.RequestDB.Create(&l).Error
 		}(log)
 	}
 }

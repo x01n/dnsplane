@@ -59,10 +59,20 @@ type Account struct {
 	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
 }
 
+// DomainCategory 域名分类表
+type DomainCategory struct {
+	ID        uint      `gorm:"primaryKey" json:"id"`
+	Name      string    `gorm:"size:100;not null" json:"name"`
+	Remark    string    `gorm:"size:200" json:"remark"`
+	Sort      int       `gorm:"default:0" json:"sort"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
 // Domain 域名表
 type Domain struct {
 	ID          uint           `gorm:"primaryKey" json:"id"`
 	AccountID   uint           `gorm:"column:aid;index" json:"aid"`
+	CategoryID  uint           `gorm:"column:cid;default:0" json:"cid"`
 	Name        string         `gorm:"size:255;not null;index" json:"name"`
 	ThirdID     string         `gorm:"size:60" json:"third_id"`
 	IsHide      bool           `gorm:"default:false" json:"is_hide"`
@@ -70,6 +80,7 @@ type Domain struct {
 	RecordCount int            `gorm:"default:0" json:"record_count"`
 	Remark      string         `gorm:"size:100" json:"remark"`
 	IsNotice    bool           `gorm:"default:false" json:"is_notice"`
+	MinTTL      int            `gorm:"default:0" json:"min_ttl"`
 	RegTime     *time.Time     `json:"reg_time"`
 	ExpireTime  *time.Time     `json:"expire_time"`
 	CheckTime   *time.Time     `json:"check_time"`

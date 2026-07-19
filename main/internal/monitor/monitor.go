@@ -605,22 +605,21 @@ func (m *Monitor) switchToBackup(ctx context.Context, provider dns.Provider, tas
 		state.DeletedRecord.Remark = record.Remark
 		state.WasDeleted = true
 
-		// 添加新的备用记录
-		newRecordID, addErr := provider.AddDomainRecord(ctx, record.Name, backupRecordType, selectedBackup, record.Line, record.TTL, 0, nil, "backup")
-		if addErr != nil {
-			return fmt.Errorf("添加备用%s记录失败: %w", backupRecordType, addErr)
-		}
-		state.BackupRecordIDs = append(state.BackupRecordIDs, newRecordID)
-
-		// 禁用或删除主记录
+		// 先禁用或删除主记录（CNAME 和 A/AAAA 不能共存）
 		if caps.Pause {
 			if pauseErr := provider.SetDomainRecordStatus(ctx, task.RecordID, false); pauseErr != nil {
-				// 暂停失败，尝试删除
 				provider.DeleteDomainRecord(ctx, task.RecordID)
 			}
 		} else {
 			provider.DeleteDomainRecord(ctx, task.RecordID)
 		}
+
+		// 再添加新的备用记录
+		newRecordID, addErr := provider.AddDomainRecord(ctx, record.Name, backupRecordType, selectedBackup, record.Line, record.TTL, 0, nil, "backup")
+		if addErr != nil {
+			return fmt.Errorf("添加备用%s记录失败: %w", backupRecordType, addErr)
+		}
+		state.BackupRecordIDs = append(state.BackupRecordIDs, newRecordID)
 	}
 
 	m.saveTaskState(task.ID, *state)

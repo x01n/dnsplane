@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"golang.org/x/net/idna"
 )
 
 func init() {
@@ -20,8 +22,10 @@ func init() {
 		Name: "Cloudflare",
 		Icon: "cloudflare.ico",
 		Config: []dns.ConfigField{
-			{Name: "邮箱地址", Key: "email", Type: "input", Required: false},
-			{Name: "API密钥/令牌", Key: "apikey", Type: "input", Required: true},
+			{Name: "认证方式", Key: "auth", Type: "radio", Options: []dns.ConfigOption{{Value: "0", Label: "Global API Key"}, {Value: "1", Label: "API Token"}}, Value: "0"},
+			{Name: "邮箱", Key: "email", Type: "input", Placeholder: "Global API Key模式需要"},
+			{Name: "API Key/Token", Key: "apikey", Type: "input", Required: true},
+			{Name: "Account ID", Key: "account_id", Type: "input", Placeholder: "自定义主机名/隧道功能需要，留空自动获取"},
 		},
 		Features: dns.ProviderFeatures{
 			Remark: 2, Status: true, Redirect: false, Log: false, Weight: false, Page: false, Add: true,
@@ -34,6 +38,7 @@ const baseURL = "https://api.cloudflare.com/client/v4"
 type Provider struct {
 	email    string
 	apiKey   string
+	auth     int
 	domain   string
 	domainID string
 	client   *http.Client
@@ -41,9 +46,21 @@ type Provider struct {
 }
 
 func NewProvider(config map[string]string, domain, domainID string) dns.Provider {
+	auth := 0
+	if authStr, ok := config["auth"]; ok {
+		if v, err := strconv.Atoi(authStr); err == nil {
+			auth = v
+		}
+	} else {
+		matched, _ := regexp.MatchString(`^[0-9a-fA-F]+$`, config["apikey"])
+		if !matched {
+			auth = 1
+		}
+	}
 	return &Provider{
 		email:    config["email"],
 		apiKey:   config["apikey"],
+		auth:     auth,
 		domain:   domain,
 		domainID: domainID,
 		client:   &http.Client{Timeout: 30 * time.Second},
@@ -54,10 +71,28 @@ func (p *Provider) GetError() string {
 	return p.lastErr
 }
 
-/* isGlobalAPIKey 判断是否为 Global API Key（纯十六进制字符） */
+/* isGlobalAPIKey 判断是否为 Global API Key 模式 */
 func (p *Provider) isGlobalAPIKey() bool {
-	matched, _ := regexp.MatchString(`^[0-9a-fA-F]+$`, p.apiKey)
-	return matched
+	return p.auth == 0
+}
+
+/* extractName 从 Cloudflare 返回的完整域名中提取主机记录（兼容 IDN/Emoji 域名） */
+func (p *Provider) extractName(fullName string) string {
+	domainAscii, err := idna.ToASCII(p.domain)
+	if err != nil {
+		domainAscii = p.domain
+	}
+
+	if fullName == domainAscii || fullName == p.domain {
+		return "@"
+	}
+	if strings.HasSuffix(fullName, "."+domainAscii) {
+		return strings.TrimSuffix(fullName, "."+domainAscii)
+	}
+	if strings.HasSuffix(fullName, "."+p.domain) {
+		return strings.TrimSuffix(fullName, "."+p.domain)
+	}
+	return fullName
 }
 
 func (p *Provider) request(ctx context.Context, method, path string, params map[string]string, body interface{}) (map[string]interface{}, error) {
@@ -196,10 +231,14 @@ func (p *Provider) GetDomainRecords(ctx context.Context, page, pageSize int, key
 		params["type"] = recordType
 	}
 	if subDomain != "" {
+		domainAscii, err := idna.ToASCII(p.domain)
+		if err != nil {
+			domainAscii = p.domain
+		}
 		if subDomain == "@" {
-			params["name"] = p.domain
+			params["name"] = domainAscii
 		} else {
-			params["name"] = subDomain + "." + p.domain
+			params["name"] = subDomain + "." + domainAscii
 		}
 	}
 	if line != "" {
@@ -219,17 +258,16 @@ func (p *Provider) GetDomainRecords(ctx context.Context, page, pageSize int, key
 	if data, ok := result["result"].([]interface{}); ok {
 		for _, item := range data {
 			if rec, ok := item.(map[string]interface{}); ok {
-				name := rec["name"].(string)
-				if name == p.domain {
-					name = "@"
-				} else {
-					name = strings.TrimSuffix(name, "."+p.domain)
-				}
+				name := p.extractName(rec["name"].(string))
 
 				statusVal := "enable"
 				if strings.HasSuffix(name, "_pause") {
 					statusVal = "disable"
 					name = strings.TrimSuffix(name, "_pause")
+				}
+				if name == "__root__" {
+					statusVal = "disable"
+					name = "@"
 				}
 
 				lineVal := "0"
@@ -290,17 +328,16 @@ func (p *Provider) GetDomainRecordInfo(ctx context.Context, recordID string) (*d
 		return nil, fmt.Errorf("解析记录信息失败")
 	}
 
-	name := rec["name"].(string)
-	if name == p.domain {
-		name = "@"
-	} else {
-		name = strings.TrimSuffix(name, "."+p.domain)
-	}
+	name := p.extractName(rec["name"].(string))
 
 	statusVal := "enable"
 	if strings.HasSuffix(name, "_pause") {
 		statusVal = "disable"
 		name = strings.TrimSuffix(name, "_pause")
+	}
+	if name == "__root__" {
+		statusVal = "disable"
+		name = "@"
 	}
 
 	lineVal := "0"
@@ -366,6 +403,22 @@ func (p *Provider) AddDomainRecord(ctx context.Context, name, recordType, value,
 }
 
 func (p *Provider) UpdateDomainRecord(ctx context.Context, recordID, name, recordType, value, line string, ttl, mx int, weight *int, remark string) error {
+	// Cloudflare 已弃用通过 PATCH 更改记录类型，检测类型变更时改为删除+新建
+	existing, err := p.GetDomainRecordInfo(ctx, recordID)
+	if err != nil {
+		return err
+	}
+	if existing.Type != recordType {
+		if err := p.DeleteDomainRecord(ctx, recordID); err != nil {
+			return fmt.Errorf("更改类型时删除旧记录失败: %w", err)
+		}
+		_, err := p.AddDomainRecord(ctx, name, recordType, value, line, ttl, mx, weight, remark)
+		if err != nil {
+			return fmt.Errorf("更改类型时创建新记录失败: %w", err)
+		}
+		return nil
+	}
+
 	fullName := name
 	if name == "@" || name == "" {
 		fullName = p.domain
@@ -387,7 +440,7 @@ func (p *Provider) UpdateDomainRecord(ctx context.Context, recordID, name, recor
 		body["priority"] = mx
 	}
 
-	_, err := p.request(ctx, "PATCH", "/zones/"+p.domainID+"/dns_records/"+recordID, nil, body)
+	_, err = p.request(ctx, "PATCH", "/zones/"+p.domainID+"/dns_records/"+recordID, nil, body)
 	return err
 }
 
@@ -412,11 +465,17 @@ func (p *Provider) SetDomainRecordStatus(ctx context.Context, recordID string, e
 
 	targetName := info.Name
 	if !enable {
-		if !strings.HasSuffix(targetName, "_pause") {
+		if targetName == "@" {
+			targetName = "__root__"
+		} else if !strings.HasSuffix(targetName, "_pause") {
 			targetName += "_pause"
 		}
 	} else {
-		targetName = strings.TrimSuffix(targetName, "_pause")
+		if targetName == "__root__" {
+			targetName = "@"
+		} else {
+			targetName = strings.TrimSuffix(targetName, "_pause")
+		}
 	}
 
 	return p.UpdateDomainRecord(ctx, recordID, targetName, info.Type, info.Value, info.Line, info.TTL, info.MX, nil, info.Remark)
