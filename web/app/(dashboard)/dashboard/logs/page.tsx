@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog'
 import { toast } from 'sonner'
 import { logApi, userApi, OperationLog, OperationLogStats, User } from '@/lib/api'
-import { ScrollText, Search, RefreshCw, Eye, Calendar, User as UserIcon, Globe, Activity, Trash2, Download } from 'lucide-react'
+import { ScrollText, Search, RefreshCw, Eye, Calendar, User as UserIcon, Globe, Activity, Trash2, Download, AlertCircle } from 'lucide-react'
 import { TableSkeleton } from '@/components/table-skeleton'
 import { EmptyState } from '@/components/empty-state'
 import { Pagination } from '@/components/pagination'
@@ -324,6 +324,8 @@ export default function LogsPage() {
   const [users, setUsers] = useState<User[]>([])
   const [loading, setLoading] = useState(true)
   const [keyword, setKeyword] = useState('')
+  /** 加载失败提示；非空时列表区显示错误态而非空状态 */
+  const [loadError, setLoadError] = useState('')
   const [domain, setDomain] = useState('')
   const [userId, setUserId] = useState<string>('all')
   const [actionFilter, setActionFilter] = useState<string>('all')
@@ -395,8 +397,13 @@ export default function LogsPage() {
         setLogs(rows)
         setTotal(data.total ?? 0)
         setLogStats(data.stats ?? null)
+        setLoadError('')
+      } else {
+        setLoadError(res.msg || '加载日志失败')
+        toast.error(res.msg || '加载日志失败')
       }
     } catch {
+      setLoadError('加载日志失败')
       toast.error('加载日志失败')
     } finally {
       setLoading(false)
@@ -635,6 +642,14 @@ export default function LogsPage() {
 
           {loading ? (
             <TableSkeleton rows={5} columns={6} />
+          ) : loadError ? (
+            <EmptyState
+              icon={AlertCircle}
+              title="加载失败"
+              description={loadError}
+              action="重试"
+              onAction={loadData}
+            />
           ) : logs.length === 0 ? (
             <EmptyState
               icon={ScrollText}
@@ -689,7 +704,7 @@ export default function LogsPage() {
                         <span className="text-sm text-muted-foreground">{formatDate(log.created_at)}</span>
                       </TableCell>
                       <TableCell className="text-right">
-                        <Button size="sm" variant="ghost" onClick={() => handleViewDetail(log)}>
+                        <Button size="sm" variant="ghost" onClick={() => handleViewDetail(log)} aria-label="查看日志详情">
                           <Eye className="h-4 w-4" />
                         </Button>
                       </TableCell>

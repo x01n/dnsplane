@@ -77,7 +77,6 @@ func (d *QiniuDeploy) logf(format string, args ...interface{}) {
 	}
 }
 
-// requestQBox 与 dnsmgr Qiniu.php::request 一致：签名为 path[?query] + "\n"，Authorization: QBox AccessKey:urlsafe_base64(hmac-sha1)
 func (d *QiniuDeploy) requestQBox(ctx context.Context, method, path string, query url.Values, body interface{}) (map[string]interface{}, error) {
 	const apiBase = "https://api.qiniu.com"
 	u, err := url.Parse(apiBase + path)

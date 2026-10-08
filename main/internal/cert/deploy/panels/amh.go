@@ -36,7 +36,7 @@ func (p *AMHProvider) login(ctx context.Context) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, "POST", baseURL+"/?c=amapi&a=login", strings.NewReader(postData))
 	if err != nil { return "", err }
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("Cookie", "PHPSESSID="+phpSessionID(apiKey))
+	req.Header.Set("Cookie", "PHPSESSID="+amhSessionID(apiKey))
 	resp, err := p.client.Do(req)
 	if err != nil { return "", fmt.Errorf("amh: %w", err) }
 	defer resp.Body.Close()
@@ -70,7 +70,7 @@ func (p *AMHProvider) Deploy(ctx context.Context, fullchain, privateKey string, 
 		req, err := http.NewRequestWithContext(ctx, "POST", strings.TrimSuffix(p.GetString("url"), "/")+path, strings.NewReader(form.Encode()))
 		if err != nil { return err }
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-		req.Header.Set("Cookie", "PHPSESSID="+phpSessionID(p.GetString("apikey")))
+		req.Header.Set("Cookie", "PHPSESSID="+amhSessionID(p.GetString("apikey")))
 		resp, err := p.client.Do(req)
 		if err != nil { return fmt.Errorf("amh: %w", err) }
 		body, _ := io.ReadAll(resp.Body)
@@ -89,5 +89,5 @@ func (p *AMHProvider) Deploy(ctx context.Context, fullchain, privateKey string, 
 	return nil
 }
 
-func phpSessionID(apiKey string) string { mac := hmac.New(sha256.New, []byte(apiKey)); mac.Write([]byte("php_sessid=" + apiKey)); return fmt.Sprintf("%x", mac.Sum(nil))[:32] }
+func amhSessionID(apiKey string) string { mac := hmac.New(sha256.New, []byte(apiKey)); mac.Write([]byte("php_sessid=" + apiKey)); return fmt.Sprintf("%x", mac.Sum(nil))[:32] }
 func stripHTML(s string) string { return strings.NewReplacer("<br />", " ", "<br/>", " ", "<br>", " ").Replace(regexp.MustCompile(`<[^>]+>`).ReplaceAllString(s, "")) }

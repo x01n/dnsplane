@@ -29,7 +29,6 @@ type S3Provider struct {
 	secretKey     string
 	endpoint      string
 	region        string
-	proxy         bool
 }
 
 // NewS3Provider creates a new S3 provider
@@ -38,7 +37,6 @@ func NewS3Provider(config map[string]interface{}) base.DeployProvider {
 	if region == "" {
 		region = "us-east-1"
 	}
-	proxy := base.GetConfigBool(config, "proxy")
 
 	return &S3Provider{
 		BaseProvider: base.BaseProvider{Config: config},
@@ -47,7 +45,6 @@ func NewS3Provider(config map[string]interface{}) base.DeployProvider {
 		secretKey:    base.GetConfigString(config, "SecretAccessKey"),
 		endpoint:     strings.TrimSuffix(base.GetConfigString(config, "endpoint"), "/"),
 		region:       region,
-		proxy:        proxy,
 	}
 }
 

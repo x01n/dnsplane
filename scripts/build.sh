@@ -5,11 +5,6 @@
 #   scripts/build.sh amd64              # 指定单架构
 #   scripts/build.sh amd64 arm64        # 多架构一次性出
 #   SKIP_FRONTEND=1 scripts/build.sh    # 跳过前端（仅改后端时用）
-#
-# 前置条件：
-#   - Go 1.26.2+（本机）
-#   - Node 22+ 或 Bun（如 SKIP_FRONTEND=1 可不装）
-#   - 仓库已 vendor（直接使用 -mod=vendor）
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -55,7 +50,7 @@ for ARCH in "${ARCHS[@]}"; do
   (
     cd main
     CGO_ENABLED=0 GOOS=linux GOARCH="${ARCH}" \
-      go build -mod=vendor -trimpath -buildvcs=false \
+      go build -trimpath -buildvcs=false \
       -ldflags="${LDFLAGS}" \
       -o "../${OUT}" .
   )

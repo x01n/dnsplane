@@ -15,7 +15,9 @@ ARG TARGETARCH
 ARG TARGETVARIANT
 ARG VERSION=dev
 WORKDIR /src/main
-# 依赖已 vendor 入库（main/vendor），无需 go mod download，也无需网络
+# 模块模式：先只拷贝依赖清单，命中层缓存时后续依赖不变即可复用 download 层
+COPY main/go.mod main/go.sum ./
+RUN go mod download
 COPY main/ ./
 COPY --from=web /build/main/web ./web
 RUN set -eux; \
@@ -23,7 +25,7 @@ RUN set -eux; \
   if [ "${TARGETARCH}" = "arm" ] && [ -n "${TARGETVARIANT:-}" ]; then \
     export GOARM="${TARGETVARIANT#v}"; \
   fi; \
-  go build -mod=vendor -buildvcs=false -trimpath \
+  go build -buildvcs=false -trimpath \
     -ldflags="-s -w -X main.Version=${VERSION}" \
     -o /dnsplane .
 

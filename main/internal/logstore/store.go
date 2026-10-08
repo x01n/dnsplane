@@ -311,31 +311,20 @@ func (s *LogStore) QuerySystemLogs(page, pageSize int, keyword, action, domain s
 	return filtered[start:end], filteredTotal
 }
 
-/* CleanSystemLogs 清理系统日志（按天数截断） */
-func (s *LogStore) CleanSystemLogs(keepDays int) int64 {
+/*
+ * PurgeSystemLogs 清空全部系统日志，返回清除条数
+ *
+ * 起始下标大于结束下标是两种缓存实现共同的「清空」写法：
+ * LTrim(key, 0, -1) 会保留全部条目而仍报告已删除，
+ * 内存缓存的 Delete 又只作用于键值区，删不掉存在列表区的日志
+ */
+func (s *LogStore) PurgeSystemLogs() int64 {
 	total, _ := s.c.LLen(systemLogKey)
 	if total == 0 {
 		return 0
 	}
-	cutoff := time.Now().AddDate(0, 0, -keepDays)
-
-	// 从尾部开始找到需要保留的边界
-	items, _ := s.c.LRange(systemLogKey, 0, total-1)
-	keepIdx := int64(0)
-	for i, item := range items {
-		var log models.Log
-		if json.Unmarshal([]byte(item), &log) == nil && log.CreatedAt.Before(cutoff) {
-			keepIdx = int64(i)
-			break
-		}
-		keepIdx = int64(i) + 1
-	}
-	if keepIdx >= total {
-		return 0
-	}
-	deleted := total - keepIdx
-	s.c.LTrim(systemLogKey, 0, keepIdx-1)
-	return deleted
+	_ = s.c.LTrim(systemLogKey, 1, 0)
+	return total
 }
 
 

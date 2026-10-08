@@ -1,7 +1,9 @@
 package api
 
 import (
+	"crypto/sha256"
 	"embed"
+	"fmt"
 	"io/fs"
 	"main/internal/api/handler"
 	"main/internal/api/middleware"
@@ -11,22 +13,48 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// SetupRouter 构建 HTTP 路由，staticFS 为前端静态导出产物
 func SetupRouter(staticFS embed.FS) *gin.Engine {
+	return setupRouter(staticFS)
+}
+
+// newBaseEngine 构建引擎并挂载链首中间件
+// 抽为独立函数：测试需要与生产完全一致的链路，复刻一份会在顺序被改坏时失去报警能力
+func newBaseEngine() *gin.Engine {
 	r := gin.New()
 	r.RedirectTrailingSlash = false
 	r.RedirectFixedPath = false
+	r.Use(middleware.SecurityHeaders())
 	r.Use(gin.Recovery())
 	r.Use(middleware.Logger())
-	// CORS 仅作用于 /api：静态与页面路由不再跑 Origin 校验与 Expose-Headers，减少每请求开销
-	// 业务接口仅注册 GET（查询）与 POST（创建、更新、删除统一 POST；删除路径为 .../delete）
-	api := r.Group("/api")
+	return r
+}
+
+/*
+ * applyAPIMiddleware 挂载 /api 组中间件链
+ *
+ * panic 恢复分两层，内层必须紧跟 RequestTrace：
+ *   - RequestTrace 的落库代码在 c.Next() 之后，panic 若穿透到链首，这段代码不会执行，
+ *     请求日志将完全丢失（实测：仅外层 gin.Recovery 时 RequestLog 零记录）
+ *   - 内层在此处被 RequestTrace 包裹，middleware.Recovery 先 SetError 并写 ErrorStackKey，
+ *     再把 panic 挡在 RequestTrace 之内，使 c.Next() 正常返回后完成落库，保留 ErrorID 与堆栈
+ *   - 外层 gin.Recovery 保留，兜住不经 RequestTrace 的静态资源、页面路由与 NoRoute 的 panic
+ */
+func applyAPIMiddleware(api *gin.RouterGroup) {
 	api.Use(middleware.CORS())
 	// 请求追踪与落库（含 X-Request-ID、body/headers、db_queries）；须在 CORS 之后以便 OPTIONS 不记日志
 	api.Use(middleware.RequestTrace())
+	api.Use(middleware.Recovery())
 	// CSRF double-submit cookie：GET 自动下发 _csrf cookie，写请求校验 X-CSRF-Token
 	api.Use(middleware.CSRF())
 	// 操作审计写入 LogDB（与 service.Audit、GetLogs 一致）
 	api.Use(middleware.AuditLog())
+}
+
+func setupRouter(staticFS fs.FS) *gin.Engine {
+	r := newBaseEngine()
+	api := r.Group("/api")
+	applyAPIMiddleware(api)
 	{
 		// CSRF token 获取端点（前端初始化时拉一次即可）
 		api.GET("/csrf", middleware.IssueCSRFHandler)
@@ -46,6 +74,9 @@ func SetupRouter(staticFS embed.FS) *gin.Engine {
 		api.POST("/auth/reset-totp", handler.ResetTOTP)
 		api.GET("/auth/oauth/providers", handler.GetOAuthProviders)
 		api.GET("/auth/oauth/:provider/login", handler.OAuthLogin)
+		// 前端回调页用授权码换取会话；第三方统一回跳到前端 /oauth-callback，由该页调用此接口
+		api.POST("/auth/oauth/exchange", handler.OAuthExchange)
+		// 兼容路径：第三方后台仍配置旧回调地址时由后端直接换会话，不经前端页面
 		api.GET("/auth/oauth/:provider/callback", handler.OAuthCallback)
 		api.POST("/auth/refresh", handler.RefreshToken)
 		api.POST("/auth/send-code", handler.SendAuthCode)
@@ -168,9 +199,13 @@ func SetupRouter(staticFS embed.FS) *gin.Engine {
 
 			auth.GET("/logs", handler.GetLogs)
 			auth.GET("/logs/:id", handler.GetLogDetail)
+			auth.POST("/logs/clean", handler.CleanOperationLogs)
 
 			auth.GET("/system/config", handler.GetSystemConfig)
 			auth.POST("/system/config", handler.UpdateSystemConfig)
+			// 登录注册控制页（密码登录/注册、邮箱验证、邮箱白名单、各 OAuth 来源开关）
+			auth.GET("/system/auth-control", handler.GetAuthControl)
+			auth.POST("/system/auth-control", handler.UpdateAuthControl)
 
 			auth.GET("/dns/providers", handler.GetDNSProviders)
 			auth.GET("/cert/providers", handler.GetCertProviders)
@@ -180,6 +215,7 @@ func SetupRouter(staticFS embed.FS) *gin.Engine {
 			auth.POST("/system/mail/test", handler.TestMailNotification)
 			auth.POST("/system/telegram/test", handler.TestTelegramNotification)
 			auth.POST("/system/webhook/test", handler.TestWebhookNotification)
+			auth.POST("/system/custom-webhook/test", handler.TestCustomWebhookNotification)
 			auth.POST("/system/discord/test", handler.TestDiscordNotification)
 			auth.POST("/system/bark/test", handler.TestBarkNotification)
 			auth.POST("/system/wechat/test", handler.TestWechatNotification)
@@ -253,10 +289,23 @@ func SetupRouter(staticFS embed.FS) *gin.Engine {
 			auth.POST("/cloudflare/tunnels/hostnameroutes/data/:id", handler.GetHostnameRoutes)
 			auth.POST("/cloudflare/tunnels/hostnameroutes/add/:id", handler.AddHostnameRoute)
 			auth.POST("/cloudflare/tunnels/hostnameroutes/delete/:id", handler.DeleteHostnameRoute)
+			auth.GET("/system/optimizeip/config", handler.GetOptimizeIPConfig)
+			auth.POST("/system/optimizeip/config", handler.UpdateOptimizeIPConfig)
+			auth.POST("/system/optimizeip/license", handler.QueryOptimizeIPLicense)
+			auth.POST("/optimizeip/tasks/list", handler.GetOptimizeIPList)
+			auth.POST("/optimizeip/tasks", handler.CreateOptimizeIPTask)
+			auth.POST("/optimizeip/tasks/:id", handler.UpdateOptimizeIPTask)
+			auth.POST("/optimizeip/tasks/:id/delete", handler.DeleteOptimizeIPTask)
+			auth.POST("/optimizeip/tasks/:id/toggle", handler.ToggleOptimizeIPTask)
+			auth.POST("/optimizeip/tasks/:id/run", handler.RunOptimizeIPTask)
 		}
 
 		api.GET("/quicklogin", handler.QuickLogin)
 	}
+
+	// 优选IP 运行状态
+	r.GET("/optimizeip/status", handler.GetOptimizeIPStatus)
+	r.POST("/qqbot/webhook", handler.QQBotWebhook)
 
 	subFS, err := fs.Sub(staticFS, "web")
 	if err != nil {
@@ -304,8 +353,18 @@ func SetupRouter(staticFS embed.FS) *gin.Engine {
 			return false
 		}
 		contentType := getContentType(filePath)
-		if !strings.HasSuffix(filePath, ".html") {
+		isHTML := strings.HasSuffix(filePath, ".html")
+		if isHTML || strings.HasSuffix(filePath, ".txt") {
+			c.Header("Cache-Control", "no-cache")
+		} else {
 			c.Header("Cache-Control", "public, max-age=31536000")
+		}
+		etag := fmt.Sprintf(`"%x"`, sha256.Sum256(data))
+		// 304 响应同样需要携带 ETag（RFC 9110 要求），因此先设头再判定
+		c.Header("ETag", etag)
+		if c.GetHeader("If-None-Match") == etag {
+			c.Status(http.StatusNotModified)
+			return true
 		}
 		c.Data(http.StatusOK, contentType, data)
 		return true

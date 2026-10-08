@@ -26,20 +26,17 @@ type NPMProvider struct {
 	url    string
 	email  string
 	password string
-	proxy  bool
 	token  string
 }
 
 // NewNPMProvider creates a new NPM provider
 func NewNPMProvider(config map[string]interface{}) base.DeployProvider {
-	proxy := base.GetConfigBool(config, "proxy")
 	return &NPMProvider{
 		BaseProvider: base.BaseProvider{Config: config},
 		client:       &http.Client{Timeout: 30 * time.Second},
 		url:          strings.TrimSuffix(base.GetConfigString(config, "url"), "/"),
 		email:        base.GetConfigString(config, "email"),
 		password:     base.GetConfigString(config, "password"),
-		proxy:        proxy,
 	}
 }
 

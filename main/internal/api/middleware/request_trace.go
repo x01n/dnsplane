@@ -59,14 +59,37 @@ const maxRequestLogBodyLen = 8192
 // maxSuccessResponseCapture 成功响应落库正文上限（仅截取前若干字节，便于管理端对照）
 const maxSuccessResponseCapture = 16384
 
-// respCaptureWriter 在不影响真实输出的前提下截取响应体片段供请求日志使用
+// respCaptureWriter 在不影响真实输出的前提下截取响应体片段供请求日志使用，
+// 并在状态码写出前为 4xx/5xx 响应补上可送达的 X-Error-ID
 type respCaptureWriter struct {
 	gin.ResponseWriter
 	buf *bytes.Buffer
 	lim int
+	// markErrHeader 由 RequestTrace 注入，负责在响应头被快照前写入 X-Error-ID
+	markErrHeader func(status int)
+}
+
+// noteStatus 把当前状态码交给注记回调；回调自身幂等，重复调用无副作用
+func (w *respCaptureWriter) noteStatus() {
+	if w.markErrHeader != nil {
+		w.markErrHeader(w.ResponseWriter.Status())
+	}
+}
+
+// WriteHeader 先让内层记下状态码再注记：此刻尚未写出，响应头还未被快照
+func (w *respCaptureWriter) WriteHeader(code int) {
+	w.ResponseWriter.WriteHeader(code)
+	w.noteStatus()
+}
+
+// WriteHeaderNow 兜住只写状态码不写 body 的路径（204/304、handler 只调 c.Status 后返回）
+func (w *respCaptureWriter) WriteHeaderNow() {
+	w.noteStatus()
+	w.ResponseWriter.WriteHeaderNow()
 }
 
 func (w *respCaptureWriter) Write(b []byte) (int, error) {
+	w.noteStatus()
 	if w.buf != nil && w.buf.Len() < w.lim {
 		rest := w.lim - w.buf.Len()
 		if rest > len(b) {
@@ -80,6 +103,7 @@ func (w *respCaptureWriter) Write(b []byte) (int, error) {
 }
 
 func (w *respCaptureWriter) WriteString(s string) (int, error) {
+	w.noteStatus()
 	if w.buf != nil && w.buf.Len() < w.lim {
 		rest := w.lim - w.buf.Len()
 		if rest > len(s) {
@@ -90,6 +114,21 @@ func (w *respCaptureWriter) WriteString(s string) (int, error) {
 		}
 	}
 	return w.ResponseWriter.WriteString(s)
+}
+
+// MarkErrorID 为 4xx/5xx 响应准备 X-Error-ID。
+// 状态码一旦写出，响应头即被快照，之后设置的头不会送达客户端，因此必须在写出前调用。
+// 已有 ErrorID（SetError 生成）时复用同一个值，保证响应头与落库记录一致
+func MarkErrorID(c *gin.Context, status int) {
+	if status < http.StatusBadRequest || c.Writer.Written() {
+		return
+	}
+	errorID := c.GetString(ErrorIDKey)
+	if errorID == "" {
+		errorID = GenerateErrorID()
+		c.Set(ErrorIDKey, errorID)
+	}
+	c.Header("X-Error-ID", errorID)
 }
 
 // RequestTrace 请求追踪中间件
@@ -133,7 +172,12 @@ func RequestTrace() gin.HandlerFunc {
 		headersJSONStr := SanitizeHeadersForLog(headers)
 
 		captureBuf := &bytes.Buffer{}
-		c.Writer = &respCaptureWriter{ResponseWriter: c.Writer, buf: captureBuf, lim: maxSuccessResponseCapture}
+		c.Writer = &respCaptureWriter{
+			ResponseWriter: c.Writer,
+			buf:            captureBuf,
+			lim:            maxSuccessResponseCapture,
+			markErrHeader:  func(status int) { MarkErrorID(c, status) },
+		}
 		c.Next()
 		capturedResp := captureBuf.String()
 
@@ -160,7 +204,6 @@ func RequestTrace() gin.HandlerFunc {
 			if errorID == "" {
 				errorID = GenerateErrorID()
 			}
-			c.Header("X-Error-ID", errorID)
 			errorMsg = c.GetString("error_msg")
 			errorStack = c.GetString(ErrorStackKey)
 		}
@@ -288,6 +331,8 @@ func SetError(c *gin.Context, msg string) string {
 	buf := make([]byte, 4096)
 	n := runtime.Stack(buf, false)
 	c.Set(ErrorStackKey, string(buf[:n]))
+	// X-Error-ID 必须在此写出：状态码一旦送出，响应头即被快照，之后再设客户端收不到
+	c.Header("X-Error-ID", errorID)
 	return errorID
 }
 func GetRequestID(c *gin.Context) string {

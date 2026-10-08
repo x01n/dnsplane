@@ -15,7 +15,6 @@ import (
 
 func init() {
 	base.Register("opanel", NewOPanelProvider)
-	base.Register("1panel", NewOPanelProvider)
 }
 
 // OPanelProvider 1Panel证书部署
@@ -23,8 +22,6 @@ type OPanelProvider struct {
 	base.BaseProvider
 	client *http.Client
 }
-
-// panelAPIKey 兼容账户字段 key（与 dnsmgr / deploy 配置一致）及历史 api_key
 func (p *OPanelProvider) panelAPIKey() string {
 	k := p.GetString("key")
 	if k != "" {

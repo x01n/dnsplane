@@ -160,7 +160,11 @@ func (c *EOClient) Request(ctx context.Context, action string, params map[string
 }
 
 // CreateAccelerationDomain 在 EO 上创建加速域名
-func (c *EOClient) CreateAccelerationDomain(ctx context.Context, zoneID, domainName, originAddr string) (string, error) {
+//
+// 该接口不回带 CNAME，因此这里只创建、不凭空拼一个 <域名>.eo.dnse5.com 当返回值：
+// 那是本地猜测的地址，写进 DNS 会指向云端未必存在的接入点。
+// 调用方需在创建后自行查询真实 CNAME
+func (c *EOClient) CreateAccelerationDomain(ctx context.Context, zoneID, domainName, originAddr string) error {
 	originType := "IP_DOMAIN"
 
 	params := map[string]interface{}{
@@ -173,13 +177,7 @@ func (c *EOClient) CreateAccelerationDomain(ctx context.Context, zoneID, domainN
 	}
 
 	_, err := c.Request(ctx, "CreateAccelerationDomain", params)
-	if err != nil {
-		return "", err
-	}
-
-	// EO CNAME 格式: <domain>.eo.dnse5.com (取 dnse5 作为默认)
-	cname := domainName + ".eo.dnse5.com"
-	return cname, nil
+	return err
 }
 
 // DescribeAccelerationDomains 查询加速域名详情，获取实际 CNAME
@@ -387,16 +385,17 @@ func (c *ESAClient) CreateESARecord(ctx context.Context, siteID, domainName, rec
 		recordID = strconv.FormatInt(int64(rid), 10)
 	}
 
-	// ESA CNAME 格式: <domain>.cnamezone.com
-	cname := domainName + ".cnamezone.com"
-	if rc, ok := result["RecordCname"].(string); ok && rc != "" {
-		cname = rc
+	// 只采信服务端给出的 CNAME：本地拼一个 "<域名>.cnamezone.com" 写进 DNS，
+	// 会指向一个云端未必存在的地址，比直接报错更难排查
+	cname, ok := result["RecordCname"].(string)
+	if !ok || cname == "" {
+		return "", "", fmt.Errorf("ESA 未返回记录 %s 的 CNAME，无法配置解析", domainName)
 	}
 
 	return recordID, cname, nil
 }
 
-// GetESARecordCname 查询 ESA 记录获取 CNAME
+// GetESARecordCname 查询 ESA 记录获取 CNAME，记录不存在或缺少 CNAME 时返回错误
 func (c *ESAClient) GetESARecordCname(ctx context.Context, siteID, domainName string) (string, error) {
 	params := map[string]string{
 		"Action":     "ListRecords",
@@ -423,7 +422,8 @@ func (c *ESAClient) GetESARecordCname(ctx context.Context, siteID, domainName st
 		}
 	}
 
-	return domainName + ".cnamezone.com", nil
+	// 「没找到」必须报错而不是回退默认值：调用方靠 err 区分「已有可用 CNAME」与「尚未创建」
+	return "", fmt.Errorf("ESA 站点 %s 中不存在记录 %s 的可用 CNAME", siteID, domainName)
 }
 
 // ESASite 阿里云 ESA 站点信息

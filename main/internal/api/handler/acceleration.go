@@ -216,11 +216,44 @@ func accelerateCF(ctx context.Context, cfg *service.AccelConfig, fqdn string, do
 	}
 
 	// CF 加速通过自定义主机名接入，CNAME 到优选域名
-	if cfg.CFDomainID > 0 && cfg.CFZoneID != "" {
-		svc, _, _, err := getCFDomainContext(cfg.CFDomainID)
-		if err == nil {
-			_, _ = svc.CreateCustomHostname(cfg.CFZoneID, fqdn, "", "http", "1.0")
+	if cfg.CFDomainID <= 0 || cfg.CFZoneID == "" {
+		return service.AccelResult{
+			Platform: "cloudflare",
+			Line:     "AB",
+			LineName: "海外",
+			Status:   "error",
+			Msg:      "CF 加速缺少 SaaS 回落域名或 Zone ID，请在系统设置中补全",
 		}
+	}
+
+	svc, _, _, err := getCFDomainContext(cfg.CFDomainID)
+	if err != nil {
+		return service.AccelResult{
+			Platform: "cloudflare",
+			Line:     "AB",
+			LineName: "海外",
+			Status:   "error",
+			Msg:      "CF 加速域名不可用: " + err.Error(),
+		}
+	}
+
+	// 必须在 CF 侧真正创建出自定义主机名后才写 CNAME，
+	// 否则解析会指向一个云端并不存在的接入点
+	result, err := svc.CreateCustomHostname(cfg.CFZoneID, fqdn, "", "http", "1.0")
+	if err != nil {
+		return service.AccelResult{
+			Platform: "cloudflare",
+			Line:     "AB",
+			LineName: "海外",
+			Status:   "error",
+			Msg:      "创建 CF 自定义主机名失败: " + err.Error(),
+		}
+	}
+
+	// 回显云端主机名，便于用户核对实际创建的资源；缺失时只是少了回显，不影响成功判定
+	msg := ""
+	if id, ok := result["id"].(string); ok && id != "" {
+		msg = "自定义主机名 " + id + " 已就绪"
 	}
 
 	return service.AccelResult{
@@ -229,6 +262,7 @@ func accelerateCF(ctx context.Context, cfg *service.AccelConfig, fqdn string, do
 		LineName: "海外",
 		CNAME:    cfg.CFPreferDomain,
 		Status:   "success",
+		Msg:      msg,
 	}
 }
 
@@ -266,21 +300,25 @@ func accelerateEO(ctx context.Context, cfg *service.AccelConfig, fqdn, originAdd
 	}
 
 	// 创建加速域名
-	cname, err = client.CreateAccelerationDomain(ctx, cfg.EOZoneID, fqdn, originAddr)
+	err = client.CreateAccelerationDomain(ctx, cfg.EOZoneID, fqdn, originAddr)
 	if err != nil {
 		if strings.Contains(err.Error(), "DomainAlreadyExists") || strings.Contains(err.Error(), "already exists") {
-			// 已存在，尝试获取 CNAME
+			// 已存在时重查真实 CNAME；查不到就报失败，不再回填猜测值
 			cname2, _, err2 := client.DescribeAccelerationDomains(ctx, cfg.EOZoneID, fqdn)
-			if err2 == nil && cname2 != "" {
-				cname = cname2
-			} else {
-				cname = fqdn + ".eo.dnse5.com"
+			if err2 != nil || cname2 == "" {
+				return service.AccelResult{
+					Platform: "tencenteo",
+					Line:     lineCode,
+					LineName: lineName,
+					Status:   "error",
+					Msg:      "EO 加速域名已存在但无法获取其 CNAME，请到 EdgeOne 控制台确认后重试",
+				}
 			}
 			return service.AccelResult{
 				Platform: "tencenteo",
 				Line:     lineCode,
 				LineName: lineName,
-				CNAME:    cname,
+				CNAME:    cname2,
 				Status:   "success",
 				Msg:      "加速域名已存在",
 			}
@@ -294,17 +332,33 @@ func accelerateEO(ctx context.Context, cfg *service.AccelConfig, fqdn, originAdd
 		}
 	}
 
-	// 创建后查询实际 CNAME
+	// 创建后查询真实 CNAME；查不到说明云端未就绪，不能把本地拼的地址写进 DNS
 	time.Sleep(1 * time.Second)
-	if actualCname, _, err := client.DescribeAccelerationDomains(ctx, cfg.EOZoneID, fqdn); err == nil && actualCname != "" {
-		cname = actualCname
+	actualCname, _, err := client.DescribeAccelerationDomains(ctx, cfg.EOZoneID, fqdn)
+	if err != nil {
+		return service.AccelResult{
+			Platform: "tencenteo",
+			Line:     lineCode,
+			LineName: lineName,
+			Status:   "error",
+			Msg:      "EO 加速域名已创建但查询 CNAME 失败，请稍后重试: " + err.Error(),
+		}
+	}
+	if actualCname == "" {
+		return service.AccelResult{
+			Platform: "tencenteo",
+			Line:     lineCode,
+			LineName: lineName,
+			Status:   "error",
+			Msg:      "EO 加速域名已创建但暂未返回 CNAME，请稍后重试",
+		}
 	}
 
 	return service.AccelResult{
 		Platform: "tencenteo",
 		Line:     lineCode,
 		LineName: lineName,
-		CNAME:    cname,
+		CNAME:    actualCname,
 		Status:   "success",
 	}
 }
@@ -329,9 +383,10 @@ func accelerateESA(ctx context.Context, cfg *service.AccelConfig, fqdn, originAd
 
 	client := service.NewESAClient(cfg.ESAAccessKeyID, cfg.ESAAccessKeySecret, cfg.ESARegion)
 
-	// 先查询是否已存在
+	// 先查询是否已存在：GetESARecordCname 只在拿到可用 CNAME 时返回 nil，
+	// 因此 err == nil 本身就意味着记录可用，无需再比对哨兵值
 	existingCname, err := client.GetESARecordCname(ctx, cfg.ESASiteID, fqdn)
-	if err == nil && existingCname != "" && existingCname != fqdn+".cnamezone.com" {
+	if err == nil && existingCname != "" {
 		return service.AccelResult{
 			Platform: "aliyunesa",
 			Line:     lineCode,
@@ -353,17 +408,22 @@ func accelerateESA(ctx context.Context, cfg *service.AccelConfig, fqdn, originAd
 	_, cname, err := client.CreateESARecord(ctx, cfg.ESASiteID, fqdn, recordType, originAddr)
 	if err != nil {
 		if strings.Contains(err.Error(), "RecordAlreadyExists") || strings.Contains(err.Error(), "already exist") {
-			cname2, _ := client.GetESARecordCname(ctx, cfg.ESASiteID, fqdn)
-			if cname2 != "" {
-				cname = cname2
-			} else {
-				cname = fqdn + ".cnamezone.com"
+			// 记录已存在时重查真实 CNAME；查不到就报失败，不再回填猜测值
+			cname2, getErr := client.GetESARecordCname(ctx, cfg.ESASiteID, fqdn)
+			if getErr != nil || cname2 == "" {
+				return service.AccelResult{
+					Platform: "aliyunesa",
+					Line:     lineCode,
+					LineName: lineName,
+					Status:   "error",
+					Msg:      "ESA 记录已存在但无法获取其 CNAME，请到 ESA 控制台确认后重试",
+				}
 			}
 			return service.AccelResult{
 				Platform: "aliyunesa",
 				Line:     lineCode,
 				LineName: lineName,
-				CNAME:    cname,
+				CNAME:    cname2,
 				Status:   "success",
 				Msg:      "加速记录已存在",
 			}
@@ -469,8 +529,19 @@ func configureDNSForAcceleration(ctx context.Context, cfg *service.AccelConfig, 
 		for _, dl := range dnsLines {
 			lineID := lineMapping[dl.lineKey]
 
-			// 清理同线路上与 CNAME 互斥的 A/AAAA 记录
-			removeConflictingRecords(ctx, provider, recordName, lineID)
+			// 清理同线路上与 CNAME 互斥的 A/AAAA 记录；
+			// 清理失败则不再写入，否则同一子域同线路上会同时存在 A 与 CNAME
+			deleted, skippedCleanup, cleanupErr := removeConflictingRecords(ctx, provider, recordName, lineID)
+			if cleanupErr != nil {
+				dnsResults = append(dnsResults, gin.H{
+					"platform":  ar.Platform,
+					"line_name": dl.lineName,
+					"cname":     ar.CNAME,
+					"status":    "error",
+					"msg":       "清理冲突记录失败，已跳过写入: " + cleanupErr.Error(),
+				})
+				continue
+			}
 
 			_, skipped, usedTTL, err := maindns.EnsureChallengeRecordWithTTLProbe(
 				ctx, provider, recordName, "CNAME", ar.CNAME, lineID, ttlList, "accel-"+ar.Platform,
@@ -497,10 +568,12 @@ func configureDNSForAcceleration(ctx context.Context, cfg *service.AccelConfig, 
 				status = "exists"
 			}
 			dnsResults = append(dnsResults, gin.H{
-				"platform":  ar.Platform,
-				"line_name": dl.lineName,
-				"cname":     ar.CNAME,
-				"status":    status,
+				"platform":      ar.Platform,
+				"line_name":     dl.lineName,
+				"cname":         ar.CNAME,
+				"status":        status,
+				"deleted_count": deleted,
+				"cleanup_skipped": skippedCleanup,
 			})
 		}
 	}
@@ -508,25 +581,43 @@ func configureDNSForAcceleration(ctx context.Context, cfg *service.AccelConfig, 
 	return dnsResults
 }
 
-// removeConflictingRecords 删除同线路上与 CNAME 冲突的 A/AAAA 记录
-func removeConflictingRecords(ctx context.Context, provider maindns.Provider, subHost, line string) {
+/*
+ * removeConflictingRecords 删除同线路上与 CNAME 冲突的 A/AAAA 记录
+ *
+ * 返回成功删除的条数与是否因线路未知而整体跳过。
+ * 线路未知（空串）时不做任何删除：dnspod / west / dnsla 的默认线路就是空串，
+ * 此时无法判断该子域下哪些记录与目标线路冲突，全部删掉会连同用户其他线路的记录一起清空
+ * 记录自身线路为空（provider 未返回线路字段）时同样放过，理由相同
+ */
+func removeConflictingRecords(ctx context.Context, provider maindns.Provider, subHost, line string) (int, bool, error) {
+	if strings.TrimSpace(line) == "" {
+		return 0, true, nil
+	}
+
 	pr, err := provider.GetSubDomainRecords(ctx, subHost, 1, 100, "", "")
 	if err != nil {
-		return
+		return 0, false, fmt.Errorf("列举子域记录失败: %w", err)
 	}
 	list, ok := pr.Records.([]maindns.Record)
 	if !ok {
-		return
+		return 0, false, fmt.Errorf("子域记录格式错误")
 	}
+
+	deleted := 0
 	for _, rec := range list {
 		rt := strings.ToUpper(rec.Type)
 		if rt != "A" && rt != "AAAA" {
 			continue
 		}
-		if rec.Line == line || line == "" || rec.Line == "" {
-			_ = provider.DeleteDomainRecord(ctx, rec.ID)
+		if rec.Line == "" || rec.Line != line {
+			continue
 		}
+		if err := provider.DeleteDomainRecord(ctx, rec.ID); err != nil {
+			return deleted, false, fmt.Errorf("删除冲突记录 %s: %w", rec.ID, err)
+		}
+		deleted++
 	}
+	return deleted, false, nil
 }
 
 func getAccountByDomain(domain *models.Domain) *models.Account {

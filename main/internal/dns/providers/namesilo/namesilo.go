@@ -21,10 +21,6 @@ func init() {
 		Config: []dns.ConfigField{
 			{Name: "账户名", Key: "username", Type: "input", Required: true},
 			{Name: "API Key", Key: "apikey", Type: "input", Required: true},
-			{Name: "使用代理服务器", Key: "proxy", Type: "radio", Options: []dns.ConfigOption{
-				{Value: "0", Label: "否"},
-				{Value: "1", Label: "是"},
-			}, Value: "0"},
 		},
 		Features: dns.ProviderFeatures{
 			Remark: 0, Status: false, Redirect: false, Log: false, Weight: false, Page: true, Add: false,
@@ -37,7 +33,6 @@ const baseURL = "https://www.namesilo.com/api/"
 type Provider struct {
 	apiKey  string
 	domain  string
-	proxy   bool
 	client  *http.Client
 	lastErr string
 }
@@ -46,7 +41,6 @@ func NewProvider(config map[string]string, domain, domainID string) dns.Provider
 	return &Provider{
 		apiKey: config["apikey"],
 		domain: domain,
-		proxy:  config["proxy"] == "1",
 		client: &http.Client{Timeout: 30 * time.Second},
 	}
 }

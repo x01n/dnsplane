@@ -10,6 +10,7 @@ import (
 
 	"main/internal/api/middleware"
 	"main/internal/cert/deploy"
+	"main/internal/cert/deploy/base"
 	"main/internal/database"
 	"main/internal/dbcache"
 	"main/internal/logger"
@@ -827,6 +828,8 @@ func DeployProcess(c *gin.Context) {
 	ip := c.ClientIP()
 	ua := c.Request.UserAgent()
 	taskID := deployTask.ID
+	rawConfig := deployTask.Config
+	rawInfo := deployTask.Info
 	fullChain := order.FullChain
 	privateKey := order.PrivateKey
 	issueTime := order.IssueTime
@@ -839,7 +842,8 @@ func DeployProcess(c *gin.Context) {
 
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
-		if err := provider.Deploy(ctx, fullChain, privateKey, deployConfig); err != nil {
+		deployInfo := &base.DeployInfo{}
+		if err := base.ProviderDeployWithInfo(ctx, provider, fullChain, privateKey, deployConfig, deployInfo); err != nil {
 			logBuilder.WriteString(fmt.Sprintf("[%s] 部署失败: %s\n", time.Now().Format("15:04:05"), err.Error()))
 			database.DB.Model(&models.CertDeploy{}).Where("id = ?", taskID).Updates(map[string]interface{}{
 				"status":      -1,
@@ -853,14 +857,18 @@ func DeployProcess(c *gin.Context) {
 		}
 
 		logBuilder.WriteString(fmt.Sprintf("[%s] 部署成功\n", time.Now().Format("15:04:05")))
-		database.DB.Model(&models.CertDeploy{}).Where("id = ?", taskID).Updates(map[string]interface{}{
+		updates := map[string]interface{}{
 			"status":      2,
 			"error":       "",
 			"is_lock":     false,
 			"log_content": logBuilder.String(),
 			"last_time":   time.Now(),
 			"issue_time":  issueTime,
-		})
+		}
+		for field, value := range base.InfoUpdates(rawConfig, rawInfo, deployInfo) {
+			updates[field] = value
+		}
+		database.DB.Model(&models.CertDeploy{}).Where("id = ?", taskID).Updates(updates)
 		service.Audit.LogActionDirect(userID, username, ip, ua, "process_deploy", "", fmt.Sprintf("手动执行部署任务: %d", taskID))
 	})
 
@@ -946,9 +954,6 @@ func DeployLog(c *gin.Context) {
 	}
 
 	logContent := deployTask.LogContent
-	if logContent == "" && deployTask.Info != "" {
-		logContent = deployTask.Info
-	}
 	if logContent == "" {
 		logContent = "暂无日志"
 	}

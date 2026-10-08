@@ -12,8 +12,10 @@ import (
 	"main/internal/database"
 	"main/internal/dbcache"
 	"main/internal/dns"
+	"main/internal/dns/doh"
 	"main/internal/logger"
 	"main/internal/models"
+	"main/internal/service"
 	"net"
 	"net/http"
 	"sort"
@@ -87,10 +89,31 @@ func GetCertAccounts(c *gin.Context) {
 			return nil, err
 		}
 		list := make([]certAccountListRow, 0, len(accounts))
+		/*
+		 * type_name 与 /api/cert/providers 同源：部署账户取合并后的 deploy 视图
+		 * （cert 注册表 + AllDeployConfigs，生效规则见 internal/cert/deploy/README.md），
+		 * 证书账户取 cert 视图。两表都未登记时回退到部署配置表，
+		 * 否则前端只能显示英文 type（渲染成「我的账户 (acepanel)」）。
+		 */
+		names := make(map[string]string, len(accounts))
+		if isDeploy {
+			for k, v := range deploy.MergeDeployProviderConfigsForAPI(cert.GetDeployProviderConfigs()) {
+				names[k] = v.Name
+			}
+		} else {
+			for k, v := range cert.GetCertProviderConfigs() {
+				names[k] = v.Name
+			}
+		}
 		for _, acc := range accounts {
-			cfg, _ := cert.GetProviderConfig(acc.Type)
+			typeName := names[acc.Type]
+			if typeName == "" {
+				if dcfg, ok := deploy.GetDeployConfig(acc.Type); ok {
+					typeName = dcfg.Name
+				}
+			}
 			list = append(list, certAccountListRow{
-				ID: acc.ID, Type: acc.Type, TypeName: cfg.Name,
+				ID: acc.ID, Type: acc.Type, TypeName: typeName,
 				Name: acc.Name, Config: acc.Config, Remark: acc.Remark,
 				IsDeploy: acc.IsDeploy, CreatedAt: acc.CreatedAt,
 			})
@@ -632,6 +655,7 @@ func processCertOrderAsync(order *models.CertOrder, provider cert.Provider, doma
 		order.Status = -2
 		order.Error = err.Error()
 		database.DB.Save(order)
+		service.CertIssueFailNotify(order.ID)
 		return
 	}
 
@@ -660,7 +684,7 @@ func processCertOrderAsync(order *models.CertOrder, provider cert.Provider, doma
 			var acc models.Account
 			if database.DB.First(&acc, d.AccountID).Error == nil && acc.Type == "huawei" {
 				recs = mergeHuaweiTXTRecordsForCert(recs)
-				appendOrderLog(order, "华为云 DNS：已按 dnsmgr 规则合并同主机 TXT 验证记录")
+				appendOrderLog(order, "华为云 DNS：已按规则合并同主机 TXT 验证记录")
 			}
 		}
 
@@ -728,6 +752,7 @@ func processCertOrderAsync(order *models.CertOrder, provider cert.Provider, doma
 			order.Status = -3
 			order.Error = err.Error()
 			database.DB.Save(order)
+			service.CertIssueFailNotify(order.ID)
 			return
 		}
 
@@ -753,6 +778,7 @@ func processCertOrderAsync(order *models.CertOrder, provider cert.Provider, doma
 				order.Status = -4
 				order.Error = "验证超时"
 				database.DB.Save(order)
+				service.CertIssueFailNotify(order.ID)
 				return
 			}
 
@@ -766,6 +792,7 @@ func processCertOrderAsync(order *models.CertOrder, provider cert.Provider, doma
 			order.Status = -5
 			order.Error = err.Error()
 			database.DB.Save(order)
+			service.CertIssueFailNotify(order.ID)
 			return
 		}
 
@@ -778,6 +805,7 @@ func processCertOrderAsync(order *models.CertOrder, provider cert.Provider, doma
 		order.ExpireTime = &expireTime
 		order.Status = 3
 		database.DB.Save(order)
+		service.CertIssueSuccessNotify(order.ID)
 
 		appendOrderLog(order, "证书签发成功!")
 		appendOrderLog(order, fmt.Sprintf("颁发机构: %s", certResult.Issuer))
@@ -789,7 +817,7 @@ func processCertOrderAsync(order *models.CertOrder, provider cert.Provider, doma
 	}
 }
 
-// mergeHuaweiTXTRecordsForCert 对齐 dnsmgr CertDnsUtils::getHuaweiDnsRecords（同 RR 多条 TXT 合并为一条）
+// mergeHuaweiTXTRecordsForCert
 func mergeHuaweiTXTRecordsForCert(records []cert.DNSRecord) []cert.DNSRecord {
 	var nonTXT []cert.DNSRecord
 	byName := make(map[string][]string)
@@ -814,8 +842,6 @@ func mergeHuaweiTXTRecordsForCert(records []cert.DNSRecord) []cert.DNSRecord {
 	}
 	return out
 }
-
-// certChallengeDomainForCNAME 与 dnsmgr CertDnsUtils 中 CNAME 代理匹配的域名一致
 func certChallengeDomainForCNAME(mainDomain, recordName string) string {
 	if recordName == "_acme-challenge" {
 		return mainDomain
@@ -861,7 +887,7 @@ func certResolveCNAMEProxy(mainDomain, recordName string) (newMain, newRR string
 	return parent, rr, true
 }
 
-// addDNSRecord 自动添加 DNS 验证记录（对齐 dnsmgr CertDnsUtils::addDns：默认线路、TTL、IDN、CNAME 代理）
+// addDNSRecord 自动添加 DNS 验证记录
 func addDNSRecord(ctx context.Context, order *models.CertOrder, mainDomain, recordName, recordValue, recordType string, useCNAME bool) bool {
 	mainDom := mainDomain
 	finalRecordName := recordName
@@ -1406,6 +1432,7 @@ func certPreVerifyDNS(_ context.Context, order *models.CertOrder, dnsRecords map
 }
 
 // certCheckTXTRecord 并行查询多个公共 DNS，任一返回期望值即通过。
+// 全部 UDP 直查均未命中时，回退一次 DoH 加密查询
 func certCheckTXTRecord(fqdn, expectedValue string) bool {
 	servers := []string{"8.8.8.8", "1.1.1.1", "223.5.5.5"}
 	expected := strings.TrimSpace(expectedValue)
@@ -1441,6 +1468,19 @@ func certCheckTXTRecord(fqdn, expectedValue string) bool {
 
 	for range servers {
 		if r := <-ch; r.found {
+			return true
+		}
+	}
+
+	// UDP 全部失败，回退 DoH 通道
+	qctx, cancel := context.WithTimeout(context.Background(), 2*doh.Timeout)
+	defer cancel()
+	res, err := doh.QueryContext(qctx, fqdn, "TXT")
+	if err != nil {
+		return false
+	}
+	for _, txt := range res.Records {
+		if strings.TrimSpace(txt) == expected {
 			return true
 		}
 	}

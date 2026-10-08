@@ -165,6 +165,11 @@ func (p *BTPanelProvider) Deploy(ctx context.Context, fullchain, privateKey stri
 		deployType = "0"
 	}
 
+	// IIS 站点需要 PFX 证书，当前接口无法下发
+	if base.GetConfigBool(config, "is_iis") {
+		return fmt.Errorf("IIS站点部署需要PFX证书，当前版本暂不支持")
+	}
+
 	var sites []string
 	if sitesStr := base.GetConfigString(config, "sites"); sitesStr != "" {
 		sites = base.SplitDomains(sitesStr)
@@ -180,6 +185,30 @@ func (p *BTPanelProvider) Deploy(ctx context.Context, fullchain, privateKey stri
 		// 面板证书
 		p.Log("正在部署面板证书")
 		return p.deployPanel(ctx, fullchain, privateKey)
+	case "2":
+		// 邮局证书
+		if len(sites) == 0 {
+			return fmt.Errorf("邮局域名不能为空")
+		}
+		for _, siteName := range sites {
+			p.Log("正在部署邮局证书: " + siteName)
+			if err := p.deployMailSys(ctx, siteName, fullchain, privateKey); err != nil {
+				return err
+			}
+		}
+		return nil
+	case "3":
+		// Docker 网站证书
+		if len(sites) == 0 {
+			return fmt.Errorf("Docker站点名称不能为空")
+		}
+		for _, siteName := range sites {
+			p.Log("正在部署Docker证书: " + siteName)
+			if err := p.deployDocker(ctx, siteName, fullchain, privateKey); err != nil {
+				return err
+			}
+		}
+		return nil
 	default:
 		// 网站证书
 		if len(sites) == 0 {
@@ -259,6 +288,37 @@ func (p *BTPanelProvider) deploySite(ctx context.Context, siteName, fullchain, p
 		return fmt.Errorf("部署证书到站点 %s 失败: %v", siteName, err)
 	}
 	p.Log(fmt.Sprintf("站点 %s 证书部署成功", siteName))
+	return nil
+}
+
+// deployMailSys deploys certificate to the mail plugin of BT panel
+func (p *BTPanelProvider) deployMailSys(ctx context.Context, domain, fullchain, privateKey string) error {
+	params := map[string]string{
+		"domain": domain,
+		"key":    privateKey,
+		"csr":    fullchain,
+		"act":    "add",
+	}
+	_, err := p.request(ctx, "/plugin?action=a&name=mail_sys&s=set_mail_certificate_multiple", params)
+	if err != nil {
+		return fmt.Errorf("部署邮局证书失败: %v", err)
+	}
+	p.Log(fmt.Sprintf("邮局域名 %s 证书部署成功", domain))
+	return nil
+}
+
+// deployDocker deploys certificate to a Docker site of BT panel
+func (p *BTPanelProvider) deployDocker(ctx context.Context, siteName, fullchain, privateKey string) error {
+	params := map[string]string{
+		"site_name": siteName,
+		"key":       privateKey,
+		"csr":       fullchain,
+	}
+	_, err := p.request(ctx, "/mod/docker/com/set_ssl", params)
+	if err != nil {
+		return fmt.Errorf("部署Docker证书失败: %v", err)
+	}
+	p.Log(fmt.Sprintf("Docker站点 %s 证书部署成功", siteName))
 	return nil
 }
 

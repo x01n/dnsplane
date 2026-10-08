@@ -35,6 +35,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { cn, hasModuleAccess } from '@/lib/utils'
+import { ThemeToggle } from '@/components/theme-toggle'
 import { api, authApi, User } from '@/lib/api'
 import { toast } from 'sonner'
 import { DashboardUserProvider } from '@/contexts/dashboard-user-context'
@@ -114,11 +115,27 @@ export default function DashboardLayout({
     setExpandedGroups(activeGroups)
   }, [pathname])
 
+  // 移动端抽屉：Esc 关闭，打开期间锁定 body 滚动，卸载或关闭时还原
+  useEffect(() => {
+    if (!sidebarOpen) return
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setSidebarOpen(false)
+    }
+    const prevOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    window.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.body.style.overflow = prevOverflow
+      window.removeEventListener('keydown', onKeyDown)
+    }
+  }, [sidebarOpen])
+
   useEffect(() => {
     /*
      * 安全审计 H-4：移除从 URL 查询串 (?token=&refresh_token=) 读取凭据的兼容路径。
      * 原实现会使 token 进入浏览器历史、Referer、服务端/代理访问日志，攻击面过大。
-     * OAuth 回调已统一走 URL fragment（#access_token=...），由 consumeOAuthTokensFromUrl 处理。
+     * OAuth 回调已改为前端页面 /oauth-callback 读取 code 后调后端交换接口，
+     * 登录凭据只经 HttpOnly cookie 下发，URL 里不再承载任何 token。
      * 如仍检测到遗留查询串，直接删除不做写入。
      */
     if (typeof window !== 'undefined') {
@@ -255,11 +272,16 @@ export default function DashboardLayout({
         <div
           className="fixed inset-0 z-40 bg-black/40 backdrop-blur-sm lg:hidden"
           onClick={() => setSidebarOpen(false)}
+          aria-hidden
         />
       )}
 
       {/* Sidebar */}
       <aside
+        id="dashboard-sidebar"
+        role={sidebarOpen ? 'dialog' : undefined}
+        aria-modal={sidebarOpen || undefined}
+        aria-label="主导航"
         className={cn(
           'fixed inset-y-0 left-0 z-50 flex w-64 flex-col border-r border-border bg-card/85 shadow-sm backdrop-blur-xl transition-transform duration-200 ease-in-out lg:translate-x-0',
           sidebarOpen ? 'translate-x-0' : '-translate-x-full'
@@ -275,6 +297,7 @@ export default function DashboardLayout({
             size="icon"
             className="ml-auto lg:hidden"
             onClick={() => setSidebarOpen(false)}
+            aria-label="关闭导航菜单"
           >
             <X className="h-5 w-5" />
           </Button>
@@ -361,11 +384,16 @@ export default function DashboardLayout({
             size="icon"
             className="lg:hidden"
             onClick={() => setSidebarOpen(true)}
+            aria-label="打开导航菜单"
+            aria-expanded={sidebarOpen}
+            aria-controls="dashboard-sidebar"
           >
             <Menu className="h-5 w-5" />
           </Button>
 
           <div className="flex-1" />
+
+          <ThemeToggle />
 
           <DropdownMenu>
             <DropdownMenuTrigger asChild>

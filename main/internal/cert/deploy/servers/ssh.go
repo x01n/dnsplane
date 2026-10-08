@@ -102,8 +102,8 @@ func (p *SSHProvider) connect() (*ssh.Client, error) {
 //   - 原实现固定使用 ssh.InsecureIgnoreHostKey()，对所有 SSH 目标永不校验主机密钥；
 //     攻击者可在网络链路上实施 MITM，截获上传的 fullchain + privateKey。
 //   - 现在支持在 CertDeploy.Config 中填写 host_key 字段（支持两种格式）：
-//       1) known_hosts 整行（OpenSSH 格式，如 "host ssh-ed25519 AAAAC3..."）
-//       2) "algo base64" 两段式（如 "ssh-ed25519 AAAAC3..."）
+//     1) known_hosts 整行（OpenSSH 格式，如 "host ssh-ed25519 AAAAC3..."）
+//     2) "algo base64" 两段式（如 "ssh-ed25519 AAAAC3..."）
 //   - 未配置 host_key 时回退到不校验但打 Warn 日志，保留与历史部署任务的兼容性；
 //     建议运维尽快为每个目标录入 host_key。
 func buildHostKeyCallback(host, hostKey string) ssh.HostKeyCallback {
@@ -140,7 +140,7 @@ func parseHostKey(raw string) (ssh.PublicKey, error) {
 func (p *SSHProvider) Deploy(ctx context.Context, fullchain, privateKey string, config map[string]interface{}) error {
 	format := strings.TrimSpace(firstStringInMap(config, "format"))
 	if format == "pfx" || format == "jks" {
-		return fmt.Errorf("SSH 部署当前仅支持 PEM 格式（与 dnsmgr 表单中的 PEM 选项一致）")
+		return fmt.Errorf("SSH 部署当前仅支持 PEM 格式")
 	}
 	certPath := firstStringInMap(config, "cert_path", "pem_cert_file")
 	if certPath == "" {

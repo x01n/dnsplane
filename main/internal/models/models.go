@@ -14,7 +14,7 @@ type User struct {
 	Email       string         `gorm:"size:100" json:"email"` // 用于接收重置邮件
 	IsAPI       bool           `gorm:"default:false" json:"is_api"`
 	APIKey      string         `gorm:"size:64" json:"api_key,omitempty"`
-	Level       int            `gorm:"default:0" json:"level"`       // 0: normal, 1: admin
+	Level       int            `gorm:"default:0" json:"level"`       // 0: 自助注册, 1: 第三方登录自动创建, >=2: 管理员
 	Status      int            `gorm:"default:1" json:"status"`      // 0: disabled, 1: enabled
 	Permissions string         `gorm:"type:text" json:"permissions"` // 功能权限JSON
 	TOTPOpen    bool           `gorm:"default:false" json:"totp_open"`
@@ -154,12 +154,12 @@ type DMTask struct {
 	CDN            bool   `gorm:"default:false" json:"cdn"`
 	AddTime        int64  `json:"add_time"`
 	CheckTime      int64  `json:"check_time"`
-	CheckNextTime  int64  `json:"check_next_time"`
+	CheckNextTime  int64  `gorm:"index:idx_dm_tasks_active_next,priority:2" json:"check_next_time"`
 	SwitchTime     int64  `json:"switch_time"`
 	ErrCount       int    `gorm:"default:0" json:"err_count"`
 	Status         int    `gorm:"default:0" json:"status"`         // 0: normal, 1: switched
 	MainHealth     bool   `gorm:"default:true" json:"main_health"` // 最后一次探测主源是否健康
-	Active         bool   `gorm:"default:false" json:"active"`
+	Active         bool   `gorm:"default:false;index:idx_dm_tasks_active_next,priority:1" json:"active"`
 	RecordInfo     string `gorm:"size:200" json:"record_info"`
 	ExpectStatus   string `gorm:"size:64" json:"expect_status"`
 	ExpectKeyword  string `gorm:"size:200" json:"expect_keyword"`
@@ -223,11 +223,11 @@ type CertOrder struct {
 	ChallengeType     string     `gorm:"size:16;default:''" json:"challenge_type"` // 空|dns-01|http-01（ACME 域名验证方式；通配符仅 dns-01）
 	ProcessID         string     `gorm:"size:32" json:"process_id"`
 	IssueTime         *time.Time `json:"issue_time"`
-	ExpireTime        *time.Time `json:"expire_time"`
+	ExpireTime        *time.Time `gorm:"index:idx_cert_orders_auto_scan,priority:3" json:"expire_time"`
 	Issuer            string     `gorm:"size:100" json:"issuer"`
-	Status            int        `gorm:"default:0" json:"status"` // 0:pending 1:validating 2:validated 3:issued 4:revoked -1~-7:errors
+	Status            int        `gorm:"default:0;index:idx_cert_orders_auto_scan,priority:2" json:"status"` // 0:pending 1:validating 2:validated 3:issued 4:revoked -1~-7:errors
 	Error             string     `gorm:"size:300" json:"error"`
-	IsAuto            bool       `gorm:"default:false" json:"is_auto"`
+	IsAuto            bool       `gorm:"default:false;index:idx_cert_orders_auto_scan,priority:1" json:"is_auto"`
 	Retry             int        `gorm:"default:0" json:"retry"`
 	Retry2            int        `gorm:"default:0" json:"retry2"`
 	RetryTime         *time.Time `json:"retry_time"`
@@ -263,14 +263,14 @@ type CertDeploy struct {
 	Remark     string     `gorm:"size:100" json:"remark"`
 	LastTime   *time.Time `json:"last_time"`
 	ProcessID  string     `gorm:"size:32" json:"process_id"`
-	Status     int        `gorm:"default:0" json:"status"`
+	Status     int        `gorm:"default:0;index:idx_cert_deploys_scan,priority:2" json:"status"`
 	Error      string     `gorm:"size:300" json:"error"`
-	Active     bool       `gorm:"default:false" json:"active"`
+	Active     bool       `gorm:"default:false;index:idx_cert_deploys_scan,priority:1" json:"active"`
 	Retry      int        `gorm:"default:0" json:"retry"`
 	MaxRetry   int        `gorm:"default:3" json:"max_retry"`    // 最大重试次数
 	RetryDelay int        `gorm:"default:60" json:"retry_delay"` // 重试间隔(秒)
 	RetryTime  *time.Time `json:"retry_time"`
-	IsLock     bool       `gorm:"default:false" json:"is_lock"`
+	IsLock     bool       `gorm:"default:false;index:idx_cert_deploys_scan,priority:3" json:"is_lock"`
 	LockTime   *time.Time `json:"lock_time"`
 	IsSend     bool       `gorm:"default:false" json:"is_send"`
 	Info       string     `gorm:"type:text" json:"-"`
@@ -304,8 +304,8 @@ type ScheduleTask struct {
 	Line       string `gorm:"size:20" json:"line"`
 	AddTime    int64  `json:"add_time"`
 	UpdateTime int64  `json:"update_time"`
-	NextTime   int64  `json:"next_time"`
-	Active     bool   `gorm:"default:false" json:"active"`
+	NextTime   int64  `gorm:"index:idx_schedule_tasks_active_next,priority:2" json:"next_time"`
+	Active     bool   `gorm:"default:false;index:idx_schedule_tasks_active_next,priority:1" json:"active"`
 	RecordInfo string `gorm:"size:200" json:"record_info"`
 	Remark     string `gorm:"size:100" json:"remark"`
 }

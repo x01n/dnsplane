@@ -14,13 +14,12 @@ import (
 const legacyDefaultJWTSecret = "dnsplane-secret-key-change-me"
 
 type Config struct {
-	Server     ServerConfig     `json:"server"`
-	Database   DatabaseConfig   `json:"database"`
-	JWT        JWTConfig        `json:"jwt"`
-	Proxy      ProxyConfig      `json:"proxy"`
-	LogCleanup LogCleanupConfig `json:"log_cleanup"`
-	Redis      RedisConfig      `json:"redis"`
-	Security   SecurityConfig   `json:"security"`
+	Server   ServerConfig   `json:"server"`
+	Database DatabaseConfig `json:"database"`
+	JWT      JWTConfig      `json:"jwt"`
+	Proxy    ProxyConfig    `json:"proxy"`
+	Redis    RedisConfig    `json:"redis"`
+	Security SecurityConfig `json:"security"`
 }
 
 // SecurityConfig 存储字段级加密主密钥；允许从环境变量 DNSPLANE_MASTER_KEY 覆盖
@@ -36,13 +35,6 @@ type RedisConfig struct {
 	PoolSize     int    `json:"pool_size"`      // 连接池大小，默认 10
 	MinIdleConns int    `json:"min_idle_conns"` // 最小空闲连接
 	KeyPrefix    string `json:"key_prefix"`     // 逻辑 key 前缀，建议如 "dnsplane:" 避免多环境冲突
-}
-
-type LogCleanupConfig struct {
-	Enable           bool `json:"enable"`             // 是否启用自动清理
-	SuccessKeepCount int  `json:"success_keep_count"` // 保留成功日志条数
-	ErrorKeepCount   int  `json:"error_keep_count"`   // 保留错误日志条数
-	CleanupInterval  int  `json:"cleanup_interval"`   // 清理间隔(小时)
 }
 
 type ServerConfig struct {
@@ -105,12 +97,6 @@ func Load(path string) (*Config, error) {
 			JWT: JWTConfig{
 				Secret:     "dnsplane-secret-key-change-me",
 				ExpireHour: 24,
-			},
-			LogCleanup: LogCleanupConfig{
-				Enable:           true,
-				SuccessKeepCount: 1000,
-				ErrorKeepCount:   500,
-				CleanupInterval:  6,
 			},
 		}
 

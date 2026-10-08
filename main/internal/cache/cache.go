@@ -189,6 +189,13 @@ func (m *memoryCache) LRange(key string, start, stop int64) ([]string, error) {
 	return out, nil
 }
 
+/*
+ * LTrim 保留闭区间 [start, stop] 内的元素，与 Redis 同名命令语义一致
+ *
+ * 负下标从尾部计数；起点落在列表之前时视为 0，终点落在列表之后时视为最后一个元素。
+ * 越界的方式判定要在下标解析之前完成，否则「起点最大、终点最小」这类取空区间
+ * 会被解析成越界的 -1 而退化成保留最后一个元素
+ */
 func (m *memoryCache) LTrim(key string, start, stop int64) error {
 	k := m.fk(key)
 	m.mu.Lock()
@@ -198,12 +205,16 @@ func (m *memoryCache) LTrim(key string, start, stop int64) error {
 	if n == 0 {
 		return nil
 	}
+	if start > stop || start >= int64(n) {
+		delete(m.lists, k)
+		return nil
+	}
 	s := m.lIndexToPos(n, start)
 	e := m.lIndexToPos(n, stop)
 	if s < 0 {
 		s = 0
 	}
-	if e < 0 || s > e || s >= n {
+	if e < 0 || s > e {
 		delete(m.lists, k)
 		return nil
 	}

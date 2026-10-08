@@ -8,10 +8,16 @@ import (
 	"main/internal/api/middleware"
 	"main/internal/database"
 	"main/internal/dbcache"
+	"main/internal/httpx"
+	"main/internal/logger"
+	"main/internal/logstore"
 	"main/internal/models"
+	"main/internal/service"
+	"main/internal/sysconfig"
 	"main/internal/utils"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -233,7 +239,18 @@ func DeleteUser(c *gin.Context) {
 		}
 	}
 
-	// 同时删除用户的权限
+	/*
+	 * 释放第三方账号占用，与权限一并清理
+	 *
+	 * user_o_auths 是唯一会因用户被删而彻底锁死的表：绑定的判据是
+	 * provider + provider_user_id，那条记录只要还在，任何其他用户再去绑定同一个
+	 * 第三方账号都会被判为「已被他人绑定」，而唯一的解绑入口 UnbindOAuth 要求
+	 * 本人登录——用户已删，这条路就永远走不通了
+	 *
+	 * 其余业务数据（DNS 账户、证书账户与订单、监控任务、订阅与订单）刻意保留：
+	 * 它们承载的是可接管的资产与审计线索，删用户不等于销毁这些记录
+	 */
+	database.DB.Where("user_id = ?", id).Delete(&models.UserOAuth{})
 	database.DB.Where("uid = ?", id).Delete(&models.Permission{})
 	database.DB.Delete(&models.User{}, id)
 	dbcache.BustUserList()
@@ -458,38 +475,40 @@ func GetLogs(c *gin.Context) {
 		return
 	}
 
-	base := applyLogDateRange(
-		applyOperationLogFilters(database.LogDB.Model(&models.Log{}), keyword, entity, action, userID, domain),
-		dateFrom, dateTo,
-	)
-	base.Count(&total)
-	base.Order("id DESC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&logs)
+	// 与侧栏 adminOnly 一致：非管理员只看得到自己的操作，且统计口径同步收窄，
+	// 否则会出现列表只有自己的日志、卡片却显示全站数字
+	scope := func() *gorm.DB {
+		q := applyLogDateRange(
+			applyOperationLogFilters(database.LogDB.Model(&models.Log{}), keyword, entity, action, userID, domain),
+			dateFrom, dateTo,
+		)
+		if !isAdmin(c) {
+			q = q.Where("uid = ?", middleware.AuthUserID(c))
+		}
+		return q
+	}
+
+	scope().Count(&total)
+	scope().Order("id DESC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&logs)
 
 	now := time.Now()
 	dayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
 	dayEnd := dayStart.Add(24 * time.Hour)
 
-	filtered := func() *gorm.DB {
-		return applyLogDateRange(
-			applyOperationLogFilters(database.LogDB.Model(&models.Log{}), keyword, entity, action, userID, domain),
-			dateFrom, dateTo,
-		)
-	}
-
 	var todayCount int64
-	filtered().
+	scope().
 		Where("created_at >= ? AND created_at < ?", dayStart, dayEnd).
 		Count(&todayCount)
 
 	var uids []uint
-	filtered().
+	scope().
 		Where("uid > 0").
 		Distinct("uid").
 		Pluck("uid", &uids)
 	distinctUsers := int64(len(uids))
 
 	var doms []string
-	filtered().
+	scope().
 		Where("domain != ?", "").
 		Distinct("domain").
 		Pluck("domain", &doms)
@@ -528,6 +547,55 @@ func GetLogDetail(c *gin.Context) {
 		"code": 0,
 		"data": log,
 	})
+}
+
+/* CleanOperationLogsRequest 清空操作日志的入参 */
+type CleanOperationLogsRequest struct {
+	Days int `json:"days"`
+}
+
+func cleanOperationLogsQuery(days int) *gorm.DB {
+	// 清空全部时不带 where，需显式放行：GORM 默认拒绝无条件的批量删除
+	query := database.LogDB.Session(&gorm.Session{AllowGlobalUpdate: true}).Model(&models.Log{})
+	if days > 0 {
+		query = query.Where("created_at < ?", time.Now().AddDate(0, 0, -days))
+	}
+	return query
+}
+
+/*
+ * CleanOperationLogs 清空操作日志
+ * @route POST /logs/clean
+ * 功能：days 不为正时清空全部，为正时只删除 days 天前的记录
+ * 权限：仅管理员
+ */
+func CleanOperationLogs(c *gin.Context) {
+	if !requireAdmin(c) {
+		return
+	}
+	if database.LogDB == nil {
+		middleware.ErrorResponse(c, "日志库未初始化")
+		return
+	}
+
+	var req CleanOperationLogsRequest
+	_ = middleware.BindJSONFlexible(c, &req)
+
+	result := cleanOperationLogsQuery(req.Days).Delete(&models.Log{})
+	if result.Error != nil {
+		middleware.ErrorResponse(c, "清空操作日志失败："+result.Error.Error())
+		return
+	}
+
+	// 系统日志按存储配置只落一处：Redis 实例写 Redis 而不写 SQLite，
+	// 只清 SQLite 会留下日志页已看不到、但仍能被查询的旧条目
+	if logstore.Store != nil && logstore.Store.IsRedis() {
+		logstore.Store.PurgeSystemLogs()
+	}
+
+	deleted := result.RowsAffected
+	service.Audit.LogAction(c, "clean_logs", "", fmt.Sprintf("清空操作日志 %d 条", deleted))
+	middleware.SuccessResponse(c, gin.H{"msg": "日志已清空", "deleted": deleted})
 }
 
 func GetSystemConfig(c *gin.Context) {
@@ -598,10 +666,54 @@ func UpdateSystemConfig(c *gin.Context) {
 		return
 	}
 
-	for key, val := range req {
-		value := sysConfigJSONValueToDB(val)
-		database.DB.Where("key = ?", key).Assign(models.SysConfig{Key: key, Value: value}).FirstOrCreate(&models.SysConfig{})
+	// 写入后必须失效缓存：sysconfig.GetValue 是 60 秒 TTL 缓存且不探测 DB，
+	// 本函数此前只写库，导致设置页保存的开关最长 60 秒不生效（表现为「打开了却没反应」）
+	// 只失效本次改动的键而非全量清空 —— 前端保存时提交整个 config 对象，
+	// 全量失效会让所有读取点在下次访问时同时回源，形成缓存击穿
+	// 全局代理是否开启取本次提交的值，缺省时沿用库中现值 ——
+	// proxy_port 的校验强度取决于它，且两个键在同一个 map 里顺序不定，不能边写边判
+	proxyEnabled, hasProxyEnabled := req["proxy_enabled"]
+	globalProxyOn := httpx.Enabled()
+	if hasProxyEnabled {
+		globalProxyOn = httpx.ExplicitOn(sysConfigJSONValueToDB(proxyEnabled))
 	}
 
+	var invalidated []string
+	for key, val := range req {
+		value := sysConfigJSONValueToDB(val)
+		if reason := proxyConfigRejectReason(key, value, globalProxyOn); reason != "" {
+			logger.Warn("系统配置 %s=%q 未写入: %s", key, value, reason)
+			continue
+		}
+		database.DB.Where("key = ?", key).Assign(models.SysConfig{Key: key, Value: value}).FirstOrCreate(&models.SysConfig{})
+		invalidated = append(invalidated, key)
+	}
+	sysconfig.Invalidate(invalidated...)
+
 	c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "更新成功"})
+}
+
+/* proxyConfigRejectReason 返回代理配置键不可写入的原因，空字符串表示放行
+ *
+ * 只约束 proxy_type 与 proxy_port 两键：前者是枚举，后者在全局代理开启时
+ * 必须有确定值域。其余键沿用逐键通用写入，不受影响
+ */
+func proxyConfigRejectReason(key, value string, globalProxyOn bool) string {
+	switch key {
+	case "proxy_type":
+		// 判据与 httpx 的类型分派一致：空串表示留空跟随默认，同样放行
+		if v := strings.ToLower(strings.TrimSpace(value)); v != "" && v != "http" && v != "socks5" {
+			return "代理类型仅支持 http / socks5，请重新选择"
+		}
+	case "proxy_port":
+		// 仅在全局代理开启时要求端口有效：关闭状态下允许留下正在编辑的草稿值
+		if !globalProxyOn {
+			return ""
+		}
+		port, err := strconv.Atoi(strings.TrimSpace(value))
+		if err != nil || !httpx.ValidPort(port) {
+			return "启用全局代理时端口须为 1-65535"
+		}
+	}
+	return ""
 }

@@ -11,13 +11,22 @@ import (
 	"main/internal/notify"
 	"main/internal/utils"
 	"net"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 )
 
 var Service *Monitor
+
+/* maxDispatchPerTick 单个 tick 周期内最多派发的任务数
+ * 到期任务超出该上限时留在队列中等待下一 tick，避免单轮无限起 goroutine
+ */
+const maxDispatchPerTick = 100
+
+/* maxConcurrentChecks 全局地址探测并发上限
+ * 每个探测持有 socket 或特权 ICMP 句柄，无上限会在任务密集时耗尽文件描述符
+ */
+const maxConcurrentChecks = 64
 
 // ResolveStatus 任务实时解析状态（供API查询）
 type ResolveStatus struct {
@@ -50,13 +59,16 @@ type Monitor struct {
 	wg              sync.WaitGroup
 	running         bool
 	mu              sync.Mutex
-	resolveStatuses sync.Map // taskID(uint) -> *ResolveStatus
-	processing      sync.Map // taskID(uint) -> bool, 防止同一任务并发处理
+	resolveStatuses sync.Map      // taskID(uint) -> *ResolveStatus
+	processing      sync.Map      // taskID(uint) -> bool, 防止同一任务并发处理
+	checkSem        chan struct{} // 地址探测全局信号量，容量 maxConcurrentChecks
 }
 
 // New 创建监控服务实例
 func New() *Monitor {
-	m := &Monitor{}
+	m := &Monitor{
+		checkSem: make(chan struct{}, maxConcurrentChecks),
+	}
 	Service = m
 	return m
 }
@@ -132,25 +144,37 @@ func (m *Monitor) updateRunStatus() {
 func (m *Monitor) dispatchTasks() {
 	var tasks []models.DMTask
 	now := time.Now().Unix()
-	database.DB.Where("active = ? AND check_next_time <= ?", true, now).Find(&tasks)
+	/* 按 check_next_time 升序取前 N 个，保证长期未检查的任务优先派发
+	 * 未进入本轮的任务保持原 check_next_time，留待下一 tick
+	 */
+	database.DB.Where("active = ? AND check_next_time <= ?", true, now).
+		Order("check_next_time asc").
+		Limit(maxDispatchPerTick).
+		Find(&tasks)
 
+	if len(tasks) == 0 {
+		return
+	}
+
+	/* 按 Frequency 分组，同频任务的 check_next_time 顺延量相同，合并为一条 UPDATE */
+	idsByFrequency := make(map[int][]uint)
 	for _, task := range tasks {
-		// 检查是否正在处理中，防止同一任务并发执行
+		idsByFrequency[task.Frequency] = append(idsByFrequency[task.Frequency], task.ID)
+
+		// 已在处理中的任务不重入，但仍顺延下次检查，避免每 tick 重复命中
 		if _, loaded := m.processing.LoadOrStore(task.ID, true); loaded {
-			// 已在处理中，跳过本次调度，延后下次检查
-			nextTime := now + int64(task.Frequency)
-			database.DB.Model(&models.DMTask{}).Where("id = ?", task.ID).
-				Update("check_next_time", nextTime)
 			continue
 		}
 
-		// 更新 check_next_time
-		nextTime := now + int64(task.Frequency)
-		database.DB.Model(&models.DMTask{}).Where("id = ?", task.ID).
-			Update("check_next_time", nextTime)
 		// SafeGo 统一兜底 panic（安全审计 L-5）；t 本地化避免循环变量被下一轮覆盖
 		t := task
 		utils.SafeGoWithName(fmt.Sprintf("monitor-task-%d", t.ID), func() { m.processTaskAsync(t) })
+	}
+
+	for freq, ids := range idsByFrequency {
+		database.DB.Model(&models.DMTask{}).
+			Where("id IN ?", ids).
+			Update("check_next_time", now+int64(freq))
 	}
 }
 
@@ -312,6 +336,16 @@ func (m *Monitor) processTaskAsync(task models.DMTask) {
 
 // checkAddress 对单个地址执行健康检测
 func (m *Monitor) checkAddress(ctx context.Context, task models.DMTask, addr string) *CheckResult {
+	/* 全局并发上限：信号量满时排队等待，等待期间 ctx 超时则直接返回失败
+	 * 每个探测持有 socket 或特权 ICMP 句柄，无上限会在任务密集时耗尽文件描述符
+	 */
+	select {
+	case m.checkSem <- struct{}{}:
+		defer func() { <-m.checkSem }()
+	case <-ctx.Done():
+		return &CheckResult{Success: false, Error: "探测并发已满且等待超时"}
+	}
+
 	switch task.CheckType {
 	case 0: // ping
 		return CheckPing(ctx, addr, task.Timeout)
@@ -359,14 +393,14 @@ func httpCheckOptionsFromTask(task models.DMTask, hostIP string) *HTTPCheckOptio
 		(strings.EqualFold(strings.TrimSpace(task.ProxyType), "http") ||
 			strings.EqualFold(strings.TrimSpace(task.ProxyType), "socks5"))
 	return &HTTPCheckOptions{
-		HostIP:        hostIP,
-		MaxRedirects:  task.MaxRedirects,
-		ExpectStatus:  task.ExpectStatus,
-		ExpectKeyword: task.ExpectKeyword,
-		ProxyType:     strings.TrimSpace(task.ProxyType),
-		ProxyHost:     strings.TrimSpace(task.ProxyHost),
-		ProxyPort:     task.ProxyPort,
-		ProxyUsername: task.ProxyUsername,
+		HostIP:          hostIP,
+		MaxRedirects:    task.MaxRedirects,
+		ExpectStatus:    task.ExpectStatus,
+		ExpectKeyword:   task.ExpectKeyword,
+		ProxyType:       strings.TrimSpace(task.ProxyType),
+		ProxyHost:       strings.TrimSpace(task.ProxyHost),
+		ProxyPort:       task.ProxyPort,
+		ProxyUsername:   task.ProxyUsername,
 		ProxyPassword:   task.ProxyPassword,
 		UseEnvProxy:     task.UseProxy && !useField,
 		InsecureSkipTLS: task.AllowInsecureTLS,
@@ -729,7 +763,6 @@ func (m *Monitor) GetResolveStatus(taskID uint) *ResolveStatus {
 	return nil
 }
 
-
 // sendNotification 发送通知
 func (m *Monitor) sendNotification(task models.DMTask, eventType string, errMsg string) {
 	if !task.NotifyEnabled {
@@ -791,18 +824,12 @@ func (m *Monitor) sendNotification(task models.DMTask, eventType string, errMsg 
 // buildNotifyManager 根据系统配置构建通知管理器
 func (m *Monitor) buildNotifyManager(task models.DMTask) *notify.NotifyManager {
 	// 加载系统通知配置
+	// 键名以 notify.NotifyConfigKeys() 为唯一事实来源逐键 IN 查询，
+	// 不再用 mail_% / wxwork_% 之类手写前缀 LIKE：
+	// 手写清单既漏掉 qqbot_%（QQ 机器人在容灾告警中完全不可达），
+	// 又与 notify 的键集合分成两份，渠道增删时必然再次分叉
 	var configs []models.SysConfig
-	database.DB.Where("`key` LIKE ?", "mail_%").
-		Or("`key` LIKE ?", "tgbot_%").
-		Or("`key` LIKE ?", "webhook_%").
-		Or("`key` LIKE ?", "discord_%").
-		Or("`key` LIKE ?", "bark_%").
-		Or("`key` LIKE ?", "wechat_%").
-		Or("`key` LIKE ?", "dingtalk_%").
-		Or("`key` LIKE ?", "feishu_%").
-		Or("`key` LIKE ?", "wxwork_%").
-		Or("`key` LIKE ?", "wxtpl_%").
-		Find(&configs)
+	database.DB.Where("`key` IN ?", notify.NotifyConfigKeys()).Find(&configs)
 
 	configMap := make(map[string]string)
 	for _, c := range configs {
@@ -816,98 +843,82 @@ func (m *Monitor) buildNotifyManager(task models.DMTask) *notify.NotifyManager {
 	}
 
 	manager := notify.NewManager()
-	hasNotifier := false
+	loaded := 0
 
 	// 如果任务未指定渠道，使用全部已配置渠道
 	useAll := len(channels) == 0
 
-	// 邮件（前端可能传 "email" 或 "mail"，都要匹配）
-	if (useAll || containsStr(channels, "mail") || containsStr(channels, "email")) && configMap["mail_host"] != "" && configMap["mail_recv"] != "" {
-		port := 25
-		if p, err := strconv.Atoi(configMap["mail_port"]); err == nil {
-			port = p
+	// 遍历渠道注册表逐个构造，与 notify.LoadNotifiersFromConfig 共用同一份渠道定义与构造逻辑：
+	// 三条装载路径各自硬编码一份渠道清单正是本轮修复的分叉来源
+	// （monitor 的 Webhook 只传 URL、dashboard 的测试端点各自少传字段、QQ 机器人在告警中完全不可达）
+	// 本函数只保留容灾告警特有的两层筛选：notice_* 开关与任务渠道白名单
+	for _, ch := range notify.Channels() {
+		// 容灾告警专属开关：不受告警管辖的渠道 NoticeKey 为空，跳过判定
+		if key := ch.NoticeKey(); key != "" && !noticeEnabled(configMap, key) {
+			continue
 		}
-		useTLS := configMap["mail_secure"] == "ssl" || configMap["mail_tls"] == "1"
-		mailTo := configMap["mail_recv"]
-		if mailTo == "" {
-			mailTo = configMap["mail_from"]
+		if !channelInTaskWhitelist(ch, channels, useAll) {
+			continue
 		}
-		manager.AddNotifier(notify.NewEmailNotifier(notify.EmailConfig{
-			Host:     configMap["mail_host"],
-			Port:     port,
-			Username: configMap["mail_user"],
-			Password: configMap["mail_password"],
-			From:     configMap["mail_from"],
-			To:       mailTo,
-			UseTLS:   useTLS,
-		}))
-		hasNotifier = true
+		if n, ok := ch.Build(configMap); ok {
+			manager.AddNotifier(n)
+			loaded++
+		}
 	}
 
-	// Telegram
-	if (useAll || containsStr(channels, "telegram")) && configMap["tgbot_token"] != "" && configMap["tgbot_chatid"] != "" {
-		manager.AddNotifier(notify.NewTelegramNotifier(notify.TelegramConfig{
-			BotToken: configMap["tgbot_token"],
-			ChatID:   configMap["tgbot_chatid"],
-		}))
-		hasNotifier = true
-	}
-
-	// Webhook
-	if (useAll || containsStr(channels, "webhook")) && configMap["webhook_url"] != "" {
-		manager.AddNotifier(notify.NewWebhookNotifier(notify.WebhookConfig{
-			URL: configMap["webhook_url"],
-		}))
-		hasNotifier = true
-	}
-
-	// Discord
-	if (useAll || containsStr(channels, "discord")) && configMap["discord_webhook"] != "" {
-		manager.AddNotifier(notify.NewDiscordNotifier(notify.DiscordConfig{
-			WebhookURL: configMap["discord_webhook"],
-		}))
-		hasNotifier = true
-	}
-
-	// Bark
-	if (useAll || containsStr(channels, "bark")) && configMap["bark_url"] != "" && configMap["bark_key"] != "" {
-		manager.AddNotifier(notify.NewBarkNotifier(notify.BarkConfig{
-			ServerURL: configMap["bark_url"],
-			DeviceKey: configMap["bark_key"],
-		}))
-		hasNotifier = true
-	}
-
-	// 企业微信群机器人
-	if (useAll || containsStr(channels, "wechat")) && configMap["wechat_webhook"] != "" {
-		manager.AddNotifier(notify.NewWechatWorkNotifier(notify.WechatWorkConfig{
-			WebhookURL: configMap["wechat_webhook"],
-		}))
-		hasNotifier = true
-	}
-	if (useAll || containsStr(channels, "dingtalk")) && configMap["dingtalk_webhook"] != "" {
-		manager.AddNotifier(notify.NewDingTalkNotifier(notify.DingTalkConfig{WebhookURL: configMap["dingtalk_webhook"], Secret: configMap["dingtalk_secret"]}))
-		hasNotifier = true
-	}
-	if (useAll || containsStr(channels, "feishu")) && configMap["feishu_webhook"] != "" {
-		manager.AddNotifier(notify.NewFeishuNotifier(notify.FeishuConfig{WebhookURL: configMap["feishu_webhook"], Secret: configMap["feishu_secret"]}))
-		hasNotifier = true
-	}
-	if (useAll || containsStr(channels, "wxwork") || containsStr(channels, "wxwork_app")) && configMap["wxwork_corpid"] != "" && configMap["wxwork_agentid"] != "" && configMap["wxwork_secret"] != "" {
-		manager.AddNotifier(notify.NewWxWorkAppNotifier(notify.WxWorkAppConfig{CorpID: configMap["wxwork_corpid"], AgentID: configMap["wxwork_agentid"], Secret: configMap["wxwork_secret"], ToUser: configMap["wxwork_touser"]}))
-		hasNotifier = true
-	}
-	if (useAll || containsStr(channels, "wxtpl")) && configMap["wxtpl_appid"] != "" && configMap["wxtpl_appsecret"] != "" && configMap["wxtpl_template_id"] != "" && configMap["wxtpl_users"] != "" {
-		manager.AddNotifier(notify.NewWxTplNotifier(notify.WxTplConfig{AppID: configMap["wxtpl_appid"], AppSecret: configMap["wxtpl_appsecret"], TemplateID: configMap["wxtpl_template_id"], ToUsers: configMap["wxtpl_users"], URL: configMap["wxtpl_url"]}))
-		hasNotifier = true
-	}
-
-	if !hasNotifier {
+	if loaded == 0 {
 		return nil
 	}
 	return manager
 }
 
+/*
+ * channelInTaskWhitelist 判定渠道是否命中任务指定的通知渠道白名单
+ * 白名单值即渠道标识（与前端选单一致），另有两处历史写法差异需兼容：
+ * 邮件可为 mail 或 email，企业微信应用可为 wxwork 或 wxwork_app
+ *
+ * @param ch       渠道适配器
+ * @param channels 任务配置的通知渠道列表
+ * @param useAll   任务未指定渠道时为 true，此时全部渠道命中
+ * @returns 是否命中
+ */
+func channelInTaskWhitelist(ch notify.Channel, channels []string, useAll bool) bool {
+	if useAll {
+		return true
+	}
+	names := channelAliases[ch.Type()]
+	if len(names) == 0 {
+		names = []string{string(ch.Type())}
+	}
+	for _, name := range names {
+		if containsStr(channels, name) {
+			return true
+		}
+	}
+	return false
+}
+
+/*
+ * channelAliases 任务通知白名单中的同义写法
+ * 未列出的渠道以渠道标识本身为白名单值，新增渠道无需改本表
+ */
+var channelAliases = map[notify.NotifyType][]string{
+	notify.NotifyEmail:     {"mail", "email"},
+	notify.NotifyWxWorkApp: {"wxwork", "wxwork_app"},
+}
+
+/*
+ * noticeEnabled 容灾告警的渠道开关判定，未配置视为开启，仅显式关闭值生效
+ * 键不存在时不在 configMap 中，自然通过；显式写入 0/false/no/off 才会关闭
+ *
+ * @param configMap 系统配置键值（由 notify.NotifyConfigKeys() 的 IN 查询填充）
+ * @param key       开关键名
+ * @returns 该渠道是否允许发送
+ */
+func noticeEnabled(configMap map[string]string, key string) bool {
+	v := strings.TrimSpace(strings.ToLower(configMap[key]))
+	return v != "0" && v != "false" && v != "no" && v != "off"
+}
 
 // saveTaskState 保存任务切换状态到数据库
 func (m *Monitor) saveTaskState(taskID uint, state TaskState) {

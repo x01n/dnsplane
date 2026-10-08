@@ -74,6 +74,9 @@ var DefaultLineMapping = map[string]map[string]string{
 	"technitium": {"DEF": "default"},
 	"aliyunesa":  {"DEF": "0"},
 	"tencenteo":  {"DEF": "Default"},
+	"aws":        {"DEF": "default"},
+	"dynv6":      {"DEF": "default"},
+	"goedge":     {"DEF": "default"},
 }
 
 func DefaultDNSLine(providerType string) string {

@@ -14,7 +14,7 @@ import { Switch } from '@/components/ui/switch'
 import { Checkbox } from '@/components/ui/checkbox'
 import { toast } from 'sonner'
 import { userApi, domainApi, User, UserPermission, Domain } from '@/lib/api'
-import { Users, Plus, Search, RefreshCw, Trash2, Edit, Shield, ShieldCheck, Key, Copy, CheckCircle, XCircle, MoreHorizontal, Lock, Unlock, RotateCcw, FolderKey, Globe, Mail, ShieldOff, Send } from 'lucide-react'
+import { Users, Plus, Search, RefreshCw, Trash2, Edit, Shield, ShieldCheck, Key, Copy, CheckCircle, XCircle, MoreHorizontal, Lock, Unlock, RotateCcw, FolderKey, Globe, Mail, ShieldOff, Send, AlertCircle } from 'lucide-react'
 import { formatDate } from '@/lib/utils'
 import {
   DropdownMenu,
@@ -24,9 +24,15 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 
+/**
+ * 等级徽章映射：后端只以 level >= 2 判定管理员，level 0（自助注册）
+ * 与 1（第三方登录自动创建）在权限上等价，故共用普通用户样式；
+ * 缺少对应 key 时徽章会落到「未知」兜底分支
+ */
 const USER_LEVELS: Record<number, { label: string; color: string }> = {
   0: { label: '普通用户', color: 'bg-gray-500' },
-  1: { label: '管理员', color: 'bg-blue-500' },
+  1: { label: '普通用户', color: 'bg-gray-500' },
+  2: { label: '管理员', color: 'bg-blue-500' },
 }
 
 const PERMISSIONS = [
@@ -43,6 +49,8 @@ export default function UsersPage() {
   const [users, setUsers] = useState<User[]>([])
   const [loading, setLoading] = useState(true)
   const [keyword, setKeyword] = useState('')
+  /** 加载失败提示；非空时列表区显示错误态而非空状态 */
+  const [loadError, setLoadError] = useState('')
 
   const [showAddDialog, setShowAddDialog] = useState(false)
   const [showEditDialog, setShowEditDialog] = useState(false)
@@ -58,7 +66,7 @@ export default function UsersPage() {
     username: '',
     password: '',
     email: '',
-    level: '0',
+    level: '1',
     status: 1,
     is_api: false,
     permissions: [] as string[],
@@ -85,9 +93,14 @@ export default function UsersPage() {
         // 后端返回 { total, list } 格式
         const data = res.data as { total: number; list: User[] }
         setUsers(data.list || [])
+        setLoadError('')
+      } else {
+        setLoadError(res.msg || '加载用户列表失败')
+        toast.error(res.msg || '加载用户列表失败')
       }
     } catch (error) {
       console.error('Failed to load users:', error)
+      setLoadError('加载用户列表失败')
       toast.error('加载用户列表失败')
     } finally {
       setLoading(false)
@@ -99,7 +112,7 @@ export default function UsersPage() {
       username: '',
       password: '',
       email: '',
-      level: '0',
+      level: '1',
       status: 1,
       is_api: false,
       permissions: [],
@@ -113,7 +126,8 @@ export default function UsersPage() {
       username: user.username,
       password: '',
       email: user.email || '',
-      level: user.level.toString(),
+      /** 存量 level=0 在下拉里无对应项会让 Radix Select 渲染成空白，归一到 1 仅影响表单展示 */
+      level: String(Math.max(1, user.level)),
       status: user.status,
       is_api: user.is_api,
       permissions: user.permissions || [],
@@ -388,7 +402,7 @@ export default function UsersPage() {
             <ShieldCheck className="h-4 w-4 text-blue-500" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-blue-600">{users.filter(u => u.level === 1).length}</div>
+            <div className="text-2xl font-bold text-blue-600">{users.filter(u => u.level >= 2).length}</div>
           </CardContent>
         </Card>
         <Card>
@@ -449,9 +463,19 @@ export default function UsersPage() {
                       <span className="text-muted-foreground">加载中...</span>
                     </TableCell>
                   </TableRow>
+                ) : loadError ? (
+                  <TableRow>
+                    <TableCell colSpan={10} className="text-center py-8">
+                      <AlertCircle className="h-12 w-12 mx-auto mb-2 text-destructive/60" />
+                      <p className="text-muted-foreground mb-3">{loadError}</p>
+                      <Button variant="outline" size="sm" onClick={loadData}>
+                        重试
+                      </Button>
+                    </TableCell>
+                  </TableRow>
                 ) : filteredUsers.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={9} className="text-center py-8">
+                    <TableCell colSpan={10} className="text-center py-8">
                       <Users className="h-12 w-12 mx-auto mb-2 text-muted-foreground/50" />
                       <p className="text-muted-foreground">暂无用户</p>
                     </TableCell>
@@ -476,7 +500,7 @@ export default function UsersPage() {
                       </TableCell>
                       <TableCell>
                         <Badge className={`${USER_LEVELS[user.level]?.color || 'bg-gray-500'} text-white`}>
-                          {user.level === 1 && <Shield className="h-3 w-3 mr-1" />}
+                          {user.level >= 2 && <Shield className="h-3 w-3 mr-1" />}
                           {USER_LEVELS[user.level]?.label || '未知'}
                         </Badge>
                       </TableCell>
@@ -496,7 +520,7 @@ export default function UsersPage() {
                             <code className="text-xs bg-muted px-1 py-0.5 rounded">
                               {user.api_key.substring(0, 8)}...
                             </code>
-                            <Button size="sm" variant="ghost" className="h-6 w-6 p-0" onClick={() => handleCopyApiKey(user.api_key!)}>
+                            <Button size="sm" variant="ghost" className="h-6 w-6 p-0" onClick={() => handleCopyApiKey(user.api_key!)} aria-label="复制 API Key">
                               <Copy className="h-3 w-3" />
                             </Button>
                           </div>
@@ -526,7 +550,7 @@ export default function UsersPage() {
                       <TableCell className="text-right">
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
-                            <Button variant="ghost" size="sm" className="h-8 w-8 p-0">
+                            <Button variant="ghost" size="sm" className="h-8 w-8 p-0" aria-label="更多操作">
                               <MoreHorizontal className="h-4 w-4" />
                             </Button>
                           </DropdownMenuTrigger>
@@ -589,7 +613,7 @@ export default function UsersPage() {
                             <DropdownMenuItem 
                               className="text-red-600" 
                               onClick={() => handleDelete(user)}
-                              disabled={user.level === 1 && users.filter(u => u.level === 1).length === 1}
+                              disabled={user.level >= 2 && users.filter(u => u.level >= 2).length === 1}
                             >
                               <Trash2 className="h-4 w-4 mr-2" />
                               删除用户
@@ -647,8 +671,8 @@ export default function UsersPage() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="0">普通用户</SelectItem>
-                  <SelectItem value="1">管理员</SelectItem>
+                  <SelectItem value="1">普通用户</SelectItem>
+                  <SelectItem value="2">管理员</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -659,7 +683,7 @@ export default function UsersPage() {
               />
               <Label>启用 API 访问</Label>
             </div>
-            {formData.level === '0' && (
+            {formData.level === '1' && (
               <div className="space-y-2">
                 <Label>权限配置</Label>
                 <div className="grid grid-cols-2 gap-2">
@@ -727,8 +751,8 @@ export default function UsersPage() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="0">普通用户</SelectItem>
-                  <SelectItem value="1">管理员</SelectItem>
+                  <SelectItem value="1">普通用户</SelectItem>
+                  <SelectItem value="2">管理员</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -739,7 +763,7 @@ export default function UsersPage() {
               />
               <Label>启用 API 访问</Label>
             </div>
-            {formData.level === '0' && (
+            {formData.level === '1' && (
               <div className="space-y-2">
                 <Label>权限配置</Label>
                 <div className="grid grid-cols-2 gap-2">

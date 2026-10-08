@@ -75,6 +75,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Separator } from '@/components/ui/separator'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
+import { EmptyState } from '@/components/empty-state'
 import { toast } from 'sonner'
 import { monitorApi, domainApi, MonitorTask, MonitorOverview, Domain, MonitorLog, authApi, User } from '@/lib/api'
 import { formatDate, MONITOR_CHECK_TYPES, MONITOR_SWITCH_TYPES, cn, hasModuleAccess } from '@/lib/utils'
@@ -155,6 +156,10 @@ export default function MonitorPage() {
   const urlSmartPrefillDone = useRef(false)
 
   const [me, setMe] = useState<User | null>(null)
+  /** 当前账号信息加载中；与 me === null 的失败态区分开 */
+  const [meLoading, setMeLoading] = useState(true)
+  /** 当前账号信息加载失败原因；非空时提示权限按钮不可信 */
+  const [meError, setMeError] = useState('')
   const canManageMonitor = me != null && hasModuleAccess(me, 'monitor')
 
   const [tasks, setTasks] = useState<MonitorTask[]>([])
@@ -167,6 +172,15 @@ export default function MonitorPage() {
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [selectedTask, setSelectedTask] = useState<MonitorTask | null>(null)
   const [submitting, setSubmitting] = useState(false)
+  /** 任务列表加载失败提示；非空时列表区显示错误态而非空状态 */
+  const [loadError, setLoadError] = useState('')
+  /** 任务列表总数，用于判断 page_size 截断 */
+  const [taskTotal, setTaskTotal] = useState(0)
+  /** 正在切换启用状态的任务 id，用于行内禁用与 loading 指示 */
+  const [togglingId, setTogglingId] = useState<number | null>(null)
+  /** 手动切换二次确认 */
+  const [switchDialogOpen, setSwitchDialogOpen] = useState(false)
+  const [switchTask, setSwitchTask] = useState<MonitorTask | null>(null)
 
   // Detail dialog
   const [detailTask, setDetailTask] = useState<MonitorTask | null>(null)
@@ -259,9 +273,20 @@ export default function MonitorPage() {
   }, [tasks, overview])
 
   useEffect(() => {
-    authApi.getUserInfo().then((res) => {
-      if (res.code === 0 && res.data) setMe(res.data)
-    })
+    authApi.getUserInfo()
+      .then((res) => {
+        if (res.code === 0 && res.data) {
+          setMe(res.data)
+          setMeError('')
+        } else {
+          setMeError(res.msg || '获取账号信息失败')
+        }
+      })
+      .catch((error) => {
+        console.error('Failed to load user info:', error)
+        setMeError('获取账号信息失败')
+      })
+      .finally(() => setMeLoading(false))
   }, [])
 
   const fetchAllTaskHistories = useCallback(async (taskList: MonitorTask[]) => {
@@ -289,9 +314,11 @@ export default function MonitorPage() {
       const res = await domainApi.list({ page_size: 500 })
       if (res.code === 0 && res.data) {
         setDomains(res.data.list || [])
+      } else {
+        toast.error(res.msg || '获取域名列表失败')
       }
     } catch {
-      // ignore
+      toast.error('获取域名列表失败')
     }
   }, [])
 
@@ -302,11 +329,15 @@ export default function MonitorPage() {
       if (res.code === 0 && res.data) {
         const taskList = res.data.list || []
         setTasks(taskList)
+        setTaskTotal(res.data.total ?? taskList.length)
+        setLoadError('')
         void fetchAllTaskHistories(taskList)
-      } else if (res.code !== 0) {
+      } else {
+        setLoadError(res.msg || '获取任务列表失败')
         toast.error(res.msg || '获取任务列表失败')
       }
     } catch {
+      setLoadError('获取任务列表失败')
       toast.error('获取任务列表失败')
     } finally {
       setLoading(false)
@@ -318,9 +349,11 @@ export default function MonitorPage() {
       const res = await monitorApi.getOverview()
       if (res.code === 0 && res.data) {
         setOverview(res.data)
+      } else {
+        toast.error(res.msg || '获取监控概览失败')
       }
     } catch {
-      // ignore
+      toast.error('获取监控概览失败')
     }
   }, [])
 
@@ -449,6 +482,7 @@ export default function MonitorPage() {
 
   // ============== Toggle & Switch ==============
   const handleToggle = async (task: MonitorTask) => {
+    setTogglingId(task.id)
     try {
       const res = await monitorApi.toggle(task.id, !task.active)
       if (res.code === 0) {
@@ -460,20 +494,34 @@ export default function MonitorPage() {
       }
     } catch {
       toast.error('操作失败')
+    } finally {
+      setTogglingId(null)
     }
   }
 
-  const handleSwitch = async (task: MonitorTask) => {
+  /** 打开手动切换确认框，真正的调用在 confirmSwitch */
+  const openSwitchDialog = (task: MonitorTask) => {
+    setSwitchTask(task)
+    setSwitchDialogOpen(true)
+  }
+
+  const confirmSwitch = async () => {
+    const task = switchTask
+    if (!task) return
+    setSubmitting(true)
     try {
       const res = await monitorApi.switch(task.id)
       if (res.code === 0) {
         toast.success('手动切换成功')
+        setSwitchDialogOpen(false)
         fetchTasks()
       } else {
         toast.error(res.msg || '切换失败')
       }
     } catch {
       toast.error('切换失败')
+    } finally {
+      setSubmitting(false)
     }
   }
 
@@ -872,11 +920,40 @@ export default function MonitorPage() {
           </div>
         </CardHeader>
         <CardContent>
+          {/* 账号信息加载失败：此时权限判定不可信，先告知用户而非静默收起按钮 */}
+          {!meLoading && meError && (
+            <div className="mb-4 flex items-start gap-2 rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
+              <div className="flex-1">
+                <p className="font-medium">{meError}</p>
+                <p className="text-muted-foreground mt-0.5">
+                  未能读取当前账号权限，写操作按钮可能未显示；请刷新页面重试。
+                </p>
+              </div>
+            </div>
+          )}
+          {/* page_size 截断提示：后端默认 200、上限 500，超出部分当前不可见 */}
+          {taskTotal > tasks.length && (
+            <div className="mb-4 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-100">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+              <p>
+                共 {taskTotal} 个监控任务，当前仅显示前 {tasks.length} 个。请用搜索或状态筛选定位其余任务。
+              </p>
+            </div>
+          )}
           {loading ? (
             <div className="flex flex-col items-center justify-center py-16">
               <Loader2 className="h-10 w-10 animate-spin text-primary mb-4" />
               <p className="text-muted-foreground">加载中...</p>
             </div>
+          ) : loadError ? (
+            <EmptyState
+              icon={AlertTriangle}
+              title="加载失败"
+              description={loadError}
+              action="重试"
+              onAction={fetchTasks}
+            />
           ) : filteredTasks.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-16 text-center">
               <div className="w-16 h-16 rounded-full bg-muted flex items-center justify-center mb-4">
@@ -965,12 +1042,18 @@ export default function MonitorPage() {
                           <MiniUptimeBar history={hist} />
                         </TableCell>
                         <TableCell onClick={(e) => e.stopPropagation()}>
-                          <Switch
-                            checked={task.active}
-                            disabled={!canManageMonitor}
-                            onCheckedChange={() => handleToggle(task)}
-                            className="data-[state=checked]:bg-green-500"
-                          />
+                          <div className="flex items-center gap-2">
+                            <Switch
+                              checked={task.active}
+                              disabled={!canManageMonitor || togglingId === task.id}
+                              onCheckedChange={() => handleToggle(task)}
+                              className="data-[state=checked]:bg-green-500"
+                              aria-label={task.active ? '停用该监控任务' : '启用该监控任务'}
+                            />
+                            {togglingId === task.id && (
+                              <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
+                            )}
+                          </div>
                         </TableCell>
                         <TableCell onClick={(e) => e.stopPropagation()}>
                           <DropdownMenu>
@@ -990,7 +1073,7 @@ export default function MonitorPage() {
                                     <Pencil className="h-4 w-4 mr-2" />
                                     编辑任务
                                   </DropdownMenuItem>
-                                  <DropdownMenuItem onClick={() => handleSwitch(task)}>
+                                  <DropdownMenuItem onClick={() => openSwitchDialog(task)}>
                                     <ArrowRightLeft className="h-4 w-4 mr-2" />
                                     手动切换
                                   </DropdownMenuItem>
@@ -1912,7 +1995,7 @@ export default function MonitorPage() {
                 </div>
                 {addConfig.notify_enabled && (
                   <div className="flex flex-wrap gap-3 p-3 rounded-lg border">
-                    {['email', 'telegram', 'webhook', 'discord', 'bark', 'wechat'].map((ch) => (
+                    {['email', 'telegram', 'webhook', 'custom_webhook', 'discord', 'bark', 'wechat', 'wxpusher', 'qqbot'].map((ch) => (
                       <label key={ch} className="flex items-center gap-2 text-sm">
                         <Checkbox
                           checked={addConfig.notify_channels.includes(ch)}
@@ -1927,9 +2010,12 @@ export default function MonitorPage() {
                         {ch === 'email' && '邮件'}
                         {ch === 'telegram' && 'Telegram'}
                         {ch === 'webhook' && 'Webhook'}
+                        {ch === 'custom_webhook' && '自定义 Webhook'}
                         {ch === 'discord' && 'Discord'}
                         {ch === 'bark' && 'Bark'}
                         {ch === 'wechat' && '企业微信'}
+                        {ch === 'wxpusher' && 'WxPusher 微信推送'}
+                        {ch === 'qqbot' && 'QQ 机器人'}
                       </label>
                     ))}
                   </div>
@@ -1985,6 +2071,26 @@ export default function MonitorPage() {
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
               删除
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* ============== Switch Dialog ============== */}
+      <AlertDialog open={switchDialogOpen} onOpenChange={setSwitchDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>确认手动切换</AlertDialogTitle>
+            <AlertDialogDescription>
+              确定要对监控任务 &ldquo;{switchTask?.rr}.{switchTask?.domain}&rdquo; 执行手动切换吗？
+              该操作会立即改变线上解析指向，请确认当前主源确实不可用。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={submitting}>取消</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmSwitch} disabled={submitting}>
+              {submitting && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+              确认切换
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

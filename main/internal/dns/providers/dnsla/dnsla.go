@@ -23,10 +23,6 @@ func init() {
 		Config: []dns.ConfigField{
 			{Name: "APIID", Key: "apiid", Type: "input", Required: true},
 			{Name: "API密钥", Key: "apisecret", Type: "input", Required: true},
-			{Name: "使用代理服务器", Key: "proxy", Type: "radio", Options: []dns.ConfigOption{
-				{Value: "0", Label: "否"},
-				{Value: "1", Label: "是"},
-			}, Value: "0"},
 		},
 		Features: dns.ProviderFeatures{
 			Remark: 0, Status: true, Redirect: true, Log: false, Weight: true, Page: false, Add: true,
@@ -50,7 +46,6 @@ type Provider struct {
 	apiSecret string
 	domain    string
 	domainID  string
-	proxy     bool
 	client    *http.Client
 	lastErr   string
 }
@@ -61,7 +56,6 @@ func NewProvider(config map[string]string, domain, domainID string) dns.Provider
 		apiSecret: config["apisecret"],
 		domain:    domain,
 		domainID:  domainID,
-		proxy:     config["proxy"] == "1",
 		client:    &http.Client{Timeout: 30 * time.Second},
 	}
 }
@@ -88,7 +82,6 @@ func (p *Provider) request(ctx context.Context, method, path string, params map[
 
 	var reqBody io.Reader
 
-	// POST 和 PUT 请求：参数作为 JSON body（与 PHP 版本一致）
 	if method == "POST" || method == "PUT" {
 		if params != nil {
 			bodyBytes, _ := json.Marshal(params)
@@ -98,7 +91,6 @@ func (p *Provider) request(ctx context.Context, method, path string, params map[
 			reqBody = strings.NewReader(string(bodyBytes))
 		}
 	} else {
-		// GET/DELETE 请求：参数作为查询字符串（与 PHP 版本一致）
 		if len(params) > 0 {
 			values := url.Values{}
 			for k, v := range params {
@@ -361,7 +353,6 @@ func (p *Provider) UpdateDomainRecordRemark(ctx context.Context, recordID, remar
 }
 
 func (p *Provider) DeleteDomainRecord(ctx context.Context, recordID string) error {
-	// DELETE 请求使用查询参数（与 PHP 版本一致）
 	params := map[string]string{"id": recordID}
 	_, err := p.request(ctx, "DELETE", "/api/record", params, nil)
 	return err

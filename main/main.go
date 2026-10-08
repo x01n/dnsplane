@@ -17,20 +17,28 @@ import (
 	"main/internal/captcha"
 	"main/internal/config"
 	"main/internal/database"
+	"main/internal/httpx"
 	"main/internal/logger"
 	"main/internal/logstore"
 	"main/internal/monitor"
 	"main/internal/service"
 
+	// 证书签发提供商子包（init 中注册工厂；providers.go 已定义表单的，子包仅补全实现）
 	_ "main/internal/cert/acme"
+	_ "main/internal/cert/aliyun"
+	_ "main/internal/cert/huoshan"
+	_ "main/internal/cert/tencent"
 	_ "main/internal/dns/providers/aliyun"
 	_ "main/internal/dns/providers/aliyunesa"
+	_ "main/internal/dns/providers/aws"
 	_ "main/internal/dns/providers/baidu"
 	_ "main/internal/dns/providers/bt"
 	_ "main/internal/dns/providers/cloudflare"
 	_ "main/internal/dns/providers/dnsla"
 	_ "main/internal/dns/providers/dnsmgr"
 	_ "main/internal/dns/providers/dnspod"
+	_ "main/internal/dns/providers/dynv6"
+	_ "main/internal/dns/providers/goedge"
 	_ "main/internal/dns/providers/henet"
 	_ "main/internal/dns/providers/huawei"
 	_ "main/internal/dns/providers/huoshan"
@@ -82,6 +90,7 @@ func main() {
 		KeyPrefix:    cfg.Redis.KeyPrefix,
 	})
 	defer cache.Close()
+	httpx.Install()
 
 	if err := captcha.Init(); err != nil {
 		logger.Warn("行为验证码资源初始化失败: %v", err)
@@ -97,6 +106,8 @@ func main() {
 	mon.Start()
 	defer mon.Stop()
 	service.SetCertRenewProcessStarter(handler.TriggerCertOrderProcessing)
+	/* 证书签发结果通知：handler 在签发成功/失败分支触发，实现由 service 提供（避免 handler 反向依赖通知细节） */
+	service.SetCertIssueNotifyHooks(service.SendCertIssueSuccessNotification, service.SendCertIssueFailNotification)
 	taskCtx, taskCancel := context.WithCancel(context.Background())
 	taskRunner := service.NewTaskRunner()
 	scheduleRunner := service.NewScheduleRunner()
@@ -109,8 +120,8 @@ func main() {
 	}()
 	database.StartMaintenance(database.LoadMaintenanceConfig())
 	defer database.StopMaintenance()
-	service.StartLogCleanup()
-	defer service.StopLogCleanup()
+	service.StartOptimizeRunner(taskCtx)
+	defer service.StopOptimizeRunner()
 
 	router := api.SetupRouter(staticFS)
 

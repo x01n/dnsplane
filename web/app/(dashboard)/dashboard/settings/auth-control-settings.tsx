@@ -113,7 +113,7 @@ export default function AuthControlSettings() {
               <p className="text-sm text-muted-foreground">禁用后用户不能通过账号密码方式注册新账户</p>
             </div>
             <Switch
-              checked={getBool('auth_password_register')}
+              checked={getBool('auth_password_register', false)}
               onCheckedChange={(c) => setVal('auth_password_register', c ? 'true' : 'false')}
             />
           </div>
@@ -124,8 +124,21 @@ export default function AuthControlSettings() {
               <p className="text-sm text-muted-foreground">启用后注册时需要验证邮箱地址</p>
             </div>
             <Switch
-              checked={getBool('auth_email_verify', false)}
+              checked={getBool('auth_email_verify', true)}
               onCheckedChange={(c) => setVal('auth_email_verify', c ? 'true' : 'false')}
+            />
+          </div>
+          <Separator />
+          <div className="flex items-center justify-between">
+            <div className="space-y-0.5">
+              <Label>邮箱魔法链接登录</Label>
+              <p className="text-sm text-muted-foreground">
+                开启后，用户可凭邮件中的一次性链接免密码登录；关闭时 /auth/magic-link 直接拒绝
+              </p>
+            </div>
+            <Switch
+              checked={getBool('auth_magic_link_login', false)}
+              onCheckedChange={(c) => setVal('auth_magic_link_login', c ? 'true' : 'false')}
             />
           </div>
         </CardContent>

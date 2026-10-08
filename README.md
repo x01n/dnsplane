@@ -1,7 +1,5 @@
 # DNSPlane - Go版DNS管理系统
 
-基于原PHP版dnsmgr重构的Go语言实现，支持多平台DNS管理、SSL证书申请部署、容灾切换等功能。
-
 ## 功能特性
 
 - **多平台DNS管理**: 支持阿里云、腾讯云、华为云、Cloudflare等15+平台

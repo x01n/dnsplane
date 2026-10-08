@@ -6,6 +6,8 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { authApi } from '@/lib/api'
+import { isValidSiteKey } from '@/lib/site-key'
+import { loadScriptOnce } from '@/lib/script-loader'
 import { cn } from '@/lib/utils'
 
 export type AuthCaptchaValue = {
@@ -26,38 +28,6 @@ function imageDataUrl(b64s: string) {
   if (!b64s) return ''
   if (b64s.startsWith('data:')) return b64s
   return `data:image/png;base64,${b64s}`
-}
-
-function loadScriptOnce(src: string, attr: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const existing = document.querySelector(`script[${attr}]`)
-    if (existing) {
-      if ((existing as HTMLScriptElement).dataset.loaded === '1') {
-        resolve()
-        return
-      }
-      existing.addEventListener('load', () => resolve(), { once: true })
-      existing.addEventListener('error', () => reject(new Error('script load failed')), { once: true })
-      return
-    }
-    const s = document.createElement('script')
-    s.src = src
-    s.async = true
-    s.setAttribute(attr, '1')
-    s.onload = () => {
-      s.dataset.loaded = '1'
-      resolve()
-    }
-    s.onerror = () => reject(new Error('script load failed'))
-    document.body.appendChild(s)
-  })
-}
-
-// isValidSiteKey 做 siteKey 的轻量格式校验（安全审计 M-4），
-// 防止后端被劫持后返回畸形值被第三方 captcha SDK 作为 DOM 构造参数触发 DOM Clobbering。
-// 三家服务商的 siteKey 均为字母/数字/连字符组合，长度通常 32-80 字符。
-function isValidSiteKey(s: string | undefined): s is string {
-  return typeof s === 'string' && s.length > 0 && s.length <= 128 && /^[A-Za-z0-9_-]+$/.test(s)
 }
 
 export function AuthCaptchaFields({

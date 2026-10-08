@@ -164,7 +164,7 @@ func checkTCPFallback(ctx context.Context, host string, timeout int) *CheckResul
 
 func CheckTCP(ctx context.Context, host string, port int, timeout int) *CheckResult {
 	start := time.Now()
-	addr := fmt.Sprintf("%s:%d", host, port)
+	addr := net.JoinHostPort(host, strconv.Itoa(port))
 	dialer := net.Dialer{Timeout: time.Duration(timeout) * time.Second}
 	conn, err := dialer.DialContext(ctx, "tcp", addr)
 	duration := time.Since(start)

@@ -96,4 +96,26 @@ func registerServerConfigs() {
 			{Name: "部署完执行命令", Key: "cmd", Type: "textarea", Placeholder: "每行一条命令，如：service nginx reload"},
 		},
 	})
+
+	// S3存储
+	registerDeployConfig(DeployProviderConfig{
+		Type:     "s3storage",
+		Name:     "S3存储",
+		Class:    ClassServer,
+		Icon:     "cloud.png",
+		Desc:     "支持将证书上传到S3兼容存储（AWS S3、MinIO等）",
+		Note:     "支持AWS S3、MinIO、阿里云OSS（S3兼容模式）等S3协议兼容的对象存储服务",
+		TaskNote: "证书和私钥将以PEM格式上传到指定的存储桶路径",
+		Inputs: []cert.ConfigField{
+			{Name: "AccessKeyId", Key: "AccessKeyId", Type: "input", Required: true},
+			{Name: "SecretAccessKey", Key: "SecretAccessKey", Type: "input", Required: true},
+			{Name: "S3 Endpoint", Key: "endpoint", Type: "input", Placeholder: "如：s3.amazonaws.com 或 minio.example.com:9000", Note: "AWS S3填写s3.区域.amazonaws.com，其他S3兼容服务填写对应地址", Required: true},
+			{Name: "区域", Key: "region", Type: "input", Placeholder: "如：us-east-1", Value: "us-east-1", Required: true},
+		},
+		TaskInputs: []cert.ConfigField{
+			{Name: "存储桶名称", Key: "bucket", Type: "input", Required: true},
+			{Name: "证书保存路径", Key: "cert_path", Type: "input", Placeholder: "ssl/cert.pem", Note: "在存储桶内的文件路径，如 ssl/domain.com/cert.pem", Required: true},
+			{Name: "私钥保存路径", Key: "key_path", Type: "input", Placeholder: "ssl/key.pem", Note: "在存储桶内的文件路径，如 ssl/domain.com/key.pem", Required: true},
+		},
+	})
 }

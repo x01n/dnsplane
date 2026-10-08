@@ -90,6 +90,20 @@ class ApiClient {
     }
   }
 
+  /**
+   * OAuth 回调页专用：会话已由服务端 HttpOnly cookie 建立，此处只取回 access token
+   *
+   * 与 setTokens 的差别在于不落 localStorage：回调是一次性的登录动作，
+   * 把令牌写进本地存储等于把凭据留给 XSS 长期取用，而内存持有已足以支撑本次会话
+   */
+  setSessionToken(token: string) {
+    this.token = token
+    if (typeof window !== 'undefined') {
+      localStorage.removeItem('token')
+      localStorage.removeItem('refresh_token')
+    }
+  }
+
   /** 内存中的 token 可能与 localStorage 脱节（构建时无 window、HMR、多标签页等），请求前对齐 */
   private syncTokenFromStorage() {
     if (typeof window === 'undefined') return
@@ -107,8 +121,10 @@ class ApiClient {
   /**
    * 调用 POST /auth/refresh（body 可带 refresh_token；Cookie _rt 同路径也会自动带上）
    * 不走 request()，避免与 401 处理互相递归
+   *
+   * persist 为 false 时只把 access token 留在内存，供 OAuth 回调页这种一次性登录动作使用
    */
-  private tryRefreshSession(): Promise<boolean> {
+  private tryRefreshSession(persist = true): Promise<boolean> {
     if (this.refreshInFlight) {
       return this.refreshInFlight
     }
@@ -132,10 +148,14 @@ class ApiClient {
         if (result.code !== 0 || !result.data?.token || !result.data?.refresh_token) {
           return false
         }
-        this.setTokens({
-          token: result.data.token,
-          refresh_token: result.data.refresh_token,
-        })
+        if (persist) {
+          this.setTokens({
+            token: result.data.token,
+            refresh_token: result.data.refresh_token,
+          })
+        } else {
+          this.setSessionToken(result.data.token)
+        }
         return true
       } catch {
         return false
@@ -144,6 +164,11 @@ class ApiClient {
       }
     })()
     return this.refreshInFlight
+  }
+
+  /** 公开的会话刷新：调用方明确知道当前会话刚由服务端建立时使用（如 OAuth 回调页） */
+  async refreshSession(options?: { persist?: boolean }): Promise<boolean> {
+    return this.tryRefreshSession(options?.persist ?? true)
   }
 
   private pathForAuthPolicy(fullUrl: string) {
@@ -289,8 +314,33 @@ export interface AuthPublicConfig {
   magic_link_login_enabled?: boolean
   totp_enabled?: boolean
   captcha_type?: string
+  /**
+   * 主验证码站点密钥；仅 captcha_type 为 recaptcha / hcaptcha 且值非空时后端才下发
+   *
+   * 后端 handler.GetAuthConfig 按类型收起本键：captcha_type 为 turnstile 时不读取也不下发，
+   * 避免前端拿 reCAPTCHA 的 key 去初始化 Turnstile。缺失不代表未配置，而是当前类型不使用它
+   */
   captcha_site_key?: string
+  /** 站点密钥；仅 turnstile_site_key 非空时后端才下发该字段，缺失不代表未启用 */
   turnstile_site_key?: string
+  /**
+   * 登录流程是否使用 Turnstile（即 captcha_type === 'turnstile'），无条件下发（含 false）
+   *
+   * 该布尔只表示「登录用哪种验证码」，不表示 turnstile_secret_key 已配置：
+   * 私钥为空时后端 requireTurnstile 直接放行，前端必须据站点密钥是否可用显式报错，
+   * 否则会静默退化成无验证码。与上面那个「敏感操作」信号是两回事，不可互相替代
+   */
+  captcha_type_turnstile?: boolean
+  /**
+   * 敏感操作（找回密码 / 重置二步验证）是否强制 Turnstile，无条件下发（含 false）
+   *
+   * 三种取值的语义不同，前端必须区分处理：
+   * - true：后端配置了 turnstile_secret_key，缺少 token 的请求会被拒绝
+   * - false：后端明确不校验，前端不渲染组件也不拦截提交
+   * - undefined：后端未下发该信号（版本早于该字段），无法判断其是否校验；
+   *   此时必须按「可能校验」处理并在站点密钥缺失时显式报错，
+   *   否则前端会静默放行而老后端照样拒绝，形成用户无法通过的提交死锁
+   */
   turnstile_standalone_required?: boolean
 }
 
@@ -299,6 +349,11 @@ export const authApi = {
   /**
    * 登录 JSON 与 handler.LoginRequest 一致：captcha_id、captcha_code、totp_code
    * 前端可传 captcha 作为 captcha_code 的别名。
+   *
+   * 第三方验证码的 token 按类型分走两个字段，对应后端 LoginRequest 内嵌的两个结构：
+   * - turnstile_token ← handler.turnstileFields，captcha_type=turnstile 时读取
+   * - captcha_token ← handler.captchaTokenFields，captcha_type 为 recaptcha / hcaptcha 时读取
+   * 两者都由 SDK 回调产生，均不产出 captcha_id
    */
   login: (data: {
     username: string
@@ -309,6 +364,10 @@ export const authApi = {
     captcha_code?: string
     verify_token?: string
     totp_code?: string
+    /** captcha_type=turnstile 时的 Turnstile token */
+    turnstile_token?: string
+    /** captcha_type 为 recaptcha / hcaptcha 时的第三方验证码 token */
+    captcha_token?: string
   }) => {
     const body: Record<string, string> = {
       username: data.username,
@@ -319,6 +378,8 @@ export const authApi = {
     if (code !== undefined && code !== '') body.captcha_code = code
     if (data.verify_token) body.verify_token = data.verify_token
     if (data.totp_code) body.totp_code = data.totp_code
+    if (data.turnstile_token) body.turnstile_token = data.turnstile_token
+    if (data.captcha_token) body.captcha_token = data.captcha_token
     return api.post<{ token: string; refresh_token: string; expires_in?: number; user: User }>(
       '/login',
       body,
@@ -332,11 +393,17 @@ export const authApi = {
     api.post('/user/password', data),
   getInstallStatus: () => api.get<{ installed: boolean }>('/install/status'),
   install: (data: { username: string; password: string }) => api.post('/install', data),
-  /** 仅 body.email，与 handler.ForgotPassword 一致 */
-  forgotPassword: (data: { email: string }) =>
+  /**
+   * body: { email, turnstile_token? }
+   * turnstile_token 对应 handler.ForgotPassword 的 turnstileFields.TurnstileToken，
+   * 仅在管理员配置了 turnstile_secret_key 时由服务端强制校验，未配置时传空串即可
+   */
+  forgotPassword: (data: { email: string; turnstile_token?: string }) =>
     api.post('/auth/forgot-password', data, { timeoutMs: publicMailPostTimeoutMs }),
-  /** 仅 body.email，与 handler.ForgotTOTP 一致 */
-  forgotTotp: (data: { email: string }) =>
+  /**
+   * body: { email, turnstile_token? }，与 handler.ForgotTOTP 的 turnstileFields 一致
+   */
+  forgotTotp: (data: { email: string; turnstile_token?: string }) =>
     api.post('/auth/forgot-totp', data, { timeoutMs: publicMailPostTimeoutMs }),
   /**
    * 邮箱验证码：register → POST /auth/send-code；bindmail → POST /user/bind-email/send-code（需登录）
@@ -672,6 +739,7 @@ export const systemApi = {
   testMail: () => api.post('/system/mail/test'),
   testTelegram: () => api.post('/system/telegram/test'),
   testWebhook: () => api.post('/system/webhook/test'),
+  testCustomWebhook: () => api.post('/system/custom-webhook/test'),
   testDiscord: () => api.post('/system/discord/test'),
   testBark: () => api.post('/system/bark/test'),
   testWechat: () => api.post('/system/wechat/test'),
@@ -703,6 +771,22 @@ export const systemApi = {
     api.get<{ accounts: { cloudflare: Array<{ id: number; name: string; type: string }>; dnspod: Array<{ id: number; name: string; type: string }>; aliyun: Array<{ id: number; name: string; type: string }> }; cf_domains: Array<{ id: number; name: string; third_id: string }> }>('/system/accel/accounts'),
   applyAccountToAccel: (data: { account_id: number; platform: string }) =>
     api.post<Record<string, string>>('/system/accel/apply-account', data),
+  /**
+   * 优选IP 配置（handler.GetOptimizeIPConfig）
+   * 返回 optimize_ip_api / optimize_ip_key / optimize_ip_proxy / optimize_ip_min 四键，
+   * 后端对空的 key 与 min 回填默认值 o1zrmHAF 与 30
+   */
+  getOptimizeIPConfig: () => api.get<Record<string, string>>('/system/optimizeip/config'),
+  /**
+   * 保存优选IP 配置（handler.UpdateOptimizeIPConfig）
+   * 后端只落库白名单内的四键，白名单外的键被静默跳过而非整批拒绝；
+   * optimize_ip_min 小于 10 时整批拒绝并返回 code=-1
+   */
+  updateOptimizeIPConfig: (data: Record<string, string>) =>
+    api.post('/system/optimizeip/config', data),
+  /** 查询所选数据接口的剩余可用次数（handler.QueryOptimizeIPLicense） */
+  queryOptimizeIPLicense: (data: { optimize_ip_api: number; optimize_ip_key: string }) =>
+    api.post('/system/optimizeip/license', data),
 }
 
 // Dashboard APIs
@@ -723,6 +807,12 @@ export const totpApi = {
     api.post<{ recovery_codes: string[] }>('/user/totp/recovery/regenerate', { password, code }),
 }
 
+/** OAuth 交换结果：mode 为 login 时已建立会话，为 bind 时按 redirect 跳转 */
+export interface OAuthExchangeResult {
+  mode: 'login' | 'bind'
+  redirect: string
+}
+
 // OAuth（账户绑定；登录跳转使用 /api/auth/oauth/:provider/login）
 export const oauthApi = {
   getProviders: () => api.get<OAuthProvider[]>('/auth/oauth/providers'),
@@ -730,6 +820,22 @@ export const oauthApi = {
   getBindURL: (provider: string) =>
     api.post<{ url: string }>('/user/oauth/bind-url', { provider }),
   unbind: (provider: string) => api.post('/user/oauth/unbind', { provider }),
+  /**
+   * 回调页用授权码换取登录会话（POST /auth/oauth/exchange）
+   *
+   * 服务端只下发 HttpOnly cookie，响应体不含令牌，故登录成功后必须再经
+   * refreshSession 取回 access token 交给 api 内存持有：Auth 中间件仍要求
+   * Authorization 头与 cookie 内的会话一致，缺头一律 401。
+   * 不再使用 setTokens 写入的 localStorage 副本——那是 XSS 可一次性窃取的明文
+   */
+  exchange: async (params: { code: string; state: string }) => {
+    const res = await api.post<OAuthExchangeResult>('/auth/oauth/exchange', params)
+    if (res.code !== 0) return res
+    if (res.data?.mode === 'login') {
+      await api.refreshSession({ persist: false })
+    }
+    return res
+  },
 }
 
 // 请求日志（管理员）
@@ -1040,7 +1146,7 @@ export interface MonitorTask {
   type: number
   main_value: string
   backup_value?: string
-  /** 多备用值，逗号分隔；非空时优先于 backup_value（与后端 DMTask.BackupValues 对齐） */
+  /** 多备用值，逗号分隔；非空时优先于 backup_value */
   backup_values?: string
   backup_type?: string
   check_type: number
@@ -1244,11 +1350,21 @@ export interface SystemConfig {
   // 验证码
   captcha_enabled?: boolean
   captcha_type?: string
+  /**
+   * 主验证码站点密钥
+   * 未被后端消费：handler.GetAuthConfig 不下发本键，也没有任何 handler 读取它。
+   * 设置页撤下 turnstile / recaptcha / hcaptcha 三个类型后已无写入点，保留仅为兼容库中历史值
+   */
   captcha_site_key?: string
+  /** 主验证码私有密钥，与 captcha_site_key 同因未被后端消费 */
   captcha_secret_key?: string
   turnstile_site_key?: string
   turnstile_secret_key?: string
   login_captcha?: boolean
+  /** 证书签发失败通知，后端 sysconfigBoolDefaultTrue：未配置视为开启 */
+  cert_issue_notice_enabled?: boolean
+  /** 证书签发成功通知，后端 sysconfigBoolExplicitOn：未配置视为关闭 */
+  cert_issue_success_notice_enabled?: boolean
   // 站点
   site_name?: string
   site_url?: string
@@ -1257,9 +1373,9 @@ export interface SystemConfig {
   cert_expire_notice_enabled?: boolean
   cert_expire_notice_days?: string | number
   cert_expire_notice_interval_days?: string | number
-  // 邮件
-  mail_enabled?: boolean
   mail_type?: number
+  mail_api_user?: string
+  mail_api_key?: string
   mail_host?: string
   mail_port?: number
   mail_secure?: string
@@ -1270,8 +1386,6 @@ export interface SystemConfig {
   mail_from?: string
   mail_from_name?: string
   mail_recv?: string
-  mail_subject_template?: string
-  mail_body_template?: string
   // Telegram
   tgbot_enabled?: boolean
   tgbot_token?: string
@@ -1279,6 +1393,17 @@ export interface SystemConfig {
   // Webhook 通用
   webhook_enabled?: boolean
   webhook_url?: string
+  // 群机器人 @用户：钉钉为手机号列表或 all，飞书为用户 ID 列表或 all，企业微信不支持
+  webhook_user?: string
+  // 自定义 Webhook：与通用 Webhook 并存，地址、方法、请求头、正文模板全部照配置执行
+  custom_webhook_enabled?: boolean
+  custom_webhook_url?: string
+  custom_webhook_method?: string
+  custom_webhook_headers?: string
+  custom_webhook_body?: string
+  custom_webhook_content_type?: string
+  /** text 去 HTML 标签并把 <br/> 换行，markdown 再转换粗体，其余取值原样下发 */
+  custom_webhook_content_format?: string
   // Discord
   discord_enabled?: boolean
   discord_webhook?: string

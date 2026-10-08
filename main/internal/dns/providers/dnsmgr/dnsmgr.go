@@ -17,7 +17,7 @@ import (
 func init() {
 	dns.Register("dnsmgr", NewProvider, dns.ProviderConfig{
 		Type: "dnsmgr",
-		Name: "DNSmgr(同系统对接)",
+		Name: "DNSmgr管理系统对接",
 		Icon: "dnsmgr.ico",
 		Config: []dns.ConfigField{
 			{Name: "接口地址", Key: "url", Type: "input", Placeholder: "如 http://xxx.com", Required: true},

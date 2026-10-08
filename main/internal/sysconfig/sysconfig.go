@@ -1,6 +1,7 @@
 package sysconfig
 
 import (
+	"strings"
 	"time"
 
 	"main/internal/cache"
@@ -34,4 +35,10 @@ func Invalidate(keys ...string) {
 func SetValue(key, value string) {
 	database.DB.Where("`key` = ?", key).Assign(models.SysConfig{Value: value}).FirstOrCreate(&models.SysConfig{Key: key})
 	cache.C.Set(cachePrefix+key, value, cacheTTL)
+}
+
+/* ExplicitOn 开关判据：仅 true/1/yes/on 为开，其余（含未配置的空串）一律为关 */
+func ExplicitOn(v string) bool {
+	v = strings.TrimSpace(strings.ToLower(v))
+	return v == "true" || v == "1" || v == "yes" || v == "on"
 }

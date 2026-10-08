@@ -4,6 +4,7 @@ import { Toaster } from "@/components/ui/sonner"
 import { ClientErrorBoundary } from "@/components/client-error-boundary"
 import { GlobalErrorHandler } from "@/components/global-error-handler"
 import { RouteProgress } from "@/components/route-progress"
+import { ThemeProvider } from "@/components/theme-provider"
 import "./globals.css"
 
 export const metadata: Metadata = {
@@ -17,16 +18,18 @@ export default function RootLayout({
   children: React.ReactNode
 }>) {
   return (
-    <html lang="zh-CN">
+    <html lang="zh-CN" suppressHydrationWarning>
       <body className="antialiased">
-        <Suspense>
-          <RouteProgress />
-        </Suspense>
-        <ClientErrorBoundary>
-          {children}
-        </ClientErrorBoundary>
-        <Toaster position="top-center" richColors />
-        <GlobalErrorHandler />
+        <ThemeProvider>
+          <Suspense>
+            <RouteProgress />
+          </Suspense>
+          <ClientErrorBoundary>
+            {children}
+          </ClientErrorBoundary>
+          <Toaster position="top-center" richColors />
+          <GlobalErrorHandler />
+        </ThemeProvider>
       </body>
     </html>
   )

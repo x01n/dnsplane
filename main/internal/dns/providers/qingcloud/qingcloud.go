@@ -25,7 +25,6 @@ func init() {
 		Config: []dns.ConfigField{
 			{Name: "AccessKeyId", Key: "access_key_id", Type: "input", Required: true},
 			{Name: "SecretAccessKey", Key: "secret_access_key", Type: "input", Required: true},
-			{Name: "使用代理服务器", Key: "proxy", Type: "radio", Options: []dns.ConfigOption{{Value: "0", Label: "否"}, {Value: "1", Label: "是"}}, Value: "0"},
 		},
 		Features: dns.ProviderFeatures{Remark: 1, Status: true, Redirect: false, Log: false, Weight: true, Page: false, Add: true},
 	})
@@ -38,13 +37,12 @@ type Provider struct {
 	secretAccessKey string
 	domain          string
 	domainID        string
-	proxy           bool
 	client          *http.Client
 	lastErr         string
 }
 
 func NewProvider(config map[string]string, domain, domainID string) dns.Provider {
-	return &Provider{accessKeyID: config["access_key_id"], secretAccessKey: config["secret_access_key"], domain: domain, domainID: domainID, proxy: config["proxy"] == "1", client: &http.Client{Timeout: 30 * time.Second}}
+	return &Provider{accessKeyID: config["access_key_id"], secretAccessKey: config["secret_access_key"], domain: domain, domainID: domainID, client: &http.Client{Timeout: 30 * time.Second}}
 }
 
 func (p *Provider) GetError() string { return p.lastErr }

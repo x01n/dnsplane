@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"fmt"
+	"main/internal/dns/doh"
 	"net"
 	"strings"
 	"sync"
@@ -94,6 +95,7 @@ func DnsCheck(c *gin.Context) {
 
 /**
  * queryDNS 向指定DNS服务器查询域名记录
+ * 该服务器 UDP 直查失败时，回退一次 DoH 加密查询
  */
 func queryDNS(domain, recordType string, server dnsServer) dnsCheckResult {
 	result := dnsCheckResult{
@@ -155,6 +157,18 @@ func queryDNS(domain, recordType string, server dnsServer) dnsCheckResult {
 	result.Cost = time.Since(start).Milliseconds()
 
 	if err != nil {
+		if dohResult, ok := queryDNSViaDoH(domain, recordType); ok {
+			/*
+			 * 用该服务器实际承担的 DoH 主机名覆盖 IP 并加注回退标记，
+			 * 让「结果来自哪条通道」在响应里可见，不把它伪装成原来的 UDP 服务器
+			 */
+			result.Server = server.Name + " (DoH回退)"
+			result.IP = dohResult.Server
+			result.Results = dohResult.Records
+			result.Cost = time.Since(start).Milliseconds()
+			result.TTL = fmt.Sprintf("%dms", result.Cost)
+			return result
+		}
 		result.Error = err.Error()
 	}
 	if records != nil {
@@ -163,4 +177,21 @@ func queryDNS(domain, recordType string, server dnsServer) dnsCheckResult {
 	result.TTL = fmt.Sprintf("%dms", result.Cost)
 
 	return result
+}
+
+/**
+ * queryDNSViaDoH 以 DoH 通道查询记录，ok 表示该通道可用
+ * 记录类型不在 DoH 映射表内时由 doh 包返回错误，此处统一归为不可用
+ * Cost 语义要求记录 UDP + DoH 合计耗时，故给足 2 倍单次超时（本机实测最快一家仅 32ms），
+ * 避免 ctx 提前取消掩盖 DoH 的真实耗时
+ */
+func queryDNSViaDoH(domain, recordType string) (doh.Result, bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*doh.Timeout)
+	defer cancel()
+
+	res, err := doh.QueryContext(ctx, domain, recordType)
+	if err != nil {
+		return doh.Result{}, false
+	}
+	return res, true
 }

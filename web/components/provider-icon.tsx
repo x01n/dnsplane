@@ -199,7 +199,7 @@ const providerConfig: Record<string, { name: string; color: string; bgColor: str
     bgColor: 'bg-green-50 dark:bg-green-950',
     icon: '宝',
   },
-  '1panel': {
+  opanel: {
     name: '1Panel',
     color: '#1976D2',
     bgColor: 'bg-blue-50 dark:bg-blue-950',

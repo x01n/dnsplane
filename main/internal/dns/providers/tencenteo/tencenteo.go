@@ -29,10 +29,6 @@ func init() {
 				{Value: "cn", Label: "中国内地"},
 				{Value: "intl", Label: "非中国内地"},
 			}, Value: "cn", Required: true},
-			{Name: "使用代理服务器", Key: "proxy", Type: "radio", Options: []dns.ConfigOption{
-				{Value: "0", Label: "否"},
-				{Value: "1", Label: "是"},
-			}, Value: "0"},
 		},
 		Features: dns.ProviderFeatures{
 			Remark: 0, Status: true, Redirect: false, Log: false, Weight: true, Page: false, Add: false,
@@ -48,7 +44,6 @@ type Provider struct {
 	version   string
 	domain    string
 	domainID  string
-	proxy     bool
 	client    *http.Client
 	lastErr   string
 }
@@ -66,7 +61,6 @@ func NewProvider(config map[string]string, domain, domainID string) dns.Provider
 		version:   "2022-09-01",
 		domain:    domain,
 		domainID:  domainID,
-		proxy:     config["proxy"] == "1",
 		client:    &http.Client{Timeout: 30 * time.Second},
 	}
 }

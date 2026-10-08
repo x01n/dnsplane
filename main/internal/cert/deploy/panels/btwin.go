@@ -2,6 +2,8 @@ package panels
 
 import (
 	"context"
+	"crypto/md5"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -13,6 +15,13 @@ import (
 )
 
 func init() { base.Register("btwin", NewBTWinProvider) }
+
+/* md5Hash 返回字符串的 MD5 十六进制摘要 */
+func md5Hash(s string) string {
+	h := md5.New()
+	h.Write([]byte(s))
+	return hex.EncodeToString(h.Sum(nil))
+}
 
 type BTWinProvider struct { base.BaseProvider; client *http.Client }
 

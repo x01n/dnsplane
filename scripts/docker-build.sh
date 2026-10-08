@@ -5,10 +5,6 @@
 #   scripts/docker-build.sh --push v1.2.3        # 构建并打 tag 推送
 #   IMAGE=docker.cnb.cool/neko_kernel/dnsplane \
 #   scripts/docker-build.sh --push v1.2.3        # 指定镜像名
-#
-# 需要：
-#   - Docker 20.10+ 且启用 buildx；首次会自动创建 buildx builder
-#   - 若传 --push，调用方需已 docker login 到目标 registry
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

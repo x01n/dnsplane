@@ -789,7 +789,8 @@ func GetMonitorStatus(c *gin.Context) {
 	}
 
 	var config models.SysConfig
-	database.WithContext(c).Where("key = ?", "monitor_run_time").First(&config)
+	// 写入点是 monitor.go:132 的 run_time，此处曾读 monitor_run_time 导致 running 恒为 false
+	database.WithContext(c).Where("key = ?", "run_time").First(&config)
 
 	runState := 0
 	if config.Value != "" {

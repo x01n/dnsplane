@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"net/http"
 	"net/url"
@@ -37,6 +38,86 @@ func getParam(c *gin.Context, key string) string {
 		}
 	}
 	return c.Query(key)
+}
+
+/*
+ * buildChannelForTest 按渠道注册表装配指定渠道，供各测试端点复用
+ *
+ * 与生产装载的唯一差异是不读取该渠道的启用开关（*_enabled）：
+ * 测试端点的用途是验证凭据是否可用，与渠道是否启用是两件事 ——
+ * 渠道被关闭时仍应能测出配置本身有没有问题。
+ * 实现上把开关键排除在 IN 查询之外，ChannelEnabled 对缺键判定为启用，
+ * 从而复用渠道自己的构造逻辑而不必为测试另写一份（那正是各端点参数缺失的来源）
+ *
+ * @param c gin 上下文
+ * @param t 渠道标识
+ * @returns 通知器、渠道适配器与错误
+ */
+func buildChannelForTest(c *gin.Context, t notify.NotifyType) (notify.Notifier, notify.Channel, error) {
+	ch, ok := notify.LookupChannel(t)
+	if !ok {
+		return nil, nil, fmt.Errorf("通知渠道 %s 未注册", t)
+	}
+
+	var configs []models.SysConfig
+	if err := database.WithContext(c).Where("`key` IN ?", ch.ConfigKeys()).Find(&configs).Error; err != nil {
+		return nil, ch, fmt.Errorf("读取通知配置失败：%w", err)
+	}
+	configMap := make(map[string]string, len(configs))
+	for _, cfg := range configs {
+		configMap[cfg.Key] = cfg.Value
+	}
+
+	notifier, ok := ch.Build(configMap)
+	if !ok {
+		return nil, ch, fmt.Errorf("请先完成%s配置", ch.Label())
+	}
+	return notifier, ch, nil
+}
+
+/* siteNameOrDefault 读取站点名，未配置时回退 DNSPlane */
+func siteNameOrDefault(c *gin.Context) string {
+	var siteName string
+	database.WithContext(c).Model(&models.SysConfig{}).Where("`key` = ?", "site_name").Pluck("value", &siteName)
+	if siteName == "" {
+		return "DNSPlane"
+	}
+	return siteName
+}
+
+/*
+ * testChannelNotification 各渠道测试端点的统一实现
+ * 渠道的构造与错误提示均由注册表给出，新增渠道时只需注册并加一条路由
+ * @param c gin 上下文
+ * @param t 渠道标识
+ */
+func testChannelNotification(c *gin.Context, t notify.NotifyType) {
+	if !checkAdmin(c) {
+		middleware.ErrorResponse(c, "权限不足，仅管理员可操作")
+		return
+	}
+
+	notifier, ch, err := buildChannelForTest(c, t)
+	if err != nil {
+		middleware.ErrorResponse(c, err.Error())
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	subject := "DNSPlane 测试通知"
+	content := fmt.Sprintf("这是一条测试消息，如果您收到此消息，说明%s通知配置正确！", ch.Label())
+	if t == notify.NotifyEmail {
+		// 邮件渠道用美化模板，模板本身是 HTML；mailContentAdapter 判定首字符为 '<' 时原样透传
+		subject, content = notify.RenderTestEmail(siteNameOrDefault(c))
+	}
+
+	if err := notifier.Send(ctx, subject, content); err != nil {
+		middleware.ErrorResponse(c, "消息发送失败："+err.Error())
+		return
+	}
+	middleware.SuccessMsg(c, "消息发送成功")
 }
 
 // GetDashboardStats 获取仪表盘统计数据
@@ -120,145 +201,24 @@ SELECT
 	})
 }
 
-// TestMailNotification 测试邮件通知
+/* TestMailNotification 测试邮件通知 */
 func TestMailNotification(c *gin.Context) {
-	if !checkAdmin(c) {
-		middleware.ErrorResponse(c, "权限不足，仅管理员可操作")
-		return
-	}
-
-	var configs []models.SysConfig
-	database.WithContext(c).Where("`key` IN ?", []string{
-		"mail_host", "mail_port", "mail_user", "mail_password",
-		"mail_from", "mail_from_name", "mail_recv",
-		"mail_secure", "mail_auth", "mail_tls", "site_name",
-	}).Find(&configs)
-
-	configMap := make(map[string]string)
-	for _, cfg := range configs {
-		configMap[cfg.Key] = cfg.Value
-	}
-
-	mailHost := configMap["mail_host"]
-	mailTo := configMap["mail_recv"]
-	if mailTo == "" {
-		mailTo = configMap["mail_from"]
-	}
-	if mailHost == "" || mailTo == "" {
-		middleware.ErrorResponse(c, "请先配置邮箱设置")
-		return
-	}
-
-	mailPort, _ := strconv.Atoi(configMap["mail_port"])
-	if mailPort == 0 {
-		mailPort = 25
-	}
-
-	// 兼容旧配置
-	secure := configMap["mail_secure"]
-	if secure == "" && (configMap["mail_tls"] == "1" || configMap["mail_tls"] == "true") {
-		secure = "ssl"
-	}
-
-	authType := configMap["mail_auth"]
-	if authType == "" {
-		authType = "plain"
-	}
-
-	siteName := configMap["site_name"]
-	if siteName == "" {
-		siteName = "DNSPlane"
-	}
-
-	config := notify.EmailConfig{
-		Host:     mailHost,
-		Port:     mailPort,
-		Username: configMap["mail_user"],
-		Password: configMap["mail_password"],
-		From:     configMap["mail_from"],
-		FromName: configMap["mail_from_name"],
-		To:       mailTo,
-		Secure:   secure,
-		AuthType: authType,
-	}
-
-	notifier := notify.NewEmailNotifier(config)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	// 使用美化的测试邮件模板
-	subject, body := notify.RenderTestEmail(siteName)
-	if err := notifier.Send(ctx, subject, body); err != nil {
-		middleware.ErrorResponse(c, "邮件发送失败："+err.Error())
-		return
-	}
-
-	middleware.SuccessMsg(c, "邮件发送成功")
+	testChannelNotification(c, notify.NotifyEmail)
 }
 
-// TestTelegramNotification 测试Telegram通知
+/* TestTelegramNotification 测试Telegram通知 */
 func TestTelegramNotification(c *gin.Context) {
-	if !checkAdmin(c) {
-		middleware.ErrorResponse(c, "权限不足，仅管理员可操作")
-		return
-	}
-
-	var botToken, chatID string
-	database.WithContext(c).Model(&models.SysConfig{}).Where("`key` = ?", "tgbot_token").Pluck("value", &botToken)
-	database.WithContext(c).Model(&models.SysConfig{}).Where("`key` = ?", "tgbot_chatid").Pluck("value", &chatID)
-
-	if botToken == "" || chatID == "" {
-		middleware.ErrorResponse(c, "请先配置Telegram设置")
-		return
-	}
-
-	config := notify.TelegramConfig{
-		BotToken: botToken,
-		ChatID:   chatID,
-	}
-
-	notifier := notify.NewTelegramNotifier(config)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	if err := notifier.Send(ctx, "消息发送测试", "这是一封测试消息！\n\n来自：DNSPlane"); err != nil {
-		middleware.ErrorResponse(c, "消息发送失败："+err.Error())
-		return
-	}
-
-	middleware.SuccessMsg(c, "消息发送成功")
+	testChannelNotification(c, notify.NotifyTelegram)
 }
 
-// TestWebhookNotification 测试Webhook通知
+/* TestWebhookNotification 测试Webhook通知 */
 func TestWebhookNotification(c *gin.Context) {
-	if !checkAdmin(c) {
-		middleware.ErrorResponse(c, "权限不足，仅管理员可操作")
-		return
-	}
+	testChannelNotification(c, notify.NotifyWebhook)
+}
 
-	var webhookURL string
-	database.WithContext(c).Model(&models.SysConfig{}).Where("`key` = ?", "webhook_url").Pluck("value", &webhookURL)
-
-	if webhookURL == "" {
-		middleware.ErrorResponse(c, "请先配置Webhook设置")
-		return
-	}
-
-	config := notify.WebhookConfig{
-		URL:    webhookURL,
-		Method: "POST",
-	}
-
-	notifier := notify.NewWebhookNotifier(config)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	if err := notifier.Send(ctx, "消息发送测试", "这是一封测试消息！\n来自：DNSPlane"); err != nil {
-		middleware.ErrorResponse(c, "消息发送失败："+err.Error())
-		return
-	}
-
-	middleware.SuccessMsg(c, "消息发送成功")
+/* TestCustomWebhookNotification 测试自定义Webhook通知 */
+func TestCustomWebhookNotification(c *gin.Context) {
+	testChannelNotification(c, notify.NotifyCustomWebhook)
 }
 
 // ClearCache 清除缓存
@@ -300,33 +260,13 @@ func TestProxy(c *gin.Context) {
 		middleware.ErrorResponse(c, "参数错误")
 		return
 	}
-
-	// 拒绝指向私网/回环/链路本地的代理目标（安全审计 M-6），
-	// 防止管理员误触发 SSRF 穿入云厂商 IMDS 或内网服务
-	if ip := net.ParseIP(req.Host); ip != nil {
-		if ip.IsLoopback() || ip.IsUnspecified() || ip.IsLinkLocalUnicast() ||
-			ip.IsLinkLocalMulticast() || ip.IsPrivate() {
-			middleware.ErrorResponse(c, "代理地址不能指向内网或保留地址")
-			return
-		}
-	} else {
-		lower := strings.ToLower(strings.TrimSpace(req.Host))
-		if lower == "localhost" || strings.HasSuffix(lower, ".localhost") ||
-			strings.HasSuffix(lower, ".internal") || strings.HasSuffix(lower, ".local") {
-			middleware.ErrorResponse(c, "代理地址不能指向内网域名")
-			return
-		}
+	if reason := proxyTargetRejectReason(req.Host); reason != "" {
+		middleware.ErrorResponse(c, reason)
+		return
 	}
 
 	// 构建代理URL
-	var proxyURL string
-	if req.User != "" {
-		proxyURL = req.Type + "://" + url.QueryEscape(req.User) + ":" + url.QueryEscape(req.Pass) + "@" + req.Host + ":" + strconv.Itoa(req.Port)
-	} else {
-		proxyURL = req.Type + "://" + req.Host + ":" + strconv.Itoa(req.Port)
-	}
-
-	parsedURL, err := url.Parse(proxyURL)
+	parsedURL, err := url.Parse(buildProxyURL(req.Type, req.Host, req.User, req.Pass, req.Port))
 	if err != nil {
 		middleware.ErrorResponse(c, "代理地址格式错误")
 		return
@@ -371,6 +311,41 @@ func TestProxy(c *gin.Context) {
 			"status":  resp.StatusCode,
 		},
 	})
+}
+
+/*
+ * buildProxyURL 拼装代理 URL，IPv6 字面量补方括号后与端口拼接
+ *
+ * IPv6 字面量不加方括号会被 net/url 误判：socks5 分支把 "::1:1080" 整段当作 host
+ * 从而静默拨错地址，http 分支直接报 invalid port。
+ * 判据用「含冒号且未以 [ 开头」而非 net.ParseIP(...).To4() == nil —— 后者对
+ * IPv4-mapped 地址 ::ffff:127.0.0.1 返回 false，会漏掉这类同样需要方括号的输入
+ *
+ * @param kind 代理类型，如 http / socks5
+ * @param host 主机名或 IP 字面量，允许前端已自带方括号
+ * @param user 代理用户名，留空时 URL 不带凭据段
+ * @param pass 代理密码
+ * @param port 代理端口
+ * @returns 可直接交给 url.Parse 的代理 URL
+ */
+func buildProxyURL(kind, host, user, pass string, port int) string {
+	if strings.Contains(host, ":") && !strings.HasPrefix(host, "[") {
+		host = "[" + host + "]"
+	}
+	authority := host + ":" + strconv.Itoa(port)
+	if user != "" {
+		return kind + "://" + url.QueryEscape(user) + ":" + url.QueryEscape(pass) + "@" + authority
+	}
+	return kind + "://" + authority
+}
+
+func proxyTargetRejectReason(host string) string {
+	lower := strings.ToLower(strings.TrimSpace(host))
+	if lower == "localhost" || strings.HasSuffix(lower, ".localhost") ||
+		strings.HasSuffix(lower, ".internal") || strings.HasSuffix(lower, ".local") {
+		return "代理地址不能指向内网域名"
+	}
+	return ""
 }
 
 // GetTaskStatus 获取后台任务状态
@@ -428,192 +403,39 @@ func GetCronConfig(c *gin.Context) {
 	middleware.SuccessResponse(c, configs)
 }
 
-// TestDiscordNotification 测试Discord通知
+/* TestDiscordNotification 测试Discord通知 */
 func TestDiscordNotification(c *gin.Context) {
-	if !checkAdmin(c) {
-		middleware.ErrorResponse(c, "权限不足，仅管理员可操作")
-		return
-	}
-
-	var webhookURL string
-	database.WithContext(c).Model(&models.SysConfig{}).Where("`key` = ?", "discord_webhook").Pluck("value", &webhookURL)
-
-	if webhookURL == "" {
-		middleware.ErrorResponse(c, "请先配置Discord Webhook URL")
-		return
-	}
-
-	config := notify.DiscordConfig{
-		WebhookURL: webhookURL,
-	}
-
-	notifier := notify.NewDiscordNotifier(config)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	if err := notifier.Send(ctx, "🔔 DNSPlane 测试通知", "这是一条测试消息，如果您收到此消息，说明Discord通知配置正确！"); err != nil {
-		middleware.ErrorResponse(c, "消息发送失败："+err.Error())
-		return
-	}
-
-	middleware.SuccessMsg(c, "消息发送成功")
+	testChannelNotification(c, notify.NotifyDiscord)
 }
 
-// TestBarkNotification 测试Bark推送
+/* TestBarkNotification 测试Bark推送 */
 func TestBarkNotification(c *gin.Context) {
-	if !checkAdmin(c) {
-		middleware.ErrorResponse(c, "权限不足，仅管理员可操作")
-		return
-	}
-
-	var serverURL, deviceKey string
-	database.WithContext(c).Model(&models.SysConfig{}).Where("`key` = ?", "bark_server").Pluck("value", &serverURL)
-	database.WithContext(c).Model(&models.SysConfig{}).Where("`key` = ?", "bark_key").Pluck("value", &deviceKey)
-
-	if deviceKey == "" {
-		middleware.ErrorResponse(c, "请先配置Bark Device Key")
-		return
-	}
-
-	config := notify.BarkConfig{
-		ServerURL: serverURL,
-		DeviceKey: deviceKey,
-	}
-
-	notifier := notify.NewBarkNotifier(config)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	if err := notifier.Send(ctx, "DNSPlane测试", "这是一条测试消息"); err != nil {
-		middleware.ErrorResponse(c, "推送发送失败："+err.Error())
-		return
-	}
-
-	middleware.SuccessMsg(c, "推送发送成功")
+	testChannelNotification(c, notify.NotifyBark)
 }
 
-// TestWechatNotification 测试企业微信通知
+/* TestWechatNotification 测试企业微信通知 */
 func TestWechatNotification(c *gin.Context) {
-	if !checkAdmin(c) {
-		middleware.ErrorResponse(c, "权限不足，仅管理员可操作")
-		return
-	}
-
-	var webhookURL string
-	database.WithContext(c).Model(&models.SysConfig{}).Where("`key` = ?", "wechat_webhook").Pluck("value", &webhookURL)
-
-	if webhookURL == "" {
-		middleware.ErrorResponse(c, "请先配置企业微信Webhook URL")
-		return
-	}
-
-	config := notify.WechatWorkConfig{
-		WebhookURL: webhookURL,
-	}
-
-	notifier := notify.NewWechatWorkNotifier(config)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	if err := notifier.Send(ctx, "DNSPlane 测试通知", "这是一条测试消息，如果您收到此消息，说明企业微信通知配置正确！"); err != nil {
-		middleware.ErrorResponse(c, "消息发送失败："+err.Error())
-		return
-	}
-
-	middleware.SuccessMsg(c, "消息发送成功")
+	testChannelNotification(c, notify.NotifyWechat)
 }
 
+/* TestDingtalkNotification 测试钉钉通知 */
 func TestDingtalkNotification(c *gin.Context) {
-	if !checkAdmin(c) {
-		middleware.ErrorResponse(c, "权限不足，仅管理员可操作")
-		return
-	}
-	var webhookURL, secret string
-	database.WithContext(c).Model(&models.SysConfig{}).Where("`key` = ?", "dingtalk_webhook").Pluck("value", &webhookURL)
-	database.WithContext(c).Model(&models.SysConfig{}).Where("`key` = ?", "dingtalk_secret").Pluck("value", &secret)
-	if webhookURL == "" {
-		middleware.ErrorResponse(c, "请先配置钉钉 Webhook URL")
-		return
-	}
-	notifier := notify.NewDingTalkNotifier(notify.DingTalkConfig{WebhookURL: webhookURL, Secret: secret})
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	if err := notifier.Send(ctx, "DNSPlane 测试通知", "这是一条测试消息，如果您收到此消息，说明钉钉通知配置正确！"); err != nil {
-		middleware.ErrorResponse(c, "消息发送失败："+err.Error())
-		return
-	}
-	middleware.SuccessMsg(c, "消息发送成功")
+	testChannelNotification(c, notify.NotifyDingTalk)
 }
 
+/* TestFeishuNotification 测试飞书通知 */
 func TestFeishuNotification(c *gin.Context) {
-	if !checkAdmin(c) {
-		middleware.ErrorResponse(c, "权限不足，仅管理员可操作")
-		return
-	}
-	var webhookURL, secret string
-	database.WithContext(c).Model(&models.SysConfig{}).Where("`key` = ?", "feishu_webhook").Pluck("value", &webhookURL)
-	database.WithContext(c).Model(&models.SysConfig{}).Where("`key` = ?", "feishu_secret").Pluck("value", &secret)
-	if webhookURL == "" {
-		middleware.ErrorResponse(c, "请先配置飞书 Webhook URL")
-		return
-	}
-	notifier := notify.NewFeishuNotifier(notify.FeishuConfig{WebhookURL: webhookURL, Secret: secret})
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	if err := notifier.Send(ctx, "DNSPlane 测试通知", "这是一条测试消息，如果您收到此消息，说明飞书通知配置正确！"); err != nil {
-		middleware.ErrorResponse(c, "消息发送失败："+err.Error())
-		return
-	}
-	middleware.SuccessMsg(c, "消息发送成功")
+	testChannelNotification(c, notify.NotifyFeishu)
 }
 
+/* TestWxWorkAppNotification 测试企业微信应用消息 */
 func TestWxWorkAppNotification(c *gin.Context) {
-	if !checkAdmin(c) {
-		middleware.ErrorResponse(c, "权限不足，仅管理员可操作")
-		return
-	}
-	var corpID, agentID, secret, toUser string
-	database.WithContext(c).Model(&models.SysConfig{}).Where("`key` = ?", "wxwork_corpid").Pluck("value", &corpID)
-	database.WithContext(c).Model(&models.SysConfig{}).Where("`key` = ?", "wxwork_agentid").Pluck("value", &agentID)
-	database.WithContext(c).Model(&models.SysConfig{}).Where("`key` = ?", "wxwork_secret").Pluck("value", &secret)
-	database.WithContext(c).Model(&models.SysConfig{}).Where("`key` = ?", "wxwork_touser").Pluck("value", &toUser)
-	if corpID == "" || agentID == "" || secret == "" {
-		middleware.ErrorResponse(c, "请先配置企业微信应用参数")
-		return
-	}
-	notifier := notify.NewWxWorkAppNotifier(notify.WxWorkAppConfig{CorpID: corpID, AgentID: agentID, Secret: secret, ToUser: toUser})
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	if err := notifier.Send(ctx, "DNSPlane 测试通知", "这是一条测试消息，如果您收到此消息，说明企业微信应用消息配置正确！"); err != nil {
-		middleware.ErrorResponse(c, "消息发送失败："+err.Error())
-		return
-	}
-	middleware.SuccessMsg(c, "消息发送成功")
+	testChannelNotification(c, notify.NotifyWxWorkApp)
 }
 
+/* TestWxTplNotification 测试公众号模板消息 */
 func TestWxTplNotification(c *gin.Context) {
-	if !checkAdmin(c) {
-		middleware.ErrorResponse(c, "权限不足，仅管理员可操作")
-		return
-	}
-	var appID, appSecret, templateID, users, targetURL string
-	database.WithContext(c).Model(&models.SysConfig{}).Where("`key` = ?", "wxtpl_appid").Pluck("value", &appID)
-	database.WithContext(c).Model(&models.SysConfig{}).Where("`key` = ?", "wxtpl_appsecret").Pluck("value", &appSecret)
-	database.WithContext(c).Model(&models.SysConfig{}).Where("`key` = ?", "wxtpl_template_id").Pluck("value", &templateID)
-	database.WithContext(c).Model(&models.SysConfig{}).Where("`key` = ?", "wxtpl_users").Pluck("value", &users)
-	database.WithContext(c).Model(&models.SysConfig{}).Where("`key` = ?", "wxtpl_url").Pluck("value", &targetURL)
-	if appID == "" || appSecret == "" || templateID == "" || users == "" {
-		middleware.ErrorResponse(c, "请先配置公众号模板消息参数")
-		return
-	}
-	notifier := notify.NewWxTplNotifier(notify.WxTplConfig{AppID: appID, AppSecret: appSecret, TemplateID: templateID, ToUsers: users, URL: targetURL})
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	if err := notifier.Send(ctx, "DNSPlane 测试通知", "这是一条测试消息，如果您收到此消息，说明公众号模板消息配置正确！"); err != nil {
-		middleware.ErrorResponse(c, "消息发送失败："+err.Error())
-		return
-	}
-	middleware.SuccessMsg(c, "消息发送成功")
+	testChannelNotification(c, notify.NotifyWxTpl)
 }
 
 // GetSystemInfo 获取系统信息

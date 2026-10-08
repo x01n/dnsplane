@@ -17,7 +17,6 @@ func registerCloudConfigs() {
 		Inputs: []cert.ConfigField{
 			{Name: "AccessKeyId", Key: "AccessKeyId", Type: "input", Required: true},
 			{Name: "AccessKeySecret", Key: "AccessKeySecret", Type: "input", Required: true},
-			{Name: "使用代理", Key: "proxy", Type: "radio", Options: []cert.ConfigOption{{Value: "0", Label: "否"}, {Value: "1", Label: "是"}}, Value: "0"},
 		},
 		TaskInputs: []cert.ConfigField{
 			{Name: "要部署的产品", Key: "product", Type: "select", Required: true, Value: "cdn", Options: []cert.ConfigOption{
@@ -27,30 +26,39 @@ func registerCloudConfigs() {
 				{Value: "esa_saas", Label: "ESA SAAS自定义域名"},
 				{Value: "oss", Label: "对象存储OSS"},
 				{Value: "waf", Label: "Web应用防火墙3.0"},
+				{Value: "wafres", Label: "Web应用防火墙3.0(云产品接入)"},
+				{Value: "waf2", Label: "Web应用防火墙2.0"},
 				{Value: "ddoscoo", Label: "DDoS高防"},
 				{Value: "ga", Label: "全球加速GA"},
 				{Value: "clb", Label: "传统型负载均衡CLB"},
 				{Value: "alb", Label: "应用型负载均衡ALB"},
 				{Value: "nlb", Label: "网络型负载均衡NLB"},
+				{Value: "api", Label: "API网关"},
 				{Value: "live", Label: "视频直播"},
 				{Value: "vod", Label: "视频点播"},
-				{Value: "fc", Label: "函数计算"},
+				{Value: "fc", Label: "函数计算3.0"},
+				{Value: "fc2", Label: "函数计算2.0"},
 				{Value: "upload", Label: "上传到证书管理"},
 			}},
-			{Name: "ESA站点域名", Key: "esa_sitename", Type: "input", Show: "product=='esa'||product=='esa_saas'", Required: true},
-			{Name: "SAAS自定义域名", Key: "esa_saas_sitename", Type: "input", Placeholder: "ESA SAAS自定义主机名", Show: "product=='esa_saas'", Required: true},
+			{Name: "ESA站点域名", Key: "esa_sitename", Type: "input", Placeholder: "ESA添加的站点主域名", Show: "product=='esa'||product=='esa_saas'", Required: true},
+			{Name: "SAAS自定义域名", Key: "esa_saas_sitename", Type: "textarea", Placeholder: "每行一个域名", Show: "product=='esa_saas'", Required: true},
 			{Name: "Endpoint地址", Key: "oss_endpoint", Type: "input", Placeholder: "如: oss-cn-hangzhou.aliyuncs.com", Show: "product=='oss'", Required: true},
 			{Name: "Bucket名称", Key: "oss_bucket", Type: "input", Show: "product=='oss'", Required: true},
-			{Name: "所属地域", Key: "region", Type: "select", Options: []cert.ConfigOption{{Value: "cn-hangzhou", Label: "中国内地"}, {Value: "ap-southeast-1", Label: "非中国内地"}}, Value: "cn-hangzhou", Show: "product=='waf'||product=='esa'||product=='esa_saas'||product=='ddoscoo'"},
-			{Name: "所属地域ID", Key: "regionid", Type: "input", Placeholder: "如: cn-hangzhou", Show: "product=='clb'||product=='alb'||product=='nlb'", Value: "cn-hangzhou"},
+			{Name: "所属地域", Key: "region", Type: "select", Options: []cert.ConfigOption{{Value: "cn-hangzhou", Label: "中国内地"}, {Value: "ap-southeast-1", Label: "非中国内地"}}, Value: "cn-hangzhou", Show: "product=='waf'||product=='wafres'||product=='waf2'||product=='esa'||product=='esa_saas'||product=='ddoscoo'", Required: true},
+			{Name: "所属地域ID", Key: "regionid", Type: "input", Placeholder: "如: cn-hangzhou", Show: "product=='api'||product=='clb'||product=='alb'||product=='nlb'", Value: "cn-hangzhou", Required: true},
+			{Name: "API分组ID", Key: "api_groupid", Type: "input", Show: "product=='api'", Required: true},
+			{Name: "域名CNAME地址", Key: "fc_cname", Type: "input", Placeholder: "如: <账号ID>.cn-shanghai.fc.aliyuncs.com", Show: "product=='fc'||product=='fc2'", Required: true},
 			{Name: "负载均衡实例ID", Key: "clb_id", Type: "input", Show: "product=='clb'", Required: true},
 			{Name: "HTTPS监听端口", Key: "clb_port", Type: "input", Value: "443", Show: "product=='clb'", Required: true},
-			{Name: "监听ID", Key: "alb_listener_id", Type: "input", Show: "product=='alb'||product=='nlb'", Required: true},
+			{Name: "监听ID", Key: "alb_listener_id", Type: "input", Note: "进入ALB实例详情->监听列表，复制监听ID（只支持HTTPS或QUIC监听协议）", Show: "product=='alb'", Required: true},
+			{Name: "监听ID", Key: "nlb_listener_id", Type: "input", Note: "进入NLB实例详情->监听列表，复制监听ID（只支持TCPSSL监听协议）", Show: "product=='nlb'", Required: true},
 			{Name: "全球加速实例ID", Key: "ga_id", Type: "input", Show: "product=='ga'", Required: true},
 			{Name: "监听ID", Key: "ga_listener_id", Type: "input", Show: "product=='ga'", Required: true},
-			{Name: "部署类型", Key: "deploy_type", Type: "select", Options: []cert.ConfigOption{{Value: "0", Label: "默认证书"}, {Value: "1", Label: "扩展域名证书"}}, Value: "0", Show: "product=='ga'"},
+			{Name: "云产品防护对象ID", Key: "waf_resource_id", Type: "input", Placeholder: "多个ID可用,隔开", Note: "进入查看防护对象，对象名称一列即为云产品防护对象ID", Show: "product=='wafres'", Required: true},
+			{Name: "部署类型", Key: "deploy_type", Type: "select", Options: []cert.ConfigOption{{Value: "0", Label: "默认证书"}, {Value: "1", Label: "扩展证书"}}, Value: "0", Show: "product=='clb'||product=='alb'||product=='nlb'||product=='ga'||product=='wafres'", Required: true},
 			{Name: "扩展域名", Key: "ga_domain", Type: "input", Placeholder: "多个域名可使用,分隔", Show: "product=='ga'&&deploy_type=='1'"},
-			{Name: "绑定的域名", Key: "domain", Type: "input", Placeholder: "多个域名可使用,分隔", Show: "product!='clb'&&product!='alb'&&product!='nlb'&&product!='upload'&&product!='ga'&&product!='esa_saas'", Required: true},
+			{Name: "扩展域名", Key: "clb_domain", Type: "input", Placeholder: "多个域名可使用,分隔", Show: "product=='clb'&&deploy_type=='1'"},
+			{Name: "绑定的域名", Key: "domain", Type: "input", Placeholder: "多个域名可使用,分隔", Show: "product!='clb'&&product!='alb'&&product!='nlb'&&product!='upload'&&product!='ga'&&product!='esa'&&product!='esa_saas'&&product!='wafres'", Required: true},
 		},
 	})
 
@@ -64,7 +72,6 @@ func registerCloudConfigs() {
 		Inputs: []cert.ConfigField{
 			{Name: "SecretId", Key: "SecretId", Type: "input", Required: true},
 			{Name: "SecretKey", Key: "SecretKey", Type: "input", Required: true},
-			{Name: "使用代理", Key: "proxy", Type: "radio", Options: []cert.ConfigOption{{Value: "0", Label: "否"}, {Value: "1", Label: "是"}}, Value: "0"},
 		},
 		TaskInputs: []cert.ConfigField{
 			{Name: "要部署的产品", Key: "product", Type: "select", Required: true, Value: "cdn", Options: []cert.ConfigOption{
@@ -79,9 +86,13 @@ func registerCloudConfigs() {
 				{Value: "scf", Label: "云函数SCF"},
 				{Value: "lighthouse", Label: "轻量应用服务器"},
 				{Value: "ddos", Label: "DDoS高防包"},
+				{Value: "tse", Label: "云原生API网关TSE"},
+				{Value: "tcb", Label: "云开发TCB"},
 				{Value: "upload", Label: "上传到证书管理"},
+				{Value: "update", Label: "更新证书内容（证书ID不变）"},
+				{Value: "update_new", Label: "更新证书内容（生成新的ID）"},
 			}},
-			{Name: "所属地域ID", Key: "regionid", Type: "input", Placeholder: "如: ap-guangzhou", Show: "product=='clb'||product=='cos'||product=='tke'||product=='scf'||product=='lighthouse'"},
+			{Name: "所属地域ID", Key: "regionid", Type: "input", Placeholder: "如: ap-guangzhou", Show: "product=='clb'||product=='cos'||product=='tke'||product=='scf'||product=='lighthouse'||product=='tse'"},
 			{Name: "WAF地域", Key: "region", Type: "input", Placeholder: "如: ap-guangzhou", Show: "product=='waf'", Required: true},
 			{Name: "负载均衡ID", Key: "clb_id", Type: "input", Show: "product=='clb'", Required: true},
 			{Name: "监听器ID", Key: "clb_listener_id", Type: "input", Show: "product=='clb'"},
@@ -96,7 +107,9 @@ func registerCloudConfigs() {
 			{Name: "TKE命名空间", Key: "tke_namespace", Type: "input", Show: "product=='tke'", Required: true},
 			{Name: "TKE Secret名称", Key: "tke_secret", Type: "input", Show: "product=='tke'", Required: true},
 			{Name: "实例ID", Key: "lighthouse_id", Type: "input", Placeholder: "轻量实例ID或DDoS实例ID", Show: "product=='lighthouse'||product=='ddos'", Required: true},
-			{Name: "绑定的域名", Key: "domain", Type: "input", Placeholder: "多个域名可使用,分隔", Show: "product!='clb'&&product!='upload'&&product!='tke'", Required: true},
+			{Name: "绑定的域名", Key: "domain", Type: "input", Placeholder: "多个域名可使用,分隔", Show: "product!='clb'&&product!='upload'&&product!='tke'&&product!='update'&&product!='update_new'", Required: true},
+			{Name: "证书ID", Key: "cert_id", Type: "input", Placeholder: "要更新的证书ID，在我的证书列表查看", Show: "product=='update'||product=='update_new'", Required: true, Note: "如果使用证书ID不变接口更新，则需联系加白使用"},
+			{Name: "更新成功后删除旧证书", Key: "delete_old_cert", Type: "radio", Options: []cert.ConfigOption{{Value: "0", Label: "否"}, {Value: "1", Label: "是"}}, Value: "0", Show: "product=='update_new'"},
 		},
 	})
 
@@ -110,7 +123,6 @@ func registerCloudConfigs() {
 		Inputs: []cert.ConfigField{
 			{Name: "AccessKeyId", Key: "AccessKeyId", Type: "input", Required: true},
 			{Name: "SecretAccessKey", Key: "SecretAccessKey", Type: "input", Required: true},
-			{Name: "使用代理", Key: "proxy", Type: "radio", Options: []cert.ConfigOption{{Value: "0", Label: "否"}, {Value: "1", Label: "是"}}, Value: "0"},
 		},
 		TaskInputs: []cert.ConfigField{
 			{Name: "要部署的产品", Key: "product", Type: "select", Required: true, Value: "cdn", Options: []cert.ConfigOption{
@@ -120,12 +132,12 @@ func registerCloudConfigs() {
 				{Value: "obs", Label: "对象存储服务OBS"},
 				{Value: "upload", Label: "上传到证书管理"},
 			}},
-			{Name: "Endpoint地址", Key: "obs_endpoint", Type: "input", Show: "product=='obs'", Required: true},
+			{Name: "Endpoint地址", Key: "obs_endpoint", Type: "input", Placeholder: "填写示例：obs.cn-north-4.myhuaweicloud.com", Show: "product=='obs'", Required: true},
 			{Name: "桶名称", Key: "obs_bucket", Type: "input", Show: "product=='obs'", Required: true},
 			{Name: "绑定的域名", Key: "domain", Type: "input", Placeholder: "多个域名可使用,分隔", Show: "product=='cdn'||product=='obs'", Required: true},
-			{Name: "项目ID", Key: "project_id", Type: "input", Show: "product=='elb'||product=='waf'", Required: true},
+			{Name: "项目ID", Key: "project_id", Type: "input", Show: "product=='elb'||product=='waf'", Required: true, Note: "项目ID可在我的凭证->项目列表页面查看"},
 			{Name: "区域ID", Key: "region_id", Type: "input", Show: "product=='elb'||product=='waf'", Required: true},
-			{Name: "证书ID", Key: "cert_id", Type: "input", Show: "product=='elb'||product=='waf'", Required: true},
+			{Name: "要更新的证书ID", Key: "cert_id", Type: "input", Placeholder: "在ELB控制台->证书管理->查看已上传的证书ID", Show: "product=='elb'||product=='waf'", Required: true},
 		},
 	})
 
@@ -139,7 +151,6 @@ func registerCloudConfigs() {
 		Inputs: []cert.ConfigField{
 			{Name: "AccessKey", Key: "AccessKey", Type: "input", Required: true},
 			{Name: "SecretKey", Key: "SecretKey", Type: "input", Required: true},
-			{Name: "使用代理", Key: "proxy", Type: "radio", Options: []cert.ConfigOption{{Value: "0", Label: "否"}, {Value: "1", Label: "是"}}, Value: "0"},
 		},
 		TaskInputs: []cert.ConfigField{
 			{Name: "要部署的产品", Key: "product", Type: "select", Required: true, Value: "cdn", Options: []cert.ConfigOption{
@@ -162,7 +173,6 @@ func registerCloudConfigs() {
 		Inputs: []cert.ConfigField{
 			{Name: "用户名", Key: "username", Type: "input", Required: true},
 			{Name: "密码", Key: "password", Type: "input", Required: true},
-			{Name: "使用代理", Key: "proxy", Type: "radio", Options: []cert.ConfigOption{{Value: "0", Label: "否"}, {Value: "1", Label: "是"}}, Value: "0"},
 		},
 		TaskInputs: []cert.ConfigField{},
 	})
@@ -177,7 +187,6 @@ func registerCloudConfigs() {
 		Inputs: []cert.ConfigField{
 			{Name: "AccessKey", Key: "AccessKey", Type: "input", Required: true},
 			{Name: "SecretKey", Key: "SecretKey", Type: "input", Required: true},
-			{Name: "使用代理", Key: "proxy", Type: "radio", Options: []cert.ConfigOption{{Value: "0", Label: "否"}, {Value: "1", Label: "是"}}, Value: "0"},
 		},
 		TaskInputs: []cert.ConfigField{
 			{Name: "CDN域名", Key: "domain", Type: "input", Placeholder: "多个域名可使用,分隔", Required: true},
@@ -194,7 +203,6 @@ func registerCloudConfigs() {
 		Inputs: []cert.ConfigField{
 			{Name: "AccessKeyId", Key: "AccessKeyId", Type: "input", Required: true},
 			{Name: "SecretAccessKey", Key: "SecretAccessKey", Type: "input", Required: true},
-			{Name: "使用代理", Key: "proxy", Type: "radio", Options: []cert.ConfigOption{{Value: "0", Label: "否"}, {Value: "1", Label: "是"}}, Value: "0"},
 		},
 		TaskInputs: []cert.ConfigField{
 			{Name: "要部署的产品", Key: "product", Type: "select", Required: true, Value: "cdn", Options: []cert.ConfigOption{
@@ -240,7 +248,6 @@ func registerCloudConfigs() {
 		Inputs: []cert.ConfigField{
 			{Name: "AccessKeyId", Key: "AccessKeyId", Type: "input", Required: true},
 			{Name: "SecretAccessKey", Key: "SecretAccessKey", Type: "input", Required: true},
-			{Name: "使用代理", Key: "proxy", Type: "radio", Options: []cert.ConfigOption{{Value: "0", Label: "否"}, {Value: "1", Label: "是"}}, Value: "0"},
 		},
 		TaskInputs: []cert.ConfigField{
 			{Name: "要部署的产品", Key: "product", Type: "select", Required: true, Value: "cdn", Options: []cert.ConfigOption{
@@ -271,7 +278,6 @@ func registerCloudConfigs() {
 		Inputs: []cert.ConfigField{
 			{Name: "AccessKeyId", Key: "AccessKeyId", Type: "input", Required: true},
 			{Name: "SecretAccessKey", Key: "SecretAccessKey", Type: "input", Required: true},
-			{Name: "使用代理", Key: "proxy", Type: "radio", Options: []cert.ConfigOption{{Value: "0", Label: "否"}, {Value: "1", Label: "是"}}, Value: "0"},
 		},
 		TaskInputs: []cert.ConfigField{
 			{Name: "要部署的产品", Key: "product", Type: "select", Required: true, Value: "cdn", Options: []cert.ConfigOption{
@@ -292,7 +298,6 @@ func registerCloudConfigs() {
 		Inputs: []cert.ConfigField{
 			{Name: "AccessKeyId", Key: "AccessKeyId", Type: "input", Required: true},
 			{Name: "SecretAccessKey", Key: "SecretAccessKey", Type: "input", Required: true},
-			{Name: "使用代理", Key: "proxy", Type: "radio", Options: []cert.ConfigOption{{Value: "0", Label: "否"}, {Value: "1", Label: "是"}}, Value: "0"},
 		},
 		TaskInputs: []cert.ConfigField{
 			{Name: "绑定的域名", Key: "domain", Type: "input", Placeholder: "多个域名可使用,分隔", Required: true},
@@ -309,7 +314,6 @@ func registerCloudConfigs() {
 		Inputs: []cert.ConfigField{
 			{Name: "账户名", Key: "account", Type: "input", Required: true},
 			{Name: "token", Key: "token", Type: "input", Required: true},
-			{Name: "使用代理", Key: "proxy", Type: "radio", Options: []cert.ConfigOption{{Value: "0", Label: "否"}, {Value: "1", Label: "是"}}, Value: "0"},
 		},
 		TaskInputs: []cert.ConfigField{
 			{Name: "证书ID", Key: "id", Type: "input", Required: true},
@@ -327,7 +331,6 @@ func registerCloudConfigs() {
 			{Name: "账号", Key: "username", Type: "input", Required: true},
 			{Name: "APIKEY", Key: "apiKey", Type: "input", Required: true},
 			{Name: "特殊KEY", Key: "spKey", Type: "input"},
-			{Name: "使用代理", Key: "proxy", Type: "radio", Options: []cert.ConfigOption{{Value: "0", Label: "否"}, {Value: "1", Label: "是"}}, Value: "0"},
 		},
 		TaskInputs: []cert.ConfigField{
 			{Name: "要部署的产品", Key: "product", Type: "select", Required: true, Value: "cdn", Options: []cert.ConfigOption{
@@ -351,7 +354,6 @@ func registerCloudConfigs() {
 		Inputs: []cert.ConfigField{
 			{Name: "AccessKeyId", Key: "AccessKeyId", Type: "input", Required: true},
 			{Name: "SecretAccessKey", Key: "SecretAccessKey", Type: "input", Required: true},
-			{Name: "使用代理", Key: "proxy", Type: "radio", Options: []cert.ConfigOption{{Value: "0", Label: "否"}, {Value: "1", Label: "是"}}, Value: "0"},
 		},
 		TaskInputs: []cert.ConfigField{
 			{Name: "要部署的产品", Key: "product", Type: "select", Required: true, Value: "acm", Options: []cert.ConfigOption{
@@ -373,7 +375,6 @@ func registerCloudConfigs() {
 		Inputs: []cert.ConfigField{
 			{Name: "用户名", Key: "username", Type: "input", Required: true},
 			{Name: "API密码", Key: "api_password", Type: "input", Required: true},
-			{Name: "使用代理", Key: "proxy", Type: "radio", Options: []cert.ConfigOption{{Value: "0", Label: "否"}, {Value: "1", Label: "是"}}, Value: "0"},
 		},
 		TaskInputs: []cert.ConfigField{
 			{Name: "FTP账号", Key: "sitename", Type: "input", Required: true},
@@ -390,7 +391,6 @@ func registerCloudConfigs() {
 		Inputs: []cert.ConfigField{
 			{Name: "账户名", Key: "account", Type: "input", Required: true},
 			{Name: "API令牌", Key: "apikey", Type: "input", Required: true},
-			{Name: "使用代理", Key: "proxy", Type: "radio", Options: []cert.ConfigOption{{Value: "0", Label: "否"}, {Value: "1", Label: "是"}}, Value: "0"},
 		},
 		TaskInputs: []cert.ConfigField{
 			{Name: "证书ID", Key: "id", Type: "input", Required: true},
@@ -408,7 +408,6 @@ func registerCloudConfigs() {
 		Inputs: []cert.ConfigField{
 			{Name: "账户名", Key: "account", Type: "input", Required: true},
 			{Name: "API Token", Key: "apikey", Type: "input", Required: true},
-			{Name: "使用代理", Key: "proxy", Type: "radio", Options: []cert.ConfigOption{{Value: "0", Label: "否"}, {Value: "1", Label: "是"}}, Value: "0"},
 		},
 		TaskInputs: []cert.ConfigField{},
 	})
@@ -423,7 +422,6 @@ func registerCloudConfigs() {
 		Inputs: []cert.ConfigField{
 			{Name: "账号", Key: "account", Type: "input", Required: true},
 			{Name: "ApiKey", Key: "apikey", Type: "input", Required: true},
-			{Name: "使用代理", Key: "proxy", Type: "radio", Options: []cert.ConfigOption{{Value: "0", Label: "否"}, {Value: "1", Label: "是"}}, Value: "0"},
 		},
 		TaskInputs: []cert.ConfigField{
 			{Name: "证书ID", Key: "id", Type: "input", Placeholder: "留空则为添加证书"},
@@ -440,7 +438,6 @@ func registerCloudConfigs() {
 		Inputs: []cert.ConfigField{
 			{Name: "账号", Key: "username", Type: "input", Required: true},
 			{Name: "密码", Key: "password", Type: "input", Required: true},
-			{Name: "使用代理", Key: "proxy", Type: "radio", Options: []cert.ConfigOption{{Value: "0", Label: "否"}, {Value: "1", Label: "是"}}, Value: "0"},
 		},
 		TaskInputs: []cert.ConfigField{
 			{Name: "服务空间ID", Key: "spaceId", Type: "input", Required: true},
@@ -462,7 +459,6 @@ func registerCloudConfigs() {
 		Inputs: []cert.ConfigField{
 			{Name: "账号", Key: "username", Type: "input", Required: true},
 			{Name: "密码", Key: "password", Type: "input", Required: true},
-			{Name: "使用代理", Key: "proxy", Type: "radio", Options: []cert.ConfigOption{{Value: "0", Label: "否"}, {Value: "1", Label: "是"}}, Value: "0"},
 		},
 		TaskInputs: []cert.ConfigField{
 			{Name: "域名ID", Key: "id", Type: "input", Required: true},

@@ -2,6 +2,7 @@ package base
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -50,6 +51,26 @@ type DeployProvider interface {
 
 	// SetLogger 设置日志记录器
 	SetLogger(logger Logger)
+}
+
+/*
+ * DeployInfo 部署器回传的附加信息
+ * Config 内的键会合并回部署任务配置，其余键序列化后存入任务 info 字段
+ */
+type DeployInfo struct {
+	Config map[string]interface{}
+	Data   map[string]interface{}
+}
+
+/*
+ * DeployWithInfoProvider 可回传附加信息的部署器接口
+ * 单独拆分而不加入 DeployProvider，是为了让现有部署器无需改动即可满足 DeployProvider
+ */
+type DeployWithInfoProvider interface {
+	DeployProvider
+
+	// DeployWithInfo 部署证书并回传附加信息
+	DeployWithInfo(ctx context.Context, fullchain, privateKey string, config map[string]interface{}, info *DeployInfo) error
 }
 
 /* ProviderFactory 部署器工厂函数类型 */
@@ -111,6 +132,67 @@ func (p *BaseProvider) Log(msg string) {
 	if p.Logger != nil {
 		p.Logger(msg)
 	}
+}
+
+/*
+ * ProviderDeployWithInfo 执行部署并收集附加信息
+ * BaseProvider 不提供 DeployWithInfo，否则嵌入它的部署器会因方法提升而误判为
+ * 支持回传，导致实际部署被默认实现吞掉；未实现该接口时退化为普通部署
+ */
+func ProviderDeployWithInfo(ctx context.Context, provider DeployProvider, fullchain, privateKey string, config map[string]interface{}, info *DeployInfo) error {
+	if info == nil {
+		info = &DeployInfo{}
+	}
+	if withInfo, ok := provider.(DeployWithInfoProvider); ok {
+		return withInfo.DeployWithInfo(ctx, fullchain, privateKey, config, info)
+	}
+	return provider.Deploy(ctx, fullchain, privateKey, config)
+}
+
+/*
+ * InfoUpdates 把回传信息转换为 cert_deploy 表的更新字段
+ * 返回 nil 表示本次没有需要落库的回传内容
+ */
+func InfoUpdates(rawConfig, rawInfo string, info *DeployInfo) map[string]interface{} {
+	if info == nil {
+		return nil
+	}
+	updates := make(map[string]interface{})
+	if len(info.Config) > 0 {
+		merged := decodeJSONObject(rawConfig)
+		for k, v := range info.Config {
+			merged[k] = v
+		}
+		if configJSON, err := json.Marshal(merged); err == nil {
+			updates["config"] = string(configJSON)
+		}
+	}
+	if len(info.Data) > 0 {
+		merged := decodeJSONObject(rawInfo)
+		for k, v := range info.Data {
+			merged[k] = v
+		}
+		if infoJSON, err := json.Marshal(merged); err == nil {
+			updates["info"] = string(infoJSON)
+		}
+	}
+	if len(updates) == 0 {
+		return nil
+	}
+	return updates
+}
+
+/* decodeJSONObject 解析 JSON 对象字符串，空串或非对象内容返回空 map */
+func decodeJSONObject(raw string) map[string]interface{} {
+	merged := map[string]interface{}{}
+	if raw == "" {
+		return merged
+	}
+	_ = json.Unmarshal([]byte(raw), &merged)
+	if merged == nil {
+		merged = map[string]interface{}{}
+	}
+	return merged
 }
 
 /* GetString 从配置中获取字符串值（支持大小写不敏感 + 下划线/驼峰互转） */

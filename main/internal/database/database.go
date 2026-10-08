@@ -31,17 +31,18 @@ func IsSQLite() bool {
 	return DB.Dialector.Name() == "sqlite"
 }
 
-func optimizeSQLite(db *gorm.DB) {
-	sqlDB, err := db.DB()
-	if err != nil {
-		return
-	}
-	sqlDB.Exec("PRAGMA journal_mode=WAL")
-	sqlDB.Exec("PRAGMA synchronous=NORMAL")
-	sqlDB.Exec("PRAGMA cache_size=-64000") // 64MB cache
-	sqlDB.Exec("PRAGMA busy_timeout=5000")
-	sqlDB.Exec("PRAGMA temp_store=MEMORY")
-	_, _ = sqlDB.Exec("PRAGMA mmap_size=67108864") // 64MiB
+/* sqliteDSN 构造 SQLite 连接串
+ * glebarez/go-sqlite 仅识别 _pragma、_time_format、_txlock 三类 DSN 参数，
+ * 且在每个新连接建立时重新执行 _pragma，因此 PRAGMA 必须写进 DSN 才能
+ * 覆盖连接池中的每一条连接；_busy_timeout、_journal_mode 不是该驱动的参数名
+ */
+func sqliteDSN(path string) string {
+	return path + "?_pragma=journal_mode(WAL)" +
+		"&_pragma=synchronous(NORMAL)" +
+		"&_pragma=busy_timeout(5000)" +
+		"&_pragma=cache_size(-16000)" +
+		"&_pragma=temp_store(MEMORY)" +
+		"&_pragma=mmap_size(67108864)"
 }
 
 func applySQLiteConnPool(db *gorm.DB) {
@@ -49,8 +50,9 @@ func applySQLiteConnPool(db *gorm.DB) {
 	if err != nil {
 		return
 	}
-	sqlDB.SetMaxOpenConns(64)
-	sqlDB.SetMaxIdleConns(32)
+	// SQLite 单文件写入串行化，连接数超出必要范围只增加 page cache 内存占用而无吞吐收益
+	sqlDB.SetMaxOpenConns(8)
+	sqlDB.SetMaxIdleConns(4)
 	sqlDB.SetConnMaxIdleTime(5 * time.Minute)
 	sqlDB.SetConnMaxLifetime(0)
 }
@@ -69,8 +71,11 @@ func applyMySQLConnPool(db *gorm.DB) {
 func Init(cfg *config.DatabaseConfig) error {
 	var err error
 
+	// SkipDefaultTransaction 关闭 GORM 为单条写操作包裹的隐式事务
+	// 本项目无显式事务、无多行批量插入、库内无外键约束，逐条提交只增加 WAL fsync 次数
 	gormConfig := &gorm.Config{
-		Logger: gormlogger.Default.LogMode(gormlogger.Silent),
+		Logger:                 gormlogger.Default.LogMode(gormlogger.Silent),
+		SkipDefaultTransaction: true,
 	}
 
 	switch cfg.Driver {
@@ -89,37 +94,27 @@ func Init(cfg *config.DatabaseConfig) error {
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			return fmt.Errorf("创建数据目录失败: %w", err)
 		}
-		dsn := cfg.FilePath + "?_busy_timeout=5000&_journal_mode=WAL"
-		DB, err = gorm.Open(sqlite.Open(dsn), gormConfig)
+		DB, err = gorm.Open(sqlite.Open(sqliteDSN(cfg.FilePath)), gormConfig)
 		if err != nil {
 			return fmt.Errorf("连接SQLite数据库失败: %w", err)
 		}
-		optimizeSQLite(DB)
 		applySQLiteConnPool(DB)
 	}
 
 	// 初始化日志数据库 (LogDB)
 	logDBPath := cfg.LogDBPath()
-	logDSN := logDBPath + "?_busy_timeout=5000&_journal_mode=WAL"
-	LogDB, err = gorm.Open(sqlite.Open(logDSN), &gorm.Config{
-		Logger: gormlogger.Default.LogMode(gormlogger.Silent),
-	})
+	LogDB, err = gorm.Open(sqlite.Open(sqliteDSN(logDBPath)), gormConfig)
 	if err != nil {
 		return fmt.Errorf("连接日志数据库失败: %w", err)
 	}
-	optimizeSQLite(LogDB)
 	applySQLiteConnPool(LogDB)
 
 	// 初始化请求日志数据库 (RequestDB)
 	requestDBPath := cfg.RequestDBPath()
-	requestDSN := requestDBPath + "?_busy_timeout=5000&_journal_mode=WAL"
-	RequestDB, err = gorm.Open(sqlite.Open(requestDSN), &gorm.Config{
-		Logger: gormlogger.Default.LogMode(gormlogger.Silent),
-	})
+	RequestDB, err = gorm.Open(sqlite.Open(sqliteDSN(requestDBPath)), gormConfig)
 	if err != nil {
 		return fmt.Errorf("连接请求日志数据库失败: %w", err)
 	}
-	optimizeSQLite(RequestDB)
 	applySQLiteConnPool(RequestDB)
 
 	if err := migrate(); err != nil {

@@ -118,22 +118,23 @@ func (p *CtyunCDNProvider) Deploy(ctx context.Context, fullchain, privateKey str
 	} else {
 		p.Log("上传证书成功 cert_name=" + certName)
 	}
-
-	// 部署到域名
-	deployParam := map[string]interface{}{
-		"domain":       domain,
-		"https_status": "on",
-		"cert_name":    certName,
-	}
-
-	_, err = p.request(ctx, host, "POST", "/v1/domain/update-domain", deployParam)
-	if err != nil {
-		if !strings.Contains(err.Error(), "请求已提交，请勿重复操作") {
-			return fmt.Errorf("部署证书失败: %v", err)
+	for _, item := range base.SplitDomains(domain) {
+		deployParam := map[string]interface{}{
+			"domain":       item,
+			"https_status": "on",
+			"cert_name":    certName,
 		}
+
+		_, err = p.request(ctx, host, "POST", "/v1/domain/update-domain", deployParam)
+		if err != nil {
+			if !strings.Contains(err.Error(), "请求已提交，请勿重复操作") {
+				return fmt.Errorf("部署证书失败: %v", err)
+			}
+		}
+
+		p.Log(fmt.Sprintf("CDN域名 %s 部署证书成功", item))
 	}
 
-	p.Log(fmt.Sprintf("CDN域名 %s 部署证书成功", domain))
 	return nil
 }
 

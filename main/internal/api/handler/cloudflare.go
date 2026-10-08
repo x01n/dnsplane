@@ -9,6 +9,7 @@ import (
 	maindns "main/internal/dns"
 	"main/internal/models"
 	"main/internal/service"
+	"net"
 	"net/http"
 	"sort"
 	"strconv"
@@ -58,7 +59,6 @@ func getCFEnhanceService(accountID uint) (*service.EnhanceService, *models.Accou
 
 	email := config["email"]
 	apiKey := config["apikey"]
-	proxy := config["proxy"] == "1"
 
 	auth := 0
 	if config["auth"] == "1" {
@@ -67,7 +67,7 @@ func getCFEnhanceService(accountID uint) (*service.EnhanceService, *models.Accou
 		auth = service.DetectAuthMode(apiKey)
 	}
 
-	svc := service.NewEnhanceService(email, apiKey, auth, proxy, config["account_id"])
+	svc := service.NewEnhanceService(email, apiKey, auth, config["account_id"])
 	return svc, &account, nil
 }
 
@@ -123,6 +123,18 @@ func getCFAccountContextForRequest(c *gin.Context, accountID uint) (*service.Enh
 	}
 	if !isAdmin(c) && account.UserID != currentUIDUint(c) {
 		return nil, nil, fmt.Errorf("无权限操作该账户")
+	}
+	/*
+	 * 该入口只服务 Tunnel 及其配套路由（公网主机名、CIDR、Hostname Route），
+	 * 与 PHP getCloudflareAccountContext 的 requireTunnelApiToken=true 同义：
+	 * Tunnels 的接口只认 API 令牌，Global API Key 会被 Cloudflare 拒绝，
+	 * 提前拦下可避免用户拿到一串难懂的远端报错
+	 *
+	 * PHP 还在 service 层用 assertTunnelSupported 逐方法重复校验，Go 侧只保留这一处：
+	 * 本函数是全部隧道入口的唯一出口，逐方法重复不增加覆盖面
+	 */
+	if !svc.IsApiTokenAuth() {
+		return nil, nil, fmt.Errorf("Cloudflare Tunnels 仅支持 API 令牌认证，请将当前账户的认证方式切换为 API令牌")
 	}
 	return svc, account, nil
 }
@@ -290,6 +302,109 @@ func cfMatchHostnameToDomainRecordName(hostname, domainName string, allowRelativ
 		}
 	}
 	return "", false
+}
+
+/*
+ * cfValidateCustomOrigin 校验自定义主机名的源站，返回空串表示通过
+ *
+ * 规则对齐 PHP 版 validateCustomOrigin，顺序也保持一致，让前端按序展示首个错误。
+ * 不复用 cfValidHostname：后者按 CF 主机名建模——允许 *. 通配、强制至少两个 label、
+ * 只认 a-z0-9 与连字符，而源站是探源域名，单 label（内网源站）与含下划线的记录名
+ * 都应放行；反过来说通配符在源站上是非法的，cfValidHostname 却会放行。
+ * 这里用的是 checkDomain 的同款判据：允许 _ 与 *.、首字符不得为点或连字符、
+ * 末字符不得为点、长度不超过 253
+ */
+func cfValidateCustomOrigin(origin string) string {
+	if origin == "" {
+		return ""
+	}
+	if strings.Contains(origin, "://") {
+		return "自定义源站不支持填写 http:// 或 https://"
+	}
+	if strings.Contains(origin, "*") {
+		return "自定义源站不支持通配符"
+	}
+	if strings.Contains(origin, "/") {
+		return "自定义源站格式不正确"
+	}
+	if cfOriginHasPortSuffix(origin) {
+		return "自定义源站不支持端口"
+	}
+	if net.ParseIP(origin) != nil {
+		return "自定义源站不支持 IP 地址，请填写域名"
+	}
+	if !cfValidOriginDomain(origin) {
+		return "自定义源站格式不正确"
+	}
+	return ""
+}
+
+/* cfValidateSSLParams 校验自定义主机名的证书验证方式与最低 TLS 版本，返回空串表示通过 */
+func cfValidateSSLParams(sslMethod, minTLSVersion string) string {
+	if sslMethod != "txt" && sslMethod != "http" {
+		return "证书验证方法无效"
+	}
+	if !cfValidMinTLSVersion(minTLSVersion) {
+		return "最低 TLS 版本无效"
+	}
+	return ""
+}
+
+/* cfValidMinTLSVersion 判断最低 TLS 版本是否在 Cloudflare 接受的四档之内 */
+func cfValidMinTLSVersion(version string) bool {
+	switch version {
+	case "1.0", "1.1", "1.2", "1.3":
+		return true
+	}
+	return false
+}
+
+/*
+ * cfOriginHasPortSuffix 判断源站末尾是否为「IPv4 形式的 host + 纯数字端口」
+ *
+ * 只认含点的 host：IPv6 字面量本身由冒号分隔，若把末尾的纯数字段一律当端口，
+ * 2001:db8::1 会被误判成端口而不是 IP。PHP 用 FILTER_VALIDATE_IP 先于端口规则命中，
+ * 这里让端口规则同样只覆盖带点形式，行为与之等价
+ */
+func cfOriginHasPortSuffix(origin string) bool {
+	idx := strings.LastIndex(origin, ":")
+	if idx < 0 || idx == len(origin)-1 {
+		return false
+	}
+	if !strings.Contains(origin[:idx], ".") {
+		return false
+	}
+	port := origin[idx+1:]
+	if len(port) > 5 {
+		return false
+	}
+	for _, r := range port {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+/* cfValidOriginDomain 校验源站域名格式，对应 PHP 的 checkDomain */
+func cfValidOriginDomain(origin string) bool {
+	if len(origin) < 4 || len(origin) > 253 {
+		return false
+	}
+	if !strings.Contains(origin, ".") {
+		return false
+	}
+	if strings.HasPrefix(origin, ".") || strings.HasPrefix(origin, "-") || strings.HasSuffix(origin, ".") {
+		return false
+	}
+	for _, r := range origin {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '.', r == '_':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 type cfTxtTargetDomain struct {
@@ -645,12 +760,13 @@ func AddCustomHostname(c *gin.Context) {
 		return
 	}
 
-	// 验证自定义 origin
-	if customOrigin != "" {
-		if strings.HasPrefix(customOrigin, "http://") || strings.HasPrefix(customOrigin, "https://") {
-			c.JSON(http.StatusBadRequest, gin.H{"code": 1, "msg": "自定义源不能包含 http:// 或 https:// 前缀"})
-			return
-		}
+	if msg := cfValidateSSLParams(sslMethod, minTLSVersion); msg != "" {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 1, "msg": msg})
+		return
+	}
+	if msg := cfValidateCustomOrigin(customOrigin); msg != "" {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 1, "msg": msg})
+		return
 	}
 
 	result, err := svc.CreateCustomHostname(domain.ThirdID, hostname, customOrigin, sslMethod, minTLSVersion)
@@ -717,14 +833,21 @@ func UpdateCustomHostname(c *gin.Context) {
 
 	updates := make(map[string]interface{})
 
+	// 单条更新对齐 PHP hostnames_update：源站与 SSL 参数都会下发，因此按必填档校验
+	if msg := cfValidateSSLParams(cfStringDefault(body, c, "ssl_method", "txt"), cfStringDefault(body, c, "min_tls_version", "1.0")); msg != "" {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 1, "msg": msg})
+		return
+	}
+	if msg := cfValidateCustomOrigin(cfString(body, c, "custom_origin_server")); msg != "" {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 1, "msg": msg})
+		return
+	}
+
 	if customOrigin := cfString(body, c, "custom_origin_server"); customOrigin != "" {
 		updates["custom_origin_server"] = customOrigin
 	}
 
 	if sslMethod := cfString(body, c, "ssl_method"); sslMethod != "" {
-		if sslMethod == "" {
-			sslMethod = "http"
-		}
 		sslPayload := map[string]interface{}{
 			"method": sslMethod,
 			"type":   "dv",
@@ -811,8 +934,12 @@ func BatchAddCustomHostnames(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 1, "msg": "主机名列表不能为空"})
 		return
 	}
-	if customOrigin != "" && (strings.HasPrefix(customOrigin, "http://") || strings.HasPrefix(customOrigin, "https://")) {
-		c.JSON(http.StatusBadRequest, gin.H{"code": 1, "msg": "自定义源不能包含 http:// 或 https:// 前缀"})
+	if msg := cfValidateSSLParams(sslMethod, minTLSVersion); msg != "" {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 1, "msg": msg})
+		return
+	}
+	if msg := cfValidateCustomOrigin(customOrigin); msg != "" {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 1, "msg": msg})
 		return
 	}
 
@@ -870,8 +997,17 @@ func BatchUpdateCustomHostnames(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 1, "msg": "hostname_ids 不能为空"})
 		return
 	}
-	if customOrigin != "" && (strings.HasPrefix(customOrigin, "http://") || strings.HasPrefix(customOrigin, "https://")) {
-		c.JSON(http.StatusBadRequest, gin.H{"code": 1, "msg": "自定义源不能包含 http:// 或 https:// 前缀"})
+	// 批量更新允许留空表示「保持不变」，因此仅对显式传入的值校验
+	if sslMethod != "" && sslMethod != "txt" && sslMethod != "http" {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 1, "msg": "证书验证方法无效"})
+		return
+	}
+	if minTLSVersion != "" && !cfValidMinTLSVersion(minTLSVersion) {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 1, "msg": "最低 TLS 版本无效"})
+		return
+	}
+	if msg := cfValidateCustomOrigin(customOrigin); msg != "" {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 1, "msg": msg})
 		return
 	}
 
@@ -2322,9 +2458,52 @@ func GetDomainDefaultLine(c *gin.Context) {
 		return
 	}
 
-	// Cloudflare 默认线路为 "0" (仅DNS)
 	c.JSON(http.StatusOK, gin.H{
 		"code": 0,
-		"data": gin.H{"default_line": "0"},
+		"data": gin.H{"default_line": cfDefaultLine(c, domainID)},
 	})
+}
+
+// cfDefaultLine 解析域名对应的默认线路，供自定义主机名的验证记录写入使用
+// 入参既接受面板域名 ID，也接受域名本身；查不到时统一回退 "0"（Cloudflare 仅 DNS）
+func cfDefaultLine(c *gin.Context, domainID string) string {
+	const fallback = "0"
+
+	if !middleware.UserModuleAllowed(c, "domain") {
+		return fallback
+	}
+
+	var domain models.Domain
+	query := database.WithContext(c)
+	if id, err := strconv.ParseUint(strings.TrimSpace(domainID), 10, 32); err == nil {
+		query = query.Where("id = ?", uint(id))
+	} else {
+		query = query.Where("name = ?", strings.TrimSpace(domainID))
+	}
+	if err := query.First(&domain).Error; err != nil {
+		return fallback
+	}
+
+	if !isAdmin(c) && !middleware.CheckDomainPermission(currentUID(c), c.GetInt("level"), strconv.FormatUint(uint64(domain.ID), 10)) {
+		return fallback
+	}
+
+	// 服务商线路列表的第一条即默认线路；Cloudflare 恒为 "0"（仅 DNS），无需调用 API
+	if provider, err := getDNSProviderByDomain(&domain); err == nil && provider != nil {
+		if lines, lerr := provider.GetRecordLine(c.Request.Context()); lerr == nil && len(lines) > 0 {
+			if line := strings.TrimSpace(lines[0].ID); line != "" {
+				return line
+			}
+		}
+	}
+
+	// 服务商不可用或未声明线路时，回退到静态映射，仍然失败才用 fallback
+	var account models.Account
+	if err := database.WithContext(c).Where("id = ?", domain.AccountID).First(&account).Error; err != nil {
+		return fallback
+	}
+	if line := strings.TrimSpace(maindns.DefaultDNSLine(account.Type)); line != "" {
+		return line
+	}
+	return fallback
 }

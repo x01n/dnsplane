@@ -766,7 +766,7 @@ export default function DomainRecordsClient() {
       {/* 页面头部 */}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="flex items-start gap-3 min-w-0">
-          <Button variant="ghost" size="icon" className="shrink-0 mt-0.5" onClick={() => router.push('/dashboard/domains')}>
+          <Button variant="ghost" size="icon" className="shrink-0 mt-0.5" aria-label="返回域名列表" onClick={() => router.push('/dashboard/domains')}>
             <ArrowLeft className="h-5 w-5" />
           </Button>
           <div className="min-w-0">
@@ -1166,6 +1166,7 @@ export default function DomainRecordsClient() {
                             variant="ghost"
                             size="icon"
                             className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity"
+                            aria-label="复制记录值"
                             onClick={() => handleCopyValue(Array.isArray(record.Value) ? record.Value.join(', ') : record.Value)}
                           >
                             <Copy className="h-3.5 w-3.5" />
@@ -1199,7 +1200,7 @@ export default function DomainRecordsClient() {
                       <TableCell>
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
-                            <Button variant="ghost" size="icon" className="h-8 w-8">
+                            <Button variant="ghost" size="icon" className="h-8 w-8" aria-label="更多操作">
                               <MoreHorizontal className="h-4 w-4" />
                             </Button>
                           </DropdownMenuTrigger>
@@ -1263,7 +1264,7 @@ export default function DomainRecordsClient() {
                   <div className="absolute top-3 right-3">
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
-                        <Button variant="ghost" size="icon" className="h-7 w-7">
+                        <Button variant="ghost" size="icon" className="h-7 w-7" aria-label="更多操作">
                           <MoreHorizontal className="h-4 w-4" />
                         </Button>
                       </DropdownMenuTrigger>
@@ -1305,6 +1306,7 @@ export default function DomainRecordsClient() {
                         variant="ghost"
                         size="icon"
                         className="h-7 w-7 shrink-0"
+                        aria-label="复制记录值"
                         onClick={() => handleCopyValue(Array.isArray(record.Value) ? record.Value.join(', ') : record.Value)}
                       >
                         <Copy className="h-3.5 w-3.5" />

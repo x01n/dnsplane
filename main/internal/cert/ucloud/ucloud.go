@@ -31,11 +31,6 @@ func init() {
 			{Name: "姓名", Key: "username", Type: "input", Required: true},
 			{Name: "手机号码", Key: "phone", Type: "input", Required: true},
 			{Name: "邮箱地址", Key: "email", Type: "input", Required: true},
-			{
-				Name: "使用代理服务器", Key: "proxy", Type: "radio",
-				Options: []cert.ConfigOption{{Value: "0", Label: "否"}, {Value: "1", Label: "是"}},
-				Value:   "0",
-			},
 		},
 		CNAME:    false,
 		IsDeploy: false,
@@ -48,7 +43,6 @@ type Provider struct {
 	username   string
 	phone      string
 	email      string
-	proxy      bool
 	client     *http.Client
 	logger     cert.Logger
 }
@@ -61,9 +55,6 @@ func NewProvider(config, ext map[string]interface{}) cert.Provider {
 		phone:      getString(config, "phone"),
 		email:      getString(config, "email"),
 		client:     &http.Client{Timeout: 30 * time.Second},
-	}
-	if v, ok := config["proxy"]; ok {
-		p.proxy = fmt.Sprintf("%v", v) == "1"
 	}
 	return p
 }
@@ -143,8 +134,7 @@ func (p *Provider) CreateOrder(ctx context.Context, domains []string, order *cer
 	csrKeyParam := "2048"
 	if keyType == "RSA" {
 		if keySize == "4096" {
-			csrKeyParam = "4096" // UCloud might support this? PHP code had mapping.
-			// PHP: '2048' => '2048', '3072' => '3072', '256' => 'prime256v1', '384' => 'prime384v1'
+			csrKeyParam = "4096"
 		} else {
 			csrKeyParam = "2048"
 		}
@@ -214,7 +204,6 @@ func (p *Provider) CreateOrder(ctx context.Context, domains []string, order *cer
 			}
 
 			// Simple logic to strip domain. Assuming authKey ends with "."+domain or is just domain?
-			// PHP: substr($authKey, 0, -(strlen($mainDomain) + 1));
 			// We don't have mainDomain easily here without parsing.
 			// But usually we just return the full name and type/value, the caller handles logic?
 			// `processCertOrderAsync` expects:

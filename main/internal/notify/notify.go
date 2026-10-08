@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/smtp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -28,6 +29,10 @@ const (
 	NotifyFeishu    NotifyType = "feishu"
 	NotifyWxWorkApp NotifyType = "wxwork_app"
 	NotifyWxTpl     NotifyType = "wxtpl"
+	NotifyWxPusher  NotifyType = "wxpusher"
+	NotifyQQBot     NotifyType = "qqbot"
+	/* NotifyCustomWebhook 自定义 Webhook，与 NotifyWebhook 的通用渠道并存：地址与报文完全由用户定义 */
+	NotifyCustomWebhook NotifyType = "custom_webhook"
 )
 
 /* Notifier 通知发送接口，所有通知渠道实现此接口 */
@@ -56,6 +61,53 @@ type EmailNotifier struct {
 
 func NewEmailNotifier(config EmailConfig) *EmailNotifier {
 	return &EmailNotifier{config: config}
+}
+
+/*
+ * emailHTMLContent 将通知正文转为邮件可用的 HTML 片段
+ * NotifyManager 与 monitor 告警的 content 契约为纯文本（+ \n），不含 HTML 标签；
+ * 而邮件后端按 HTML 投递（SMTP Content-Type: text/html、Sendcloud 的 html 字段、
+ * DirectMail 的 HtmlBody），纯文本的 \n 会塌成一行，故需转义
+ * 判定依据来自实测：templates.go 的 6 个模板邮件均以 <!DOCTYPE html> 起始，
+ * 模板邮件走 auth.go / dashboard.go 的独立构造点，不经本函数
+ * 误判方向取舍：纯文本被当成 HTML 仅导致换行未生效（可接受），
+ * 反之则会损坏模板邮件的样式表（详见实测：无条件替换会在 <style> 内插入 12 个 <br/>）
+ * @param content 通知正文
+ * @returns 邮件 HTML 正文
+ */
+func emailHTMLContent(content string) string {
+	if strings.HasPrefix(strings.TrimSpace(content), "<") {
+		return content
+	}
+	// 先转义 HTML 特殊字符，避免纯文本中的 < 被当作标签解析
+	escaped := strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;").Replace(content)
+	escaped = strings.ReplaceAll(escaped, "\r\n", "\n")
+	escaped = strings.ReplaceAll(escaped, "\r", "\n")
+	return strings.ReplaceAll(escaped, "\n", "<br/>")
+}
+
+/*
+ * mailContentAdapter 邮件正文适配器
+ * 包装各类邮件后端，在交给内部实现前完成纯文本到 HTML 片段的转换，
+ * 使 SMTP / Sendcloud / DirectMail 三种后端共用同一契约而无需各自重复转换逻辑
+ */
+type mailContentAdapter struct {
+	inner Notifier
+}
+
+func (a *mailContentAdapter) Send(ctx context.Context, title, content string) error {
+	return a.inner.Send(ctx, title, emailHTMLContent(content))
+}
+
+/*
+ * NewMailContentAdapter 包装任意邮件后端，使其接受纯文本契约
+ * 供邮件通知之外的构造点（如 internal/monitor 的容灾告警）使用，
+ * 避免各处重复实现纯文本到 HTML 片段的转换逻辑
+ * @param inner 已构造的邮件后端
+ * @returns 包装后的通知发送器
+ */
+func NewMailContentAdapter(inner Notifier) Notifier {
+	return &mailContentAdapter{inner: inner}
 }
 
 func (n *EmailNotifier) Send(ctx context.Context, title, content string) error {
@@ -251,6 +303,11 @@ func (a *loginAuth) Next(fromServer []byte, more bool) ([]byte, error) {
 type TelegramConfig struct {
 	BotToken string `json:"bot_token"`
 	ChatID   string `json:"chat_id"`
+	// TopicID 超级群话题 ID（tgbot_topicid），>0 时作为 message_thread_id 发送
+	TopicID string `json:"topic_id"`
+	// ServerURL 自定义反代地址（tgbot_url），仅当 ProxyMode 为 2 时生效
+	ServerURL string `json:"server_url"`
+	ProxyMode string `json:"proxy_mode"`
 }
 
 /* TelegramNotifier Telegram Bot 通知发送器 */
@@ -266,17 +323,48 @@ func NewTelegramNotifier(config TelegramConfig) *TelegramNotifier {
 	}
 }
 
-func (n *TelegramNotifier) Send(ctx context.Context, title, content string) error {
-	url := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", n.config.BotToken)
-	text := fmt.Sprintf("<b>%s</b>\n\n%s", title, content)
+/*
+ * telegramBaseURL 计算 Telegram API 基址
+ * 仅当 tgbot_proxy == 2 且 tgbot_url 非空时改用自定义反代地址（去除尾部斜杠）
+ * @returns API 基址
+ */
+func (n *TelegramNotifier) telegramBaseURL() string {
+	if n.config.ProxyMode == "2" {
+		if custom := strings.TrimSpace(n.config.ServerURL); custom != "" {
+			return strings.TrimRight(custom, "/")
+		}
+	}
+	return "https://api.telegram.org"
+}
 
+/*
+ * buildTelegramPayload 构建 sendMessage 请求体
+ * tgbot_topicid 经 intval 后 > 0 才附加 message_thread_id
+ * @param title   通知标题
+ * @param content 通知正文
+ * @returns 请求体
+ */
+func (n *TelegramNotifier) buildTelegramPayload(title, content string) map[string]interface{} {
 	payload := map[string]interface{}{
 		"chat_id":    n.config.ChatID,
-		"text":       text,
+		"text":       fmt.Sprintf("<b>%s</b>\n\n%s", title, content),
 		"parse_mode": "HTML",
 	}
+	if topicID, err := strconv.Atoi(strings.TrimSpace(n.config.TopicID)); err == nil && topicID > 0 {
+		payload["message_thread_id"] = topicID
+	}
+	return payload
+}
 
-	body, _ := json.Marshal(payload)
+func (n *TelegramNotifier) Send(ctx context.Context, title, content string) error {
+	baseURL := n.telegramBaseURL()
+	// 出站 URL SSRF 防御（安全审计 R-5）
+	if err := ValidateOutboundURL(baseURL); err != nil {
+		return err
+	}
+	url := fmt.Sprintf("%s/bot%s/sendMessage", baseURL, n.config.BotToken)
+
+	body, _ := json.Marshal(n.buildTelegramPayload(title, content))
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
 	if err != nil {
 		return err
@@ -297,13 +385,17 @@ func (n *TelegramNotifier) Send(ctx context.Context, title, content string) erro
 	return nil
 }
 
-/* WebhookConfig 自定义 Webhook 通知配置 */
+/* WebhookConfig 聚合群机器人 Webhook 通知配置 */
 type WebhookConfig struct {
-	URL         string            `json:"url"`
-	Method      string            `json:"method"`
-	Headers     map[string]string `json:"headers"`
-	ContentType string            `json:"content_type"`
-	Template    string            `json:"template"`
+	URL string `json:"url"`
+	// User 对应 webhook_user：钉钉为手机号列表或 all，飞书为用户 ID 列表或 all，企业微信不支持
+	User string `json:"user"`
+	// ContentFormat 对应 webhook_content_format：html（不转换）/ markdown / text
+	ContentFormat string            `json:"content_format"`
+	Method        string            `json:"method"`
+	Headers       map[string]string `json:"headers"`
+	ContentType   string            `json:"content_type"`
+	Template      string            `json:"template"`
 }
 
 /* WebhookNotifier 自定义 Webhook 通知发送器 */
@@ -325,11 +417,25 @@ func NewWebhookNotifier(config WebhookConfig) *WebhookNotifier {
 	}
 }
 
-func (n *WebhookNotifier) Send(ctx context.Context, title, content string) error {
-	// 出站 URL SSRF 防御（安全审计 R-5）
-	if err := ValidateOutboundURL(n.config.URL); err != nil {
-		return err
+/*
+ * buildBody 构建 Webhook 请求体
+ * 流程：先按 webhook_content_format 转换正文，再判定是否为聚合群机器人地址；
+ * 命中钉钉/企业微信/飞书时走各自的原生 payload，否则回退通用 title/content 模板
+ * @param title   通知标题
+ * @param content 通知正文
+ * @returns 请求体字符串与错误
+ */
+func (n *WebhookNotifier) buildBody(title, content string) (string, error) {
+	switch n.config.ContentFormat {
+	case "markdown":
+		content = stripHTMLTags(strings.NewReplacer("<br/>", "\n", "<b>", "**", "</b>", "**").Replace(content))
+	case "text":
+		content = stripHTMLTags(strings.ReplaceAll(content, "<br/>", "\n"))
 	}
+	if botType, ok := detectWebhookBot(n.config.URL); ok {
+		return buildBotWebhookBody(botType, title, content, n.config.User)
+	}
+
 	body := n.config.Template
 	if body == "" {
 		payload := map[string]string{
@@ -342,8 +448,31 @@ func (n *WebhookNotifier) Send(ctx context.Context, title, content string) error
 		body = strings.ReplaceAll(body, "{title}", title)
 		body = strings.ReplaceAll(body, "{content}", content)
 	}
+	return body, nil
+}
 
-	req, err := http.NewRequestWithContext(ctx, n.config.Method, n.config.URL, strings.NewReader(body))
+func (n *WebhookNotifier) Send(ctx context.Context, title, content string) error {
+	// 出站 URL SSRF 防御（安全审计 R-5）
+	if err := ValidateOutboundURL(n.config.URL); err != nil {
+		return err
+	}
+
+	body, err := n.buildBody(title, content)
+	if err != nil {
+		return err
+	}
+	return n.post(ctx, n.config.URL, body)
+}
+
+/*
+ * post 发送已构建好的请求体
+ * @param ctx    请求上下文
+ * @param url    目标地址
+ * @param body   请求体
+ * @returns error
+ */
+func (n *WebhookNotifier) post(ctx context.Context, url, body string) error {
+	req, err := http.NewRequestWithContext(ctx, n.config.Method, url, strings.NewReader(body))
 	if err != nil {
 		return err
 	}
@@ -367,6 +496,172 @@ func (n *WebhookNotifier) Send(ctx context.Context, title, content string) error
 	return nil
 }
 
+/* webhookBotType 聚合群机器人类型（由 Webhook 地址判定） */
+type webhookBotType int
+
+/*
+ * marshalJSONNoHTMLEscape 序列化 JSON 且不转义 < > &
+ * @param v 待序列化值
+ * @returns JSON 字节与错误
+ */
+func marshalJSONNoHTMLEscape(v interface{}) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
+		return nil, err
+	}
+	// Encoder.Encode 末尾会追加换行，裁剪后与 json.Marshal 输出形态一致
+	return bytes.TrimRight(buf.Bytes(), "\n"), nil
+}
+
+const (
+	webhookBotDingTalk webhookBotType = iota
+	webhookBotWechatWork
+	webhookBotFeishu
+)
+
+/*
+ * detectWebhookBot 按地址判定群机器人类型
+ * @param rawURL 用户配置的 Webhook 地址
+ * @returns 命中的类型与是否命中
+ */
+func detectWebhookBot(rawURL string) (webhookBotType, bool) {
+	switch {
+	case strings.Contains(rawURL, "oapi.dingtalk.com"):
+		return webhookBotDingTalk, true
+	case strings.Contains(rawURL, "qyapi.weixin.qq.com"):
+		return webhookBotWechatWork, true
+	case strings.Contains(rawURL, "open.feishu.cn"), strings.Contains(rawURL, "open.larksuite.com"):
+		return webhookBotFeishu, true
+	}
+	return 0, false
+}
+
+/*
+ * buildBotWebhookBody 构建群机器人请求体
+ *   - 钉钉 markdown 正文加 "### " 前缀且换行改为行尾双空格，@用户走 at.atMobiles / at.isAtAll
+ *   - 企业微信 markdown 正文加 "## " 前缀，无 @
+ *   - 飞书为 schema 2.0 交互卡片，@用户以 <at> 标签追加到正文，卡片配色由标题关键字决定
+ * @param bot     机器人类型
+ * @param title   通知标题
+ * @param content 已按内容格式转换的正文
+ * @param atUser  @用户配置（all 或逗号分隔列表）
+ * @returns JSON 请求体与错误
+ */
+func buildBotWebhookBody(bot webhookBotType, title, content, atUser string) (string, error) {
+	var payload interface{}
+	switch bot {
+	case webhookBotDingTalk:
+		markdown := map[string]interface{}{
+			"title": title,
+			"text":  "### " + title + "  \n " + strings.ReplaceAll(content, "\n", "  \n "),
+		}
+		payload = map[string]interface{}{"msgtype": "markdown", "markdown": markdown}
+		if atUser != "" {
+			at := map[string]interface{}{}
+			if atUser == "all" {
+				at["isAtAll"] = true
+			} else {
+				at["atMobiles"] = strings.Split(atUser, ",")
+				at["isAtAll"] = false
+			}
+			payload.(map[string]interface{})["at"] = at
+		}
+	case webhookBotWechatWork:
+		payload = map[string]interface{}{
+			"msgtype": "markdown",
+			"markdown": map[string]string{
+				"content": "## " + title + "\n" + content,
+			},
+		}
+	case webhookBotFeishu:
+		body := strings.ReplaceAll(content, `<font color="warning">`, `<font color="red">`)
+		if atUser != "" {
+			if atUser == "all" {
+				body += "\n" + `<at id=all></at> `
+			} else {
+				body += "\n"
+				for _, u := range strings.Split(atUser, ",") {
+					body += `<at user_id="` + u + `"></at> `
+				}
+			}
+		}
+		payload = map[string]interface{}{
+			"msg_type": "interactive",
+			"card": map[string]interface{}{
+				"schema": "2.0",
+				"config": map[string]interface{}{
+					"update_multi": true,
+					"style": map[string]interface{}{
+						"text_size": map[string]interface{}{
+							"normal_v2": map[string]string{
+								"default": "normal",
+								"pc":      "normal",
+								"mobile":  "heading",
+							},
+						},
+					},
+				},
+				"header": map[string]interface{}{
+					"title":    map[string]string{"tag": "plain_text", "content": title},
+					"subtitle": map[string]string{"tag": "plain_text", "content": ""},
+					"template": feishuCardTemplate(title),
+					"padding":  "12px 12px 12px 12px",
+				},
+				"body": map[string]interface{}{
+					"direction": "vertical",
+					"padding":   "12px 12px 12px 12px",
+					"elements": []map[string]interface{}{
+						{
+							"tag":        "markdown",
+							"content":    body,
+							"text_align": "left",
+							"text_size":  "normal_v2",
+							"margin":     "0px 0px 0px 0px",
+						},
+					},
+				},
+			},
+		}
+	default:
+		return "", fmt.Errorf("不支持的Webhook类型")
+	}
+
+	bodyBytes, err := marshalJSONNoHTMLEscape(payload)
+	if err != nil {
+		return "", err
+	}
+	return string(bodyBytes), nil
+}
+
+/*
+ * feishuCardTemplate 飞书卡片配色
+ * 判定顺序为告警/失败 -> 恢复正常 -> 到期提醒，均未命中时为 blue
+ * @param title 通知标题
+ * @returns 卡片模板色名
+ */
+func feishuCardTemplate(title string) string {
+	switch {
+	case strings.Contains(title, "发生告警"), strings.Contains(title, "失败"):
+		return "red"
+	case strings.Contains(title, "恢复正常"):
+		return "green"
+	case strings.Contains(title, "到期提醒"):
+		return "yellow"
+	}
+	return "blue"
+}
+
+/*
+ * stripHTMLTags 剥离 HTML 标签，语义
+ * @param s 原始文本
+ * @returns 去除标签后的文本
+ */
+func stripHTMLTags(s string) string {
+	return stripTags(s)
+}
+
 /* NotifyManager 多渠道通知管理器，支持同时发送到多个渠道 */
 type NotifyManager struct {
 	notifiers []Notifier
@@ -382,6 +677,14 @@ func (m *NotifyManager) AddNotifier(n Notifier) {
 	m.notifiers = append(m.notifiers, n)
 }
 
+/*
+ * NotifyManager 的 content 契约为纯文本（+ \n），不含 HTML 标签
+ * 邮件后端按 HTML 投递（SMTP Content-Type: text/html、Sendcloud 的 html 字段、
+ * DirectMail 的 HtmlBody），故纯文本的 \n 会塌成一行，
+ * 需经 NewMailContentAdapter 包装后转义为 <br/> 才能换行
+ * 已是 HTML 的内容（auth.go / dashboard.go 的模板邮件走独立构造点）原样透传
+ * 契约此前未写明，导致邮件分支按 HTML 投递而调用方传纯文本，两边各自都正确却组合出错
+ */
 func (m *NotifyManager) SendAll(ctx context.Context, title, content string) []error {
 	var errors []error
 	for _, n := range m.notifiers {
@@ -555,21 +858,12 @@ func (n *WechatWorkNotifier) Send(ctx context.Context, title, content string) er
  * @param configMap SysConfig key-value 配置映射
  * 功能：自动检测已配置的邮件/Telegram/Webhook/Discord/Bark/企业微信渠道并注册
  */
-/* NotifyConfigKeys 返回通知渠道所需的全部配置键（供外部包按需读取） */
-func NotifyConfigKeys() []string { return notifyConfigKeys }
-
-var notifyConfigKeys = []string{
-	"mail_host", "mail_port", "mail_user", "mail_password", "mail_from", "mail_recv", "mail_secure", "mail_tls",
-	"tgbot_token", "tgbot_chatid",
-	"webhook_url", "webhook_method", "webhook_content_type", "webhook_headers", "webhook_body", "webhook_content_format", "webhook_user",
-	"discord_webhook",
-	"bark_url", "bark_key",
-	"wechat_webhook",
-	"dingtalk_webhook", "dingtalk_secret",
-	"feishu_webhook", "feishu_secret",
-	"wxwork_corpid", "wxwork_agentid", "wxwork_secret", "wxwork_touser",
-	"wxtpl_appid", "wxtpl_appsecret", "wxtpl_template_id", "wxtpl_users", "wxtpl_url",
-}
+/*
+ * NotifyConfigKeys 返回通知渠道所需的全部配置键（供外部包按需读取）
+ * 聚合自渠道注册表：各渠道的配置键、启用开关与容灾告警开关，
+ * 新增渠道时由注册动作自动并入，本文件不再维护任何键清单
+ */
+func NotifyConfigKeys() []string { return ChannelConfigKeys() }
 
 /*
  * LoadNotifiersWithGetter 使用配置读取函数加载通知渠道（缓存友好）
@@ -577,8 +871,9 @@ var notifyConfigKeys = []string{
  *       适用于 executor / task_runner 等后台任务使用 sysconfig 缓存层
  */
 func LoadNotifiersWithGetter(manager *NotifyManager, getter func(key string) string) {
-	configMap := make(map[string]string, len(notifyConfigKeys))
-	for _, key := range notifyConfigKeys {
+	keys := NotifyConfigKeys()
+	configMap := make(map[string]string, len(keys))
+	for _, key := range keys {
 		if v := getter(key); v != "" {
 			configMap[key] = v
 		}
@@ -586,72 +881,34 @@ func LoadNotifiersWithGetter(manager *NotifyManager, getter func(key string) str
 	LoadNotifiersFromConfig(manager, configMap)
 }
 
+/*
+ * LoadMailNotifier 仅装载邮件通知渠道
+ * 委托邮件渠道适配器构造，使按渠道筛选的装载点（internal/monitor 的容灾告警）
+ * 与全量装载共用同一份收件人回退与 mail_type 三路分发，避免两处各写一遍而逐渐分叉
+ * @param manager   通知管理器
+ * @param configMap 系统配置键值
+ * @returns 是否装载了邮件渠道
+ */
+func LoadMailNotifier(manager *NotifyManager, configMap map[string]string) bool {
+	n, ok := buildMailNotifier(configMap)
+	if !ok {
+		return false
+	}
+	manager.AddNotifier(n)
+	return true
+}
+
+/*
+ * LoadNotifiersFromConfig 从配置 map 加载全部已配置且已启用的通知渠道到 manager
+ * 遍历渠道注册表逐个构造，渠道增删只影响注册表，本函数不再随渠道变化而改动
+ * 启用开关的判定在各渠道的 Build 内完成（语义见 ChannelEnabled）
+ * @param manager   通知管理器实例
+ * @param configMap SysConfig key-value 配置映射
+ */
 func LoadNotifiersFromConfig(manager *NotifyManager, configMap map[string]string) {
-	if configMap["mail_host"] != "" && configMap["mail_recv"] != "" {
-		port := 25
-		fmt.Sscanf(configMap["mail_port"], "%d", &port)
-		useTLS := configMap["mail_secure"] == "ssl" || configMap["mail_tls"] == "1"
-		mailTo := configMap["mail_recv"]
-		if mailTo == "" {
-			mailTo = configMap["mail_from"]
+	for _, ch := range Channels() {
+		if n, ok := ch.Build(configMap); ok {
+			manager.AddNotifier(n)
 		}
-		manager.AddNotifier(NewEmailNotifier(EmailConfig{
-			Host: configMap["mail_host"], Port: port,
-			Username: configMap["mail_user"], Password: configMap["mail_password"],
-			From: configMap["mail_from"], To: mailTo, UseTLS: useTLS,
-		}))
-	}
-	if configMap["tgbot_token"] != "" && configMap["tgbot_chatid"] != "" {
-		manager.AddNotifier(NewTelegramNotifier(TelegramConfig{
-			BotToken: configMap["tgbot_token"], ChatID: configMap["tgbot_chatid"],
-		}))
-	}
-	if configMap["webhook_url"] != "" {
-		headers := make(map[string]string)
-		if configMap["webhook_headers"] != "" {
-			lines := strings.Split(configMap["webhook_headers"], "\n")
-			for _, line := range lines {
-				line = strings.TrimSpace(line)
-				if line == "" {
-					continue
-				}
-				pos := strings.Index(line, ":")
-				if pos > 0 {
-					key := strings.TrimSpace(line[:pos])
-					val := strings.TrimSpace(line[pos+1:])
-					if key != "" {
-						headers[key] = val
-					}
-				}
-			}
-		}
-		manager.AddNotifier(NewWebhookNotifier(WebhookConfig{
-			URL:         configMap["webhook_url"],
-			Method:      configMap["webhook_method"],
-			Headers:     headers,
-			ContentType: configMap["webhook_content_type"],
-			Template:    configMap["webhook_body"],
-		}))
-	}
-	if configMap["discord_webhook"] != "" {
-		manager.AddNotifier(NewDiscordNotifier(DiscordConfig{WebhookURL: configMap["discord_webhook"]}))
-	}
-	if configMap["bark_url"] != "" && configMap["bark_key"] != "" {
-		manager.AddNotifier(NewBarkNotifier(BarkConfig{ServerURL: configMap["bark_url"], DeviceKey: configMap["bark_key"]}))
-	}
-	if configMap["wechat_webhook"] != "" {
-		manager.AddNotifier(NewWechatWorkNotifier(WechatWorkConfig{WebhookURL: configMap["wechat_webhook"]}))
-	}
-	if configMap["dingtalk_webhook"] != "" {
-		manager.AddNotifier(NewDingTalkNotifier(DingTalkConfig{WebhookURL: configMap["dingtalk_webhook"], Secret: configMap["dingtalk_secret"]}))
-	}
-	if configMap["feishu_webhook"] != "" {
-		manager.AddNotifier(NewFeishuNotifier(FeishuConfig{WebhookURL: configMap["feishu_webhook"], Secret: configMap["feishu_secret"]}))
-	}
-	if configMap["wxwork_corpid"] != "" && configMap["wxwork_agentid"] != "" && configMap["wxwork_secret"] != "" {
-		manager.AddNotifier(NewWxWorkAppNotifier(WxWorkAppConfig{CorpID: configMap["wxwork_corpid"], AgentID: configMap["wxwork_agentid"], Secret: configMap["wxwork_secret"], ToUser: configMap["wxwork_touser"]}))
-	}
-	if configMap["wxtpl_appid"] != "" && configMap["wxtpl_appsecret"] != "" && configMap["wxtpl_template_id"] != "" && configMap["wxtpl_users"] != "" {
-		manager.AddNotifier(NewWxTplNotifier(WxTplConfig{AppID: configMap["wxtpl_appid"], AppSecret: configMap["wxtpl_appsecret"], TemplateID: configMap["wxtpl_template_id"], ToUsers: configMap["wxtpl_users"], URL: configMap["wxtpl_url"]}))
 	}
 }

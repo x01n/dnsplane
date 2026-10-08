@@ -41,7 +41,9 @@ func (p *AliyunGAProvider) getClient() (*sdk.Client, error) {
 	}
 
 	cred := credentials.NewAccessKeyCredential(accessKeyID, accessKeySecret)
-	conf := sdk.NewConfig()
+	// 必须显式指定 https：SDK 的 NewConfig 默认 Scheme 为 "HTTP"，
+	// 部署路径会传输证书与私钥，明文传输会泄露凭据
+	conf := sdk.NewConfig().WithScheme("https")
 	return sdk.NewClientWithOptions("cn-hangzhou", conf, cred)
 }
 

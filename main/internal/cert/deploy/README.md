@@ -86,6 +86,68 @@ deploy/
 | `unicloud.go` | uniCloud 服务空间 |
 | `kuocai.go` | 括彩云 |
 
+## 双注册规则（新增部署器前必读）
+
+同一个部署器类型可能同时出现在两处注册表，但 `/api/cert/providers` 只输出一份。
+决定哪一份生效的是 `merge_deploy_api.go` 的 `MergeDeployProviderConfigsForAPI`。
+
+### 为什么会有两处注册
+
+- **cert 注册表**：各部署器实现文件 `init()` 里的 `cert.Register(...)`，同时登记工厂函数（供
+  `deploy.GetProvider` 解析后执行部署）和一份 `ProviderConfig`（API 视图用的名称/图标/表单字段）。
+
+两处独立演进，因此同名类型会有两份可能不一致的定义。
+
+### 哪一份生效
+
+`MergeDeployProviderConfigsForAPI` 以 cert 注册表为基底，再遍历 `AllDeployConfigs`：
+
+| 情形 | 处理 |
+|------|------|
+| 类型同时在两处，且**在** `patchServer` 白名单内 | 用 `AllDeployConfigs` 覆盖 Config / DeployConfig / Note / Name / Icon |
+| 类型同时在两处，且**不在**白名单内 | 直接 `continue`，保留 cert 注册表的定义 |
+| 类型仅在 `AllDeployConfigs` | 经 `deployConfigToAPIProviderConfig` 补入为独立 deploy 视图 |
+| 类型仅在 cert 注册表 | 原样保留 |
+
+`patchServer` 是 `merge_deploy_api.go` 中的一个硬编码白名单，当前为 `ssh` / `ftp` / `local`
+—— 这三个服务器类部署器的表单字段以 `AllDeployConfigs` 为准。
+
+注意 `cert.GetProviderConfig` **只查 cert 注册表**，不会回退到 `AllDeployConfigs`。
+需要「cert 优先、deploy 兜底」时由调用方自行处理，参见
+`internal/api/handler/cert.go` 中 `GetCertAccounts` 的 `type_name` 取值。
+
+### 新增部署器时
+
+1. 在 `config_*.go` 里用 `registerDeployConfig` 登记表单字段；
+2. 若该类型还要兼作证书申请用途（`cert.Register` 带非空 `ProviderConfig`），检查类型名是否
+   落在 `patchServer` 白名单 —— 落入则 cert 侧的字段会被 `AllDeployConfigs` 覆盖；
+3. 若 `cert.Register` 的 `IsDeploy=false`（如 `huoshan`），部署视图由 `AllDeployConfigs` 提供；
+4. 若类型只在 `AllDeployConfigs` 登记（如 `nginxproxymanager`、`s3storage`），无需 `cert.Register`。
+
+> 两份定义往往并不一致。实测统计（2026-10-05，随注册表变动需重跑）：
+
+| 集合 | 数量 | 明细 |
+|------|------|------|
+| cert 部署注册表 | 36 | `cert.GetDeployProviderConfigs()` |
+| `AllDeployConfigs` | 53 | `deploy.GetAllDeployConfigs()` |
+| 合并后 `/api/cert/providers` | 63 | `MergeDeployProviderConfigsForAPI` 输出 |
+| **交集** | **26** | `AllDeployConfigs` 赢 3：`ssh` `ftp` `local`（`patchServer` 白名单）；cert 赢 23：`aliyun_cdn` `aws_cloudfront` `btpanel` `cachefly` `cdnfly` `doge` `fnos` `gcore` `goedge` `huawei_cdn` `k8s` `kangle` `kangleadmin` `lecdn` `lucky` `mwpanel` `opanel` `proxmox` `qiniu` `safeline` `synology` `upyun` `xp` |
+| 仅 `AllDeployConfigs` | 27 | 经 `deployConfigToAPIProviderConfig` 补入，含 `nginxproxymanager`、`s3storage` |
+| 仅 cert 注册表 | 10 | `aliyun_dcdn` `aws_acm` `baidu_cdn` `baishan_cdn` `ctyun_cdn` `huoshan_cdn` `ksyun_cdn` `tencent_cdn` `ucloud_cdn` `wangsu_cdn`（均为纯部署类型，无 `AllDeployConfigs` 条目） |
+
+交集 26 个 key 的差异分级 —— **这正是维护者最容易踩的坑**：
+
+| 差异类型 | 数量 | 明细 |
+|----------|------|------|
+| **表单结构不同**（Inputs / TaskInputs 的字段数量或 Key 不同） | **17** | `aliyun_cdn` `btpanel` `cachefly` `cdnfly` `doge` `fnos` `ftp` `gcore` `huawei_cdn` `k8s` `kangle` `lecdn` `local` `qiniu` `ssh` `synology` `upyun` |
+| 仅名称 / 图标不同 | 2 | `goedge`（`goedge.png` vs `waf.png`）、`proxmox`（`proxmox.png` vs `proxmox.ico`） |
+| 仅 Note 文字不同 | 7 | `aws_cloudfront` `kangleadmin` `lucky` `mwpanel` `opanel` `safeline` `xp` |
+| 完全一致 | 0 | — |
+
+典型的结构性差异举例：`btpanel` 的认证字段 cert 版是 `api_key`、`AllDeployConfigs` 版是 `key`；
+`gcore` 是 `apikey` vs `account` 且 cert 版无 TaskInputs；`qiniu` 是 `access_key` vs `AccessKey`；
+`ssh` 是 7 vs 8 个账户字段、5 vs 9 个任务字段。**改表单字段前必须确认自己改的是生效的那一份。**
+
 ## 添加新部署器
 
 1. 在对应子目录创建新文件，如 `providers/my_cdn.go`

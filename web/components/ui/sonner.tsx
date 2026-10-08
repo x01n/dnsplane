@@ -11,6 +11,7 @@ import { useTheme } from "next-themes"
 import { Toaster as Sonner, type ToasterProps } from "sonner"
 
 const Toaster = ({ ...props }: ToasterProps) => {
+  // 默认值必须与 ThemeProvider 的 defaultTheme 一致，否则挂载前一闪
   const { theme = "system" } = useTheme()
 
   return (

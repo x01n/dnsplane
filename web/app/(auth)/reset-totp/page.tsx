@@ -7,8 +7,15 @@ import { toast } from 'sonner'
 import { ShieldOff, ArrowLeft, Loader2, CheckCircle, XCircle, AlertTriangle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { encryptedPost } from '@/lib/api'
+import { useTurnstileGate } from '@/lib/hooks'
+import { TurnstileWidget } from '@/components/turnstile-widget'
+import { TurnstileGateNotice } from '@/components/turnstile-gate-notice'
 import { AuthAnimatedLayout } from '@/components/auth/auth-animated-layout'
 
+/**
+ * POST /api/auth/reset-totp，body { token, turnstile_token }。
+ * token 来自邮件链接的 query；turnstile_token 仅在服务端配置了 turnstile_secret_key 时才被强制校验。
+ */
 function ResetTOTPContent() {
   const searchParams = useSearchParams()
   const token = searchParams.get('token')
@@ -16,6 +23,9 @@ function ResetTOTPContent() {
   const [loading, setLoading] = useState(false)
   const [success, setSuccess] = useState(false)
   const [characterErrorNonce, setCharacterErrorNonce] = useState(0)
+  const turnstile = useTurnstileGate()
+  const [turnstileToken, setTurnstileToken] = useState('')
+  const [turnstileRefreshSignal, setTurnstileRefreshSignal] = useState(0)
 
   const bumpError = () => setCharacterErrorNonce((n) => n + 1)
 
@@ -34,12 +44,18 @@ function ResetTOTPContent() {
       bumpError()
       return
     }
+    if (turnstile.enabled && !turnstileToken) {
+      toast.error('请先完成人机验证')
+      bumpError()
+      return
+    }
 
     setLoading(true)
     try {
       const res = await encryptedPost<{ code: number; msg?: string }>(
         '/auth/reset-totp',
-        { token },
+        // 契约：后端配置了私有密钥就会校验，有合法站点密钥时必须带上 token
+        turnstile.enabled ? { token, turnstile_token: turnstileToken } : { token },
       )
       if (res.code === 0) {
         setSuccess(true)
@@ -47,10 +63,14 @@ function ResetTOTPContent() {
       } else {
         toast.error(res.msg || '重置失败')
         bumpError()
+        setTurnstileToken('')
+        setTurnstileRefreshSignal((n) => n + 1)
       }
     } catch {
       toast.error('重置失败，请稍后重试')
       bumpError()
+      setTurnstileToken('')
+      setTurnstileRefreshSignal((n) => n + 1)
     } finally {
       setLoading(false)
     }
@@ -142,6 +162,21 @@ function ResetTOTPContent() {
             </div>
           </div>
         </div>
+
+        {turnstile.status === 'ready' && (
+          <TurnstileWidget
+            siteKey={turnstile.siteKey}
+            onToken={setTurnstileToken}
+            refreshSignal={turnstileRefreshSignal}
+            disabled={loading}
+          />
+        )}
+
+        <TurnstileGateNotice
+          status={turnstile.status}
+          onRetry={turnstile.retry}
+          disabled={loading}
+        />
 
         <button
           type="button"

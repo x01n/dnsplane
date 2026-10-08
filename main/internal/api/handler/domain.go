@@ -627,7 +627,7 @@ type GetRecordsRequest struct {
 	RecordType string `json:"type" form:"type"`
 	Line       string `json:"line" form:"line"`
 	Status     string `json:"status" form:"status"`       // 1/0、enable/disable，或 ENABLE/DISABLE
-	SubDomain  string `json:"subdomain" form:"subdomain"` // 主机记录（前缀）筛选，与 dnsmgr subdomain 一致
+	SubDomain  string `json:"subdomain" form:"subdomain"` // 主机记录（前缀）筛选
 	Value      string `json:"value" form:"value"`         // 记录值模糊
 	GroupID    string `json:"group_id" form:"group_id"`   // 记录分组 ID
 }

@@ -27,10 +27,6 @@ func init() {
 		Config: []dns.ConfigField{
 			{Name: "用户名", Key: "username", Type: "input", Required: true},
 			{Name: "API密码", Key: "api_password", Type: "input", Required: true},
-			{Name: "使用代理服务器", Key: "proxy", Type: "radio", Options: []dns.ConfigOption{
-				{Value: "0", Label: "否"},
-				{Value: "1", Label: "是"},
-			}, Value: "0"},
 		},
 		Features: dns.ProviderFeatures{
 			Remark: 0, Status: true, Redirect: false, Log: false, Weight: false, Page: false, Add: false,
@@ -45,7 +41,6 @@ type Provider struct {
 	apiPassword string
 	domain      string
 	domainID    string
-	proxy       bool
 	client      *http.Client
 	lastErr     string
 }
@@ -56,7 +51,6 @@ func NewProvider(config map[string]string, domain, domainID string) dns.Provider
 		apiPassword: config["api_password"],
 		domain:      domain,
 		domainID:    domainID,
-		proxy:       config["proxy"] == "1",
 		client:      &http.Client{Timeout: 30 * time.Second},
 	}
 }

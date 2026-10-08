@@ -33,7 +33,6 @@ type Provider struct {
 	token    string
 	domain   string
 	domainID string
-	proxy    bool
 	client   *http.Client
 	lastErr  string
 	records  []map[string]interface{} // cached records
@@ -46,7 +45,6 @@ func NewProvider(config map[string]string, domain, domainID string) dns.Provider
 		token:    config["token"],
 		domain:   domain,
 		domainID: domainID,
-		proxy:    config["proxy"] == "1",
 		client:   &http.Client{Timeout: 30 * time.Second},
 	}
 }

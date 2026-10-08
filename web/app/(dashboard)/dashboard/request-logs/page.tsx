@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useCallback } from "react"
+import { useState, useEffect, useCallback, useRef } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -31,6 +31,8 @@ export default function RequestLogsPage() {
   const [selectedLog, setSelectedLog] = useState<RequestLog | null>(null)
   const [detailOpen, setDetailOpen] = useState(false)
   const [searchId, setSearchId] = useState("")
+  /** 加载失败提示；非空时列表区显示错误态而非空状态 */
+  const [loadError, setLoadError] = useState("")
 
   const fetchLogs = useCallback(async () => {
     setLoading(true)
@@ -45,8 +47,13 @@ export default function RequestLogsPage() {
       if (res.code === 0 && res.data) {
         setLogs(res.data.list || [])
         setTotal(res.data.total)
+        setLoadError("")
+      } else {
+        setLoadError(res.msg || "获取日志失败")
+        toast.error(res.msg || "获取日志失败")
       }
     } catch {
+      setLoadError("获取日志失败")
       toast.error("获取日志失败")
     } finally {
       setLoading(false)
@@ -69,7 +76,24 @@ export default function RequestLogsPage() {
     fetchStats()
   }, [fetchLogs, fetchStats])
 
+  /* 关键词搜索防抖：输入停止 500ms 后回到第一页并重新拉取 */
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const handleKeywordChange = useCallback((value: string) => {
+    setKeyword(value)
+    if (debounceRef.current) clearTimeout(debounceRef.current)
+    debounceRef.current = setTimeout(() => {
+      setPage(1)
+    }, 500)
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current)
+    }
+  }, [])
+
   const handleSearch = () => {
+    if (debounceRef.current) clearTimeout(debounceRef.current)
     setPage(1)
     fetchLogs()
   }
@@ -187,7 +211,7 @@ export default function RequestLogsPage() {
           </DialogHeader>
 
           <Tabs defaultValue="basic" className="flex-1 overflow-hidden flex flex-col">
-            <TabsList>
+            <TabsList className="max-w-full justify-start overflow-x-auto">
               <TabsTrigger value="basic">基本信息</TabsTrigger>
               <TabsTrigger value="request">请求数据</TabsTrigger>
               <TabsTrigger value="response">响应数据</TabsTrigger>
@@ -371,7 +395,7 @@ export default function RequestLogsPage() {
       </div>
 
       {stats && (
-        <div className="grid grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
           <Card>
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium">总请求数</CardTitle>
@@ -416,27 +440,26 @@ export default function RequestLogsPage() {
           <CardDescription>通过请求ID或错误ID快速定位问题</CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="flex gap-4 mb-4">
-            <div className="flex-1 flex gap-2">
-              <Input
-                placeholder="输入请求ID (req_xxx) 或错误ID (err_xxx)"
-                value={searchId}
-                onChange={(e) => setSearchId(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && handleSearchById()}
-              />
-              <Button onClick={handleSearchById}>
-                <Code className="h-4 w-4 mr-2" />
-                ID查询
-              </Button>
-            </div>
+          <div className="flex flex-wrap gap-2 mb-4">
+            <Input
+              placeholder="输入请求ID (req_xxx) 或错误ID (err_xxx)"
+              value={searchId}
+              onChange={(e) => setSearchId(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && handleSearchById()}
+              className="min-w-[min(100%,16rem)] flex-1"
+            />
+            <Button onClick={handleSearchById}>
+              <Code className="h-4 w-4 mr-2" />
+              ID查询
+            </Button>
           </div>
 
-          <div className="flex gap-4 mb-4">
+          <div className="flex flex-wrap gap-2 mb-4">
             <Input
               placeholder="搜索路径、用户名、IP..."
               value={keyword}
-              onChange={(e) => setKeyword(e.target.value)}
-              className="max-w-sm"
+              onChange={(e) => handleKeywordChange(e.target.value)}
+              className="min-w-[min(100%,12rem)] max-w-sm flex-1"
             />
             <Select value={method || "all"} onValueChange={(v) => setMethod(v === "all" ? "" : v)}>
               <SelectTrigger className="w-28">
@@ -472,6 +495,14 @@ export default function RequestLogsPage() {
 
           {loading ? (
             <TableSkeleton rows={5} columns={8} />
+          ) : loadError ? (
+            <EmptyState
+              icon={AlertCircle}
+              title="加载失败"
+              description={loadError}
+              action="重试"
+              onAction={fetchLogs}
+            />
           ) : logs.length === 0 ? (
             <EmptyState
               icon={FileText}

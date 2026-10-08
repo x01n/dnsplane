@@ -1,0 +1,208 @@
+# 构建流水线：前端构建 → 多平台二进制 → GHCR 多架构镜像
+#
+# 依赖约定：使用 Go 模块模式（go mod download），依赖由 actions/setup-go 的
+# 模块缓存承担，仓库不再携带 main/vendor。构建需要网络访问模块代理。
+#
+# 发布规则：
+#   tag refs/tags/v*  → 创建 GitHub Release 并上传各平台二进制
+#   push main/master  → 推送 GHCR 的 :latest 与分支标签
+#   pull_request      → 仅构建验证，不推送
+
+name: Build
+
+on:
+  push:
+    branches: [main, master]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  IMAGE_NAME: ghcr.io/${{ github.repository }}
+
+jobs:
+  # tag 构建时先确保 Release 存在，避免 matrix 各 leg 并发创建造成竞争
+  release-init:
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ensure GitHub Release exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          if ! gh release view "$tag" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            gh release create "$tag" --repo "${GITHUB_REPOSITORY}" --title "$tag" --generate-notes
+          fi
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      # build:ci 会执行 next build 并通过 scripts/sync-main-web.cjs 同步到 main/web
+      - name: Build frontend into main/web
+        working-directory: web
+        run: |
+          npm ci
+          npm run build:ci
+
+      # 用 Actions cache 而非 artifact 传递前端产物，避开 artifact 存储配额
+      - uses: actions/cache/save@v5
+        with:
+          key: embedded-web-${{ github.sha }}
+          path: main/web
+
+  binaries:
+    needs: [frontend, release-init]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            artifact: linux-amd64
+          - goos: linux
+            goarch: arm64
+            artifact: linux-arm64
+          - goos: linux
+            goarch: arm
+            goarm: "7"
+            artifact: linux-armv7
+          - goos: linux
+            goarch: "386"
+            artifact: linux-386
+          - goos: linux
+            goarch: ppc64le
+            artifact: linux-ppc64le
+          - goos: linux
+            goarch: riscv64
+            artifact: linux-riscv64
+          - goos: darwin
+            goarch: amd64
+            artifact: darwin-amd64
+          - goos: darwin
+            goarch: arm64
+            artifact: darwin-arm64
+          - goos: windows
+            goarch: amd64
+            artifact: windows-amd64
+          - goos: windows
+            goarch: arm64
+            artifact: windows-arm64
+          - goos: freebsd
+            goarch: amd64
+            artifact: freebsd-amd64
+          - goos: freebsd
+            goarch: arm64
+            artifact: freebsd-arm64
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/cache/restore@v5
+        with:
+          key: embedded-web-${{ github.sha }}
+          path: main/web
+          fail-on-cache-miss: true
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: main/go.mod
+          cache-dependency-path: main/go.sum
+
+      # go:embed all:web 要求 main/web 已存在，由上方 cache/restore 提供
+      - name: Go build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          GOARM: ${{ matrix.goarm }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd main
+          mkdir -p dist
+          ext=""
+          if [[ "$GOOS" == "windows" ]]; then ext=".exe"; fi
+          name="dnsplane-${{ matrix.artifact }}"
+          CGO_ENABLED=0 go build -buildvcs=false -trimpath \
+            -ldflags="-s -w" -o "dist/${name}${ext}" .
+
+      - name: Upload release asset
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd main/dist
+          shopt -s nullglob
+          files=( *)
+          if [[ ${#files[@]} -eq 0 ]]; then
+            echo "No files in main/dist" >&2
+            exit 1
+          fi
+          gh release upload "${GITHUB_REF_NAME}" "${files[@]}" \
+            --repo "${GITHUB_REPOSITORY}" --clobber
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # 镜像名必须全小写，而 GitHub 仓库名可能含大写
+      - name: Lowercase image name
+        run: |
+          set -euo pipefail
+          echo "IMAGE=${IMAGE_NAME,,}" >> "$GITHUB_ENV"
+        env:
+          IMAGE_NAME: ${{ env.IMAGE_NAME }}
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Login to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix=
+
+      - name: Build and push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: Dockerfile
+          # PR 只验证单架构，主分支与 tag 出三架构
+          platforms: ${{ github.event_name == 'pull_request' && 'linux/amd64' || 'linux/amd64,linux/arm64,linux/arm/v7' }}
+          push: ${{ github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v')) }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

@@ -174,19 +174,6 @@ func (p *AWSCloudFrontProvider) updateCloudFront(ctx context.Context, distID, ce
 	}
 
 	xmlContent := string(bodyBytes)
-
-	// 2. Replace ViewerCertificate
-	// We use regex to replace the <ViewerCertificate>...</ViewerCertificate> block
-	// New block:
-	// <ViewerCertificate>
-	//   <ACMCertificateArn>arn:aws:acm:...</ACMCertificateArn>
-	//   <SSLSupportMethod>sni-only</SSLSupportMethod>
-	//   <MinimumProtocolVersion>TLSv1.2_2021</MinimumProtocolVersion>
-	//   <CertificateSource>acm</CertificateSource>
-	// </ViewerCertificate>
-	// Note: We need to respect existing fields if possible, but usually for ACM we overwrite.
-	// dnsmgr logic: sets ACMCertificateArn, CloudFrontDefaultCertificate=false, removes Certificate, CertificateSource.
-
 	newViewerCert := fmt.Sprintf(`<ViewerCertificate><ACMCertificateArn>%s</ACMCertificateArn><SSLSupportMethod>sni-only</SSLSupportMethod><MinimumProtocolVersion>TLSv1.2_2021</MinimumProtocolVersion><CertificateSource>acm</CertificateSource><CloudFrontDefaultCertificate>false</CloudFrontDefaultCertificate></ViewerCertificate>`, certArn)
 
 	re := cfViewerCertRe

@@ -1,9 +1,5 @@
 import type { ProviderConfigField } from '@/lib/api'
 
-/**
- * 解析后端 deploy/config 中的 show 表达式（与 dnsmgr、DynamicForm 一致）
- * 支持：key==value、key!=value，用 &&、|| 组合；比较值为单引号或双引号包裹或无引号
- */
 export function evaluateDeployFieldShow(
   show: string | undefined,
   values: Record<string, string>

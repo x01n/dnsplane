@@ -12,8 +12,94 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Separator } from '@/components/ui/separator'
 import { toast } from 'sonner'
 import { systemApi, SystemConfig, CronConfig, TaskStatus } from '@/lib/api'
-import { Settings, Mail, MessageSquare, Webhook, Shield, Globe, RefreshCw, CheckCircle, Lock, Send, Bell, Server, Home, UserPlus, Github, Clock, Timer, Building2 } from 'lucide-react'
+import { isValidSiteKey } from '@/lib/site-key'
+import { CustomWebhookFields } from '@/components/custom-webhook-fields'
+import AuthControlSettings from './auth-control-settings'
+import OptimizeIPSettings from './optimize-ip-settings'
+import { Settings, Mail, MessageSquare, Webhook, Shield, Globe, RefreshCw, CheckCircle, Lock, Send, Bell, Server, Home, UserPlus, Github, Clock, Timer, Building2, AlertTriangle, RadioTower, Gauge } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
+
+/** 容灾告警渠道开关：键名对应后端 internal/monitor/monitor.go 的 noticeEnabled 判定点 */
+const NOTICE_CHANNEL_SWITCHES = [
+  { key: 'notice_mail', label: '邮件', hint: '容灾故障切换与恢复的邮件告警' },
+  { key: 'notice_tgbot', label: 'Telegram', hint: '走 Telegram 机器人渠道' },
+  { key: 'notice_webhook', label: 'Webhook', hint: '走通用 Webhook 渠道，含钉钉/飞书/企业微信群机器人' },
+  { key: 'notice_wxtpl', label: 'WxPusher 微信推送', hint: '走 WxPusher 渠道，与下方「公众号模板消息」不是同一个渠道' },
+  { key: 'notice_qqbot', label: 'QQ 机器人', hint: '走 QQ 机器人渠道' },
+  { key: 'notice_custom_webhook', label: '自定义 Webhook', hint: '走下方「自定义 Webhook」渠道，与通用 Webhook 各自独立' },
+] as const
+
+/**
+ * 开关型配置的「未配置视为开启」三态判定：仅显式关闭值才显示为关闭
+ * 判定口径与后端 monitor.noticeEnabled、service.sysconfigBoolDefaultTrue 一致，
+ * 同时用于容灾告警渠道开关与 cert_issue_notice_enabled
+ * @param value SysConfig 中该键的原始值，未配置时为 undefined
+ * @returns 开关应显示的选中状态
+ */
+function noticeSwitchChecked(value: unknown): boolean {
+  const v = String(value ?? '').trim().toLowerCase()
+  return v !== '0' && v !== 'false' && v !== 'no' && v !== 'off'
+}
+
+/**
+ * 证书通知开关的「未配置视为关闭」判定
+ * 判定口径与后端 service.sysconfigBoolExplicitOn 一致，用于 cert_issue_success_notice_enabled
+ * @param value SysConfig 中该键的原始值，未配置时为 undefined
+ * @returns 开关应显示的选中状态
+ */
+function noticeExplicitOn(value: unknown): boolean {
+  const v = String(value ?? '').trim().toLowerCase()
+  return v === 'true' || v === '1' || v === 'yes' || v === 'on'
+}
+
+/**
+ * 第三方验证码类型的配置键对应表
+ *
+ * turnstile 用独立的 turnstile_site_key / turnstile_secret_key（与敏感操作验证共用同一对密钥），
+ * recaptcha / hcaptcha 用通用的 captcha_site_key / captcha_secret_key。
+ * 后端 handler.Login 的分派同样如此：turnstile 走 requireTurnstile 读 turnstile_secret_key，
+ * 另两家走 requireCaptcha 读 captcha_secret_key
+ */
+const THIRD_PARTY_CAPTCHA_KEYS: Record<string, { siteKey: string; secretKey: string; label: string }> = {
+  turnstile: { siteKey: 'turnstile_site_key', secretKey: 'turnstile_secret_key', label: 'Cloudflare Turnstile' },
+  recaptcha: { siteKey: 'captcha_site_key', secretKey: 'captcha_secret_key', label: 'Google reCAPTCHA v2' },
+  hcaptcha: { siteKey: 'captcha_site_key', secretKey: 'captcha_secret_key', label: 'hCaptcha' },
+}
+
+/**
+ * 校验第三方验证码的密钥配置，返回空串表示通过
+ *
+ * 后端 requireTurnstile / requireCaptcha 的语义是「未配置私有密钥即放行」，
+ * 因此「选了第三方类型却没填私钥」不会报错，只会静默退化成无验证码 ——
+ * 六个开关全开却零保护。保存是本页唯一能拦下这个状态的地方
+ *
+ * @param captchaEnabled 是否启用登录验证码
+ * @param captchaType 当前选择的验证码类型
+ * @param config 设置页的完整配置对象
+ * @returns 校验失败的提示文案，通过时为空串
+ */
+function validateThirdPartyCaptcha(
+  captchaEnabled: boolean,
+  captchaType: string,
+  config: SystemConfig,
+): string {
+  if (!captchaEnabled) return ''
+  const keys = THIRD_PARTY_CAPTCHA_KEYS[captchaType]
+  if (!keys) return ''
+
+  const secret = String(config[keys.secretKey] ?? '').trim()
+  const siteKey = String(config[keys.siteKey] ?? '').trim()
+
+  if (secret || siteKey) {
+    if (!secret || !siteKey) {
+      return `已选择 ${keys.label}，请同时填写站点密钥与私有密钥；缺少任一密钥都会让登录验证失效`
+    }
+  }
+  if (siteKey && !isValidSiteKey(siteKey)) {
+    return `${keys.label} 的站点密钥格式不合法，仅允许字母、数字、下划线与连字符`
+  }
+  return ''
+}
 
 export default function SettingsPage() {
   const [config, setConfig] = useState<SystemConfig>({})
@@ -117,6 +203,34 @@ export default function SettingsPage() {
         toast.error('代理端口须为 1–65535，或留空')
         return
       }
+    }
+
+    // 独立 Turnstile 的判据是私有密钥非空（后端 requireTurnstile 只看该键），
+    // 私钥已配置而站点密钥缺失或格式非法时，找回密码与重置二步验证页
+    // 既拿不到验证组件、又会被后端拒绝，用户将无法完成操作，故在此拦截保存
+    const turnstileSecret = (config.turnstile_secret_key || '').trim()
+    if (turnstileSecret) {
+      const siteKey = (config.turnstile_site_key || '').trim()
+      if (!siteKey) {
+        toast.error('已配置 Turnstile 私有密钥，请同时填写站点密钥')
+        return
+      }
+      if (!isValidSiteKey(siteKey)) {
+        toast.error('Turnstile 站点密钥格式不合法，仅允许字母、数字、下划线与连字符')
+        return
+      }
+    }
+
+    // 登录验证码选了第三方类型时的密钥校验：后端对空私有密钥一律放行，
+    // 只填一半或都不填都会静默退化成无验证码，故必须在此拦下
+    const captchaConfigError = validateThirdPartyCaptcha(
+      config.captcha_enabled || false,
+      config.captcha_type || '',
+      config,
+    )
+    if (captchaConfigError) {
+      toast.error(captchaConfigError)
+      return
     }
 
     setSaving(true)
@@ -300,6 +414,18 @@ export default function SettingsPage() {
     }
   }
 
+  /**
+   * 邮件发送方式：0 或未配置走 SMTP，1 走 Sendcloud，2 走阿里云邮件推送
+   * 与后端 notify.LoadMailNotifier 的 switch(configMap["mail_type"]) 三路分发保持一致
+   */
+  const mailType = Number(config.mail_type) || 0
+
+  /** 当前验证码类型对应的第三方密钥配置；image / behavioral / 空值时为空，未选类型时不渲染密钥输入框 */
+  const thirdPartyCaptcha =
+    config.captcha_enabled && config.captcha_type
+      ? THIRD_PARTY_CAPTCHA_KEYS[config.captcha_type]
+      : undefined
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-[400px]">
@@ -345,6 +471,14 @@ export default function SettingsPage() {
           <TabsTrigger value="login" className="flex items-center gap-2">
             <Lock className="h-4 w-4" />
             <span className="hidden sm:inline">登录设置</span>
+          </TabsTrigger>
+          <TabsTrigger value="auth-control" className="flex items-center gap-2">
+            <UserPlus className="h-4 w-4" />
+            <span className="hidden sm:inline">登录与注册控制</span>
+          </TabsTrigger>
+          <TabsTrigger value="optimizeip" className="flex items-center gap-2">
+            <Gauge className="h-4 w-4" />
+            <span className="hidden sm:inline">优选IP</span>
           </TabsTrigger>
           <TabsTrigger value="notify" className="flex items-center gap-2">
             <Bell className="h-4 w-4" />
@@ -531,9 +665,47 @@ export default function SettingsPage() {
                     }
                   />
                 </div>
+                <div className="flex items-center justify-between rounded-lg border p-3">
+                  <div className="space-y-0.5 pr-4">
+                    <Label>证书签发失败通知</Label>
+                    <p className="text-xs text-muted-foreground">
+                      签发失败或超时释放订单时推送。未配置按「开启」计算，与后端 sysconfigBoolDefaultTrue 一致
+                    </p>
+                  </div>
+                  <Switch
+                    checked={noticeSwitchChecked(config.cert_issue_notice_enabled)}
+                    onCheckedChange={(checked) =>
+                      setConfig({ ...config, cert_issue_notice_enabled: checked })
+                    }
+                  />
+                </div>
+                <div className="flex items-center justify-between rounded-lg border p-3">
+                  <div className="space-y-0.5 pr-4">
+                    <Label>证书签发成功通知</Label>
+                    <p className="text-xs text-muted-foreground">
+                      手动处理与自动续期签发成功后推送。未配置按「关闭」计算，需显式开启，与后端 sysconfigBoolExplicitOn 一致
+                    </p>
+                  </div>
+                  <Switch
+                    checked={noticeExplicitOn(config.cert_issue_success_notice_enabled)}
+                    onCheckedChange={(checked) =>
+                      setConfig({ ...config, cert_issue_success_notice_enabled: checked })
+                    }
+                  />
+                </div>
               </div>
             </CardContent>
           </Card>
+        </TabsContent>
+
+        {/* 登录与注册控制（/system/auth-control，含各 OAuth 来源独立开关与邮箱白名单） */}
+        <TabsContent value="auth-control">
+          <AuthControlSettings />
+        </TabsContent>
+
+        {/* 优选IP（/system/optimizeip/config，独立端点，不随页面顶部的保存按钮提交） */}
+        <TabsContent value="optimizeip">
+          <OptimizeIPSettings />
         </TabsContent>
 
         {/* Login Settings */}
@@ -565,11 +737,11 @@ export default function SettingsPage() {
                     <div className="space-y-2">
                       <Label>验证码类型</Label>
                       <Select
-                        value={config.captcha_type || 'image'}
+                        value={config.captcha_type || ''}
                         onValueChange={(v) => setConfig({ ...config, captcha_type: v })}
                       >
-                        <SelectTrigger>
-                          <SelectValue />
+                        <SelectTrigger className="w-full">
+                          <SelectValue placeholder="请选择验证码类型" />
                         </SelectTrigger>
                         <SelectContent>
                           <SelectItem value="image">图形验证码（内置）</SelectItem>
@@ -580,35 +752,48 @@ export default function SettingsPage() {
                         </SelectContent>
                       </Select>
                       <p className="text-xs text-muted-foreground">
-                        {config.captcha_type === 'turnstile' && '免费、隐私友好的验证码服务，推荐使用'}
-                        {config.captcha_type === 'recaptcha' && '需要科学上网才能正常使用'}
+                        {config.captcha_type === 'turnstile' && '免费、隐私友好的验证码服务；与下方「敏感操作验证」共用同一对 Turnstile 密钥'}
+                        {config.captcha_type === 'recaptcha' && '需要能访问 Google 才能正常使用'}
                         {config.captcha_type === 'hcaptcha' && '隐私友好的验证码服务'}
                         {config.captcha_type === 'behavioral' && '内置行为验证码（点选/滑动/旋转），无需额外配置'}
                         {(!config.captcha_type || config.captcha_type === 'image') && '服务端生成图形验证码，无需额外配置'}
                       </p>
                     </div>
-                    {config.captcha_type && config.captcha_type !== 'image' && config.captcha_type !== 'behavioral' && (
-                      <>
+                    {thirdPartyCaptcha && (
+                      <div className="space-y-4">
                         <div className="space-y-2">
-                          <Label>Site Key（站点密钥）</Label>
+                          <Label>{thirdPartyCaptcha.label} 站点密钥（Site Key）</Label>
                           <Input
                             placeholder="在验证码服务商后台获取"
-                            value={config.captcha_site_key || ''}
-                            onChange={(e) => setConfig({ ...config, captcha_site_key: e.target.value })}
+                            value={String(config[thirdPartyCaptcha.siteKey] ?? '')}
+                            onChange={(e) =>
+                              setConfig({ ...config, [thirdPartyCaptcha.siteKey]: e.target.value })
+                            }
+                            autoComplete="off"
                           />
-                          <p className="text-xs text-muted-foreground">公开密钥，用于前端加载验证码组件</p>
+                          <p className="text-xs text-muted-foreground">公开密钥，供登录页加载验证组件使用</p>
                         </div>
                         <div className="space-y-2">
-                          <Label>Secret Key（私有密钥）</Label>
+                          <Label>{thirdPartyCaptcha.label} 私有密钥（Secret Key）</Label>
                           <Input
                             type="password"
                             placeholder="在验证码服务商后台获取"
-                            value={config.captcha_secret_key || ''}
-                            onChange={(e) => setConfig({ ...config, captcha_secret_key: e.target.value })}
+                            value={String(config[thirdPartyCaptcha.secretKey] ?? '')}
+                            onChange={(e) =>
+                              setConfig({ ...config, [thirdPartyCaptcha.secretKey]: e.target.value })
+                            }
+                            autoComplete="new-password"
                           />
-                          <p className="text-xs text-muted-foreground">私有密钥，用于服务端验证，请勿泄露</p>
+                          <p className="text-xs text-muted-foreground">
+                            仅服务端校验使用；留空表示登录时不做该校验，保存前会提示补齐
+                          </p>
                         </div>
-                      </>
+                        {config.captcha_type === 'turnstile' && (
+                          <p className="text-xs text-muted-foreground">
+                            这两把密钥与下方「敏感操作验证（Turnstile）」是同一对配置，改这里会同时影响找回密码与重置二步验证
+                          </p>
+                        )}
+                      </div>
                     )}
                   </div>
                 )}
@@ -732,7 +917,7 @@ export default function SettingsPage() {
                         <div className="text-xs text-muted-foreground space-y-1">
                           <p>1. 前往 GitHub Settings &gt; Developer settings &gt; OAuth Apps 创建新应用</p>
                           <p>2. Homepage URL 填写您的站点地址，如 <code className="bg-background px-1 rounded">{config.site_url || 'https://dns.example.com'}</code></p>
-                          <p>3. Authorization callback URL 填写 <code className="bg-background px-1 rounded">{(config.site_url || 'https://dns.example.com') + '/api/auth/github/callback'}</code></p>
+                          <p>3. Authorization callback URL 填写 <code className="bg-background px-1 rounded">{(config.site_url || 'https://dns.example.com') + '/oauth-callback'}</code></p>
                           <p>4. 填写 Client ID 和 Client Secret 后保存即可启用 GitHub 登录</p>
                         </div>
                       </div>
@@ -765,7 +950,7 @@ export default function SettingsPage() {
                         <div className="text-xs text-muted-foreground space-y-1">
                           <p>1. 前往 GitHub Settings &gt; Developer settings &gt; GitHub Apps 创建新应用</p>
                           <p>2. Homepage URL 填写您的站点地址，如 <code className="bg-background px-1 rounded">{config.site_url || 'https://dns.example.com'}</code></p>
-                          <p>3. Callback URL 填写 <code className="bg-background px-1 rounded">{(config.site_url || 'https://dns.example.com') + '/api/auth/github-app/callback'}</code></p>
+                          <p>3. Callback URL 填写 <code className="bg-background px-1 rounded">{(config.site_url || 'https://dns.example.com') + '/oauth-callback'}</code></p>
                           <p>4. 在 App 设置页面生成并下载 Private Key</p>
                           <p>5. 填写 App ID 和 Private Key 后保存即可启用 GitHub App 登录</p>
                         </div>
@@ -799,7 +984,7 @@ export default function SettingsPage() {
                       <Input type="password" placeholder="Client Secret" value={config.oauth_google_client_secret || ''} onChange={(e) => setConfig({ ...config, oauth_google_client_secret: e.target.value })} />
                     </div>
                   </div>
-                  <p className="text-xs text-muted-foreground">回调地址: <code className="bg-muted px-1 rounded">{(config.site_url || 'https://dns.example.com') + '/api/auth/oauth/google/callback'}</code></p>
+                  <p className="text-xs text-muted-foreground">回调地址: <code className="bg-muted px-1 rounded">{(config.site_url || 'https://dns.example.com') + '/oauth-callback'}</code></p>
                 </div>
 
                 {/* WeChat */}
@@ -815,7 +1000,7 @@ export default function SettingsPage() {
                       <Input type="password" placeholder="AppSecret" value={config.oauth_wechat_app_secret || ''} onChange={(e) => setConfig({ ...config, oauth_wechat_app_secret: e.target.value })} />
                     </div>
                   </div>
-                  <p className="text-xs text-muted-foreground">回调地址: <code className="bg-muted px-1 rounded">{(config.site_url || 'https://dns.example.com') + '/api/auth/oauth/wechat/callback'}</code></p>
+                  <p className="text-xs text-muted-foreground">回调地址: <code className="bg-muted px-1 rounded">{(config.site_url || 'https://dns.example.com') + '/oauth-callback'}</code></p>
                 </div>
 
                 {/* DingTalk */}
@@ -831,7 +1016,7 @@ export default function SettingsPage() {
                       <Input type="password" placeholder="AppSecret" value={config.oauth_dingtalk_app_secret || ''} onChange={(e) => setConfig({ ...config, oauth_dingtalk_app_secret: e.target.value })} />
                     </div>
                   </div>
-                  <p className="text-xs text-muted-foreground">回调地址: <code className="bg-muted px-1 rounded">{(config.site_url || 'https://dns.example.com') + '/api/auth/oauth/dingtalk/callback'}</code></p>
+                  <p className="text-xs text-muted-foreground">回调地址: <code className="bg-muted px-1 rounded">{(config.site_url || 'https://dns.example.com') + '/oauth-callback'}</code></p>
                 </div>
 
                 {/* Custom OAuth2 */}
@@ -869,7 +1054,7 @@ export default function SettingsPage() {
                       <Input placeholder="openid profile email (可选)" value={config.oauth_custom_scopes || ''} onChange={(e) => setConfig({ ...config, oauth_custom_scopes: e.target.value })} />
                     </div>
                   </div>
-                  <p className="text-xs text-muted-foreground">回调地址: <code className="bg-muted px-1 rounded">{(config.site_url || 'https://dns.example.com') + '/api/auth/oauth/custom/callback'}</code></p>
+                  <p className="text-xs text-muted-foreground">回调地址: <code className="bg-muted px-1 rounded">{(config.site_url || 'https://dns.example.com') + '/oauth-callback'}</code></p>
                 </div>
               </CardContent>
             </Card>
@@ -878,6 +1063,36 @@ export default function SettingsPage() {
 
         {/* Notification Settings - Merged */}
         <TabsContent value="notify" className="space-y-4">
+          {/* 容灾告警渠道开关（notice_*，只作用于容灾监控的故障切换与恢复通知） */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <AlertTriangle className="h-5 w-5" />
+                容灾告警渠道
+              </CardTitle>
+              <CardDescription>
+                控制容灾监控在故障切换、恢复时允许使用的通知渠道。未配置过的开关按「开启」计算，与后端判定一致
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {NOTICE_CHANNEL_SWITCHES.map((item) => (
+                <div key={item.key} className="flex items-center justify-between gap-4">
+                  <div>
+                    <p className="text-sm font-medium">{item.label}</p>
+                    <p className="text-xs text-muted-foreground">{item.hint}</p>
+                  </div>
+                  <Switch
+                    checked={noticeSwitchChecked(config[item.key])}
+                    onCheckedChange={(checked) => setConfig({ ...config, [item.key]: checked ? '1' : '0' })}
+                  />
+                </div>
+              ))}
+              <p className="text-xs text-muted-foreground">
+                监控任务创建时若勾选了具体渠道，则只在该任务勾选的渠道内发送；未勾选任何渠道时按上述开关放开全部已配置渠道
+              </p>
+            </CardContent>
+          </Card>
+
           {/* 邮件通知 */}
           <Card>
             <CardHeader className="cursor-pointer" onClick={() => toggleNotifySection('mail')}>
@@ -887,11 +1102,6 @@ export default function SettingsPage() {
                   <CardTitle className="text-base">邮件通知</CardTitle>
                 </div>
                 <div className="flex items-center gap-2">
-                  <Switch
-                    checked={config.mail_enabled || false}
-                    onCheckedChange={(checked) => { setConfig({ ...config, mail_enabled: checked }) }}
-                    onClick={(e) => e.stopPropagation()}
-                  />
                   <Button size="sm" variant="outline" onClick={(e) => { e.stopPropagation(); handleTest('mail', systemApi.testMail, '邮件发送'); }} disabled={testing === 'mail'}>
                     {testing === 'mail' ? <RefreshCw className="h-3 w-3 animate-spin" /> : '测试'}
                   </Button>
@@ -900,78 +1110,119 @@ export default function SettingsPage() {
             </CardHeader>
             {expandedNotify === 'mail' && (
               <CardContent className="space-y-4">
-                <div className="grid grid-cols-3 gap-4">
-                  <div className="space-y-2 col-span-2">
-                    <Label>SMTP 服务器</Label>
-                    <Input
-                      placeholder="smtp.example.com"
-                      value={config.mail_host || ''}
-                      onChange={(e) => setConfig({ ...config, mail_host: e.target.value })}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label>SMTP 端口</Label>
-                    <Input
-                      type="number"
-                      placeholder="465"
-                      value={config.mail_port || ''}
-                      onChange={(e) => setConfig({ ...config, mail_port: parseInt(e.target.value) || 0 })}
-                    />
-                  </div>
+                <div className="space-y-2">
+                  <Label>发送方式</Label>
+                  <Select
+                    value={String(mailType)}
+                    onValueChange={(v) => setConfig({ ...config, mail_type: Number(v) })}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="0">SMTP</SelectItem>
+                      <SelectItem value="1">Sendcloud</SelectItem>
+                      <SelectItem value="2">阿里云邮件推送</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label>加密方式</Label>
-                    <Select
-                      value={config.mail_secure || 'tls'}
-                      onValueChange={(v) => setConfig({ ...config, mail_secure: v })}
-                    >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="none">无加密</SelectItem>
-                        <SelectItem value="ssl">SSL (端口465)</SelectItem>
-                        <SelectItem value="tls">STARTTLS (端口587)</SelectItem>
-                      </SelectContent>
-                    </Select>
+                {mailType !== 0 && (
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label>{mailType === 1 ? 'API User' : 'AccessKey ID'}</Label>
+                      <Input
+                        placeholder={mailType === 1 ? 'Sendcloud API User' : '阿里云 AccessKey ID'}
+                        value={config.mail_api_user || ''}
+                        onChange={(e) => setConfig({ ...config, mail_api_user: e.target.value })}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>{mailType === 1 ? 'API Key' : 'AccessKey Secret'}</Label>
+                      <Input
+                        type="password"
+                        placeholder={mailType === 1 ? 'Sendcloud API Key' : '阿里云 AccessKey Secret'}
+                        value={config.mail_api_key || ''}
+                        onChange={(e) => setConfig({ ...config, mail_api_key: e.target.value })}
+                      />
+                    </div>
                   </div>
-                  <div className="space-y-2">
-                    <Label>验证方式</Label>
-                    <Select
-                      value={config.mail_auth || 'plain'}
-                      onValueChange={(v) => setConfig({ ...config, mail_auth: v })}
-                    >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="plain">PLAIN</SelectItem>
-                        <SelectItem value="login">LOGIN</SelectItem>
-                        <SelectItem value="crammd5">CRAM-MD5</SelectItem>
-                      </SelectContent>
-                    </Select>
+                )}
+                {mailType === 0 && (
+                  <>
+                  <div className="grid grid-cols-3 gap-4">
+                    <div className="space-y-2 col-span-2">
+                      <Label>SMTP 服务器</Label>
+                      <Input
+                        placeholder="smtp.example.com"
+                        value={config.mail_host || ''}
+                        onChange={(e) => setConfig({ ...config, mail_host: e.target.value })}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>SMTP 端口</Label>
+                      <Input
+                        type="number"
+                        placeholder="465"
+                        value={config.mail_port || ''}
+                        onChange={(e) => setConfig({ ...config, mail_port: parseInt(e.target.value) || 0 })}
+                      />
+                    </div>
                   </div>
-                </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label>SMTP 用户名</Label>
-                    <Input
-                      placeholder="user@example.com"
-                      value={config.mail_user || ''}
-                      onChange={(e) => setConfig({ ...config, mail_user: e.target.value })}
-                    />
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label>加密方式</Label>
+                      <Select
+                        value={config.mail_secure || 'tls'}
+                        onValueChange={(v) => setConfig({ ...config, mail_secure: v })}
+                      >
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="none">无加密</SelectItem>
+                          <SelectItem value="ssl">SSL (端口465)</SelectItem>
+                          <SelectItem value="tls">STARTTLS (端口587)</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <Label>验证方式</Label>
+                      <Select
+                        value={config.mail_auth || 'plain'}
+                        onValueChange={(v) => setConfig({ ...config, mail_auth: v })}
+                      >
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="plain">PLAIN</SelectItem>
+                          <SelectItem value="login">LOGIN</SelectItem>
+                          <SelectItem value="crammd5">CRAM-MD5</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
                   </div>
-                  <div className="space-y-2">
-                    <Label>SMTP 密码</Label>
-                    <Input
-                      type="password"
-                      placeholder="••••••••"
-                      value={config.mail_password || ''}
-                      onChange={(e) => setConfig({ ...config, mail_password: e.target.value })}
-                    />
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label>SMTP 用户名</Label>
+                      <Input
+                        placeholder="user@example.com"
+                        value={config.mail_user || ''}
+                        onChange={(e) => setConfig({ ...config, mail_user: e.target.value })}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>SMTP 密码</Label>
+                      <Input
+                        type="password"
+                        placeholder="••••••••"
+                        value={config.mail_password || ''}
+                        onChange={(e) => setConfig({ ...config, mail_password: e.target.value })}
+                      />
+                    </div>
                   </div>
-                </div>
+                  </>
+                )}
                 <Separator />
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
@@ -999,43 +1250,6 @@ export default function SettingsPage() {
                     onChange={(e) => setConfig({ ...config, mail_recv: e.target.value })}
                   />
                   <p className="text-xs text-muted-foreground">系统通知邮件的收件人，支持多个邮箱，用逗号分隔</p>
-                </div>
-                <Separator />
-                <div className="space-y-4">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <Label className="text-base">自定义邮件模板</Label>
-                      <p className="text-sm text-muted-foreground">自定义通知邮件的标题和内容格式</p>
-                    </div>
-                  </div>
-                  <div className="space-y-2">
-                    <Label>邮件标题模板</Label>
-                    <Input
-                      placeholder="[{site_name}] {title}"
-                      value={config.mail_subject_template || ''}
-                      onChange={(e) => setConfig({ ...config, mail_subject_template: e.target.value })}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label>邮件内容模板</Label>
-                    <Textarea
-                      placeholder="尊敬的用户：&#10;&#10;{message}&#10;&#10;时间：{time}&#10;来自：{site_name}"
-                      value={config.mail_body_template || ''}
-                      onChange={(e) => setConfig({ ...config, mail_body_template: e.target.value })}
-                      rows={6}
-                    />
-                  </div>
-                  <div className="bg-muted/50 rounded-md p-3">
-                    <p className="text-sm font-medium mb-2">可用占位符：</p>
-                    <div className="grid grid-cols-2 gap-2 text-xs text-muted-foreground">
-                      <div><code className="bg-background px-1 rounded">{'{site_name}'}</code> - 站点名称</div>
-                      <div><code className="bg-background px-1 rounded">{'{title}'}</code> - 通知标题</div>
-                      <div><code className="bg-background px-1 rounded">{'{message}'}</code> - 通知内容</div>
-                      <div><code className="bg-background px-1 rounded">{'{time}'}</code> - 发送时间</div>
-                      <div><code className="bg-background px-1 rounded">{'{domain}'}</code> - 相关域名</div>
-                      <div><code className="bg-background px-1 rounded">{'{username}'}</code> - 用户名</div>
-                    </div>
-                  </div>
                 </div>
               </CardContent>
             )}
@@ -1395,6 +1609,45 @@ export default function SettingsPage() {
                   />
                   <p className="text-xs text-muted-foreground">支持占位符: {'{title}'} 和 {'{content}'}</p>
                 </div>
+                <div className="space-y-2">
+                  <Label>@ 用户</Label>
+                  <Input
+                    placeholder="all 或 13800000000,13900000000"
+                    value={config.webhook_user || ''}
+                    onChange={(e) => setConfig({ ...config, webhook_user: e.target.value })}
+                  />
+                  <p className="text-xs text-muted-foreground">仅在地址为钉钉或飞书群机器人时生效：填 all 表示 @所有人，否则填手机号（钉钉）或用户 ID（飞书）列表，用逗号分隔；企业微信与其他地址不处理该字段</p>
+                </div>
+              </CardContent>
+            )}
+          </Card>
+
+          {/* 自定义 Webhook 通知：与上方通用 Webhook 各自独立开关与配置 */}
+          <Card>
+            <CardHeader className="cursor-pointer" onClick={() => toggleNotifySection('customWebhook')}>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <RadioTower className="h-5 w-5" />
+                  <CardTitle className="text-base">自定义 Webhook</CardTitle>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Switch
+                    checked={config.custom_webhook_enabled || false}
+                    onCheckedChange={(checked) => { setConfig({ ...config, custom_webhook_enabled: checked }) }}
+                    onClick={(e) => e.stopPropagation()}
+                  />
+                  <Button size="sm" variant="outline" onClick={(e) => { e.stopPropagation(); handleTest('custom_webhook', systemApi.testCustomWebhook, '自定义 Webhook 请求'); }} disabled={testing === 'custom_webhook'}>
+                    {testing === 'custom_webhook' ? <RefreshCw className="h-3 w-3 animate-spin" /> : '测试'}
+                  </Button>
+                </div>
+              </div>
+            </CardHeader>
+            {expandedNotify === 'customWebhook' && (
+              <CardContent>
+                <CustomWebhookFields
+                  config={config}
+                  onChange={(patch) => setConfig({ ...config, ...patch })}
+                />
               </CardContent>
             )}
           </Card>

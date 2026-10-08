@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"main/internal/api/middleware"
 	"main/internal/cache"
+	"main/internal/config"
 	"main/internal/database"
 	"main/internal/dbcache"
 	"main/internal/logger"
@@ -146,6 +147,10 @@ type LoginRequest struct {
 	CaptchaCode string `json:"captcha_code"`
 	VerifyToken string `json:"verify_token"`
 	TOTPCode    string `json:"totp_code"`
+	// 第三方验证码的 token，字段名与敏感流程共用 captchaTokenFields
+	captchaTokenFields
+	// 登录页 Turnstile 的 token，字段名与敏感流程共用 turnstileFields
+	turnstileFields
 }
 
 func GetCaptcha(c *gin.Context) {
@@ -182,21 +187,47 @@ func GetAuthConfig(c *gin.Context) {
 	passwordRegister := GetSysConfigValue("auth_password_register") == "true" || GetSysConfigValue("auth_password_register") == "1"
 	magicLinkLogin := GetSysConfigValue("auth_magic_link_login") == "true" || GetSysConfigValue("auth_magic_link_login") == "1"
 	turnstileSite := strings.TrimSpace(GetSysConfigValue("turnstile_site_key"))
+	// Turnstile 独立校验是否必需：判据与 handler.requireTurnstile 完全一致（只看私有密钥非空）
+	// 该字段是布尔，必须无条件下发（含 false），否则前端无法区分「未开启」与「后端没实现」；
+	// 与之相邻的 turnstile_site_key 是非空才下发，两者时机不同是有意的
+	// 用途：私钥已配置但站点密钥缺失或格式非法时，前端据此显式报错，
+	// 而不是静默不渲染组件——后者会让用户看到「后端拒绝 + 无组件」的死锁
+	turnstileStandaloneRequired := strings.TrimSpace(GetSysConfigValue("turnstile_secret_key")) != ""
 	captchaType := GetSysConfigValue("captcha_type")
 	if captchaType == "" {
 		captchaType = "image"
 	}
+	// 登录流程与敏感流程的 Turnstile 是同一个开关（同一把 turnstile_secret_key），
+	// 但用途不同：前者按 captcha_type=turnstile 要求，后者只看私钥是否非空。
+	// 两个信号必须分开下发：合并会让「登录用 Turnstile、敏感流程不用」的配置无法表达，
+	// 也会让敏感流程的下发值与 requireTurnstile 的判据分叉
+	captchaTypeTurnstile := captchaType == "turnstile"
+	// 主验证码站点密钥只在类型确实是 recaptcha / hcaptcha 时才读取与下发：
+	// 否则前端在 turnstile 类型下会同时看到 captcha_site_key（可能是 reCAPTCHA 的 key），
+	// 拿错 key 去初始化 Turnstile 必然失败。按类型收起比要求前端「自己挑对」更可靠
+	captchaSiteKey := ""
+	if notify.IsThirdPartyCaptchaType(captchaType) {
+		captchaSiteKey = strings.TrimSpace(GetSysConfigValue("captcha_site_key"))
+	}
 
 	data := gin.H{
-		"login_captcha":             needCaptcha,
-		"captcha_enabled":           needCaptcha,
-		"captcha_type":              captchaType,
-		"register_enabled":          registerEnabled,
-		"password_register_enabled": passwordRegister,
-		"magic_link_login_enabled":  magicLinkLogin,
+		"login_captcha":                 needCaptcha,
+		"captcha_enabled":               needCaptcha,
+		"captcha_type":                  captchaType,
+		"register_enabled":              registerEnabled,
+		"password_register_enabled":     passwordRegister,
+		"magic_link_login_enabled":      magicLinkLogin,
+		"turnstile_standalone_required": turnstileStandaloneRequired,
+		// 布尔，无条件下发（含 false）：前端据此决定登录页是否渲染 Turnstile 组件，
+		// 与上面那个「敏感流程」信号互补，后者只覆盖找回密码与重置二步验证
+		"captcha_type_turnstile": captchaTypeTurnstile,
 	}
 	if turnstileSite != "" {
 		data["turnstile_site_key"] = turnstileSite
+	}
+	// 与 turnstile_site_key 同一时机：非空才下发，缺失不代表未启用
+	if captchaSiteKey != "" {
+		data["captcha_site_key"] = captchaSiteKey
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -213,6 +244,15 @@ func Login(c *gin.Context) {
 	}
 
 	ip := c.ClientIP()
+
+	// 密码登录开关：前端 switch 的默认值为 true，此处同取「未配置视为开启」，仅显式关闭值才拒绝
+	// 该键此前从未被后端消费，现存实例库中普遍不存在；按「未配置=关」处理会让升级后密码登录立即失效
+	// 置于锁定计数之前：开关关闭时不存在凭据校验，不应累加失败计数
+	if !handlerSwitchOn("auth_password_login") {
+		logger.Info("用户登录被拒绝: 管理员已关闭密码登录 - 用户名: %s", req.Username)
+		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "管理员已关闭密码登录，请使用其它方式登录"})
+		return
+	}
 
 	// 暴力破解锁定检查（安全审计 H-5），失败 N 次后 TTL 内强制拒绝
 	if loginBlocked(ip, req.Username) {
@@ -236,13 +276,30 @@ func Login(c *gin.Context) {
 	}
 
 	if needCaptcha {
-		captchaType := GetSysConfigValue("captcha_type")
-		if captchaType == "behavioral" || captchaType == "go-captcha" {
+		// 三类验证码各有各的凭据，必须按 captcha_type 分派：
+		// 此前 else 分支把 image / turnstile / recaptcha / hcaptcha 全吞进图形验证码校验，
+		// 管理员选中任一第三方类型后组件不产出 CaptchaID，登录恒返回「验证码不能为空」——选中即锁死入口
+		captchaType := strings.TrimSpace(GetSysConfigValue("captcha_type"))
+		switch {
+		case captchaType == "behavioral" || captchaType == "go-captcha":
 			if !ConsumeCaptchaVerifyToken(req.VerifyToken) {
 				c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "请先完成验证码"})
 				return
 			}
-		} else {
+		case captchaType == "turnstile":
+			// 只会是「已配置私钥」才会走到拒绝分支：未配置时 requireTurnstile 放行，
+			// 与设置页「留空表示不强制」一致，零倒退
+			if err := requireTurnstile(c, req.turnstileFields.token()); err != nil {
+				c.JSON(http.StatusOK, gin.H{"code": -1, "msg": err.Error()})
+				return
+			}
+		case notify.IsThirdPartyCaptchaType(captchaType):
+			if err := requireCaptcha(c, req.captchaTokenFields.thirdPartyToken()); err != nil {
+				c.JSON(http.StatusOK, gin.H{"code": -1, "msg": err.Error()})
+				return
+			}
+		default:
+			// image 及未设 captcha_type：沿用 base64Captcha 图形验证码，行为不变
 			if req.CaptchaID == "" || req.CaptchaCode == "" {
 				c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "验证码不能为空"})
 				return
@@ -407,12 +464,15 @@ func GetUserInfo(c *gin.Context) {
 		return
 	}
 
+	// api_key 必须下发：个人设置页据此区分「已生成但未取回」与「尚未生成」，
+	// 缺失时该页只能笼统提示「请联系管理员开启 API」，与实际状态不符
 	middleware.SuccessResponse(c, gin.H{
 		"id":        user.ID,
 		"username":  user.Username,
 		"email":     user.Email,
 		"level":     user.Level,
 		"is_api":    user.IsAPI,
+		"api_key":   user.APIKey,
 		"totp_open": user.TOTPOpen,
 		"reg_time":  user.RegTime,
 		"last_time": user.LastTime,
@@ -691,7 +751,8 @@ func hashResetToken(token string) string {
 func getEmailConfig() (*notify.EmailConfig, error) {
 	var configs []models.SysConfig
 	database.DB.Where("`key` IN ?", []string{
-		"mail_host", "mail_port", "mail_username", "mail_password", "mail_from", "mail_tls",
+		"mail_host", "mail_port", "mail_user", "mail_username", "mail_password", "mail_from",
+		"mail_tls", "mail_secure", "mail_auth",
 	}).Find(&configs)
 
 	configMap := make(map[string]string)
@@ -712,25 +773,46 @@ func getEmailConfig() (*notify.EmailConfig, error) {
 		}
 	}
 
-	useTLS := configMap["mail_tls"] == "1" || configMap["mail_tls"] == "true"
+	/*
+	 * 加密方式：设置页写入 mail_secure（none/ssl/tls），此前本函数只读早期键 mail_tls，
+	 * 导致用户在设置页选的 SSL/STARTTLS 对六个公开邮件接口完全无效，一律明文投递。
+	 * 取值口径与通知渠道共用 notify.MailSecureFromConfig，两个装配点不可能再分叉
+	 */
+	secure := notify.MailSecureFromConfig(configMap)
+
+	/*
+	 * SMTP 用户名：mail_user 是设置页与通知渠道实际写入的键，
+	 * mail_username 是从未被任何写入点使用的历史键（全仓仅本函数读取），
+	 * 保留兜底以兼容迁移数据；仅读 mail_username 会让六个公开邮件接口拿到空用户名，
+	 * 而 enqueueNotifyMail 在 goroutine 内发送且失败仅记日志，表现为界面提示成功但收不到邮件
+	 */
+	username := configMap["mail_user"]
+	if username == "" {
+		username = configMap["mail_username"]
+	}
 
 	return &notify.EmailConfig{
 		Host:     configMap["mail_host"],
 		Port:     port,
-		Username: configMap["mail_username"],
+		Username: username,
 		Password: configMap["mail_password"],
 		From:     configMap["mail_from"],
-		UseTLS:   useTLS,
+		Secure:   secure,
+		AuthType: notify.MailAuthFromConfig(configMap),
 	}, nil
 }
 
 // getSiteURL 获取站点URL
+//
+// 未配置 site_url 时不回退到恒定端口：OAuth 授权请求与令牌交换要求 redirect_uri 逐字一致，
+// 复位链接与 magic-link 又要在用户浏览器里打得开，回退到与实际监听端口不符的地址会让
+// 这几条链路整体失效。改用当前监听端口，至少保证同机访问可用
 func getSiteURL() string {
-	var config models.SysConfig
-	if err := database.DB.Where("`key` = ?", "site_url").First(&config).Error; err == nil && config.Value != "" {
-		return config.Value
+	var row models.SysConfig
+	if err := database.DB.Where("`key` = ?", "site_url").First(&row).Error; err == nil && row.Value != "" {
+		return strings.TrimSuffix(row.Value, "/")
 	}
-	return "http://localhost:8080"
+	return "http://localhost:" + strconv.Itoa(config.Get().Server.Port)
 }
 
 // 安全审计 R-7：邮件发送 goroutine 限流。
@@ -758,9 +840,17 @@ func enqueueNotifyMail(task string, cfg notify.EmailConfig, subject, body string
 func ForgotPassword(c *gin.Context) {
 	var req struct {
 		Email string `json:"email" binding:"required,email"`
+		turnstileFields
+		captchaTokenFields
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"code": -1, "msg": "请输入有效的邮箱地址"})
+		return
+	}
+	// Turnstile 与第三方验证码共用同一入口，置于限流之前：
+	// 它们是公开入口的第一道门，未通过时不应消耗 IP+邮箱 的配额
+	if err := requireSensitiveCaptcha(c, req.turnstileFields.token(), req.captchaTokenFields.thirdPartyToken()); err != nil {
+		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": err.Error()})
 		return
 	}
 	email := strings.TrimSpace(req.Email)
@@ -852,9 +942,15 @@ func ResetPassword(c *gin.Context) {
 func ForgotTOTP(c *gin.Context) {
 	var req struct {
 		Email string `json:"email" binding:"required,email"`
+		turnstileFields
+		captchaTokenFields
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"code": -1, "msg": "请输入有效的邮箱地址"})
+		return
+	}
+	if err := requireSensitiveCaptcha(c, req.turnstileFields.token(), req.captchaTokenFields.thirdPartyToken()); err != nil {
+		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": err.Error()})
 		return
 	}
 	email := strings.TrimSpace(req.Email)
@@ -901,9 +997,15 @@ func ForgotTOTP(c *gin.Context) {
 func ResetTOTP(c *gin.Context) {
 	var req struct {
 		Token string `json:"token" binding:"required"`
+		turnstileFields
+		captchaTokenFields
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"code": -1, "msg": "参数错误"})
+		return
+	}
+	if err := requireSensitiveCaptcha(c, req.turnstileFields.token(), req.captchaTokenFields.thirdPartyToken()); err != nil {
+		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": err.Error()})
 		return
 	}
 
@@ -1032,6 +1134,24 @@ func authRegisterPolicy() (registerEnabled, passwordRegister bool) {
 	registerEnabled = GetSysConfigValue("register_enabled") == "true"
 	passwordRegister = GetSysConfigValue("auth_password_register") == "true" || GetSysConfigValue("auth_password_register") == "1"
 	return
+}
+
+// handlerSwitchOn 判定布尔型系统配置开关是否开启（走带缓存的配置层，写入点会主动失效）
+// 未配置视为开启：这些开关多数在旧实例中根本不存在，按「未配置=关」处理会让升级即失效
+// 显式写入 0 / false / no / off 才关闭（大小写与首尾空白不敏感）
+func handlerSwitchOn(key string) bool {
+	switch strings.ToLower(strings.TrimSpace(GetSysConfigValue(key))) {
+	case "0", "false", "no", "off":
+		return false
+	}
+	return true
+}
+
+// authEmailVerifyRequired 注册流程是否要求邮箱验证码
+// 前端开关默认值为 false，但此处取「未配置视为开启」：Register 的 code 字段是 required，
+// 按「未配置=关」会让未配置实例的注册在升级后立即失去邮箱验证，属安全倒退
+func authEmailVerifyRequired() bool {
+	return handlerSwitchOn("auth_email_verify")
 }
 
 const msgEmailNotInWhitelist = "邮箱不在白名单"
@@ -1259,6 +1379,11 @@ func SendAuthCode(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "管理员未开放密码自助注册"})
 		return
 	}
+	// 关闭邮箱验证时本接口整体无意义，直接返回并说明，避免前端误以为验证码已发出
+	if !authEmailVerifyRequired() {
+		c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "管理员已关闭注册邮箱验证，无需验证码"})
+		return
+	}
 	emailNorm := strings.ToLower(strings.TrimSpace(req.Email))
 	if !registerEmailPassesWhitelist(emailNorm) {
 		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": msgEmailNotInWhitelist})
@@ -1297,7 +1422,9 @@ func Register(c *gin.Context) {
 		Username string `json:"username" binding:"required"`
 		Password string `json:"password" binding:"required,min=8"`
 		Email    string `json:"email" binding:"required,email"`
-		Code     string `json:"code" binding:"required"`
+		// Code 不设 required：是否必填由 auth_email_verify 开关决定，
+		// 写死 required 会让「关闭邮箱验证」在 API 层无法生效
+		Code string `json:"code"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"code": -1, "msg": "参数错误"})
@@ -1325,9 +1452,15 @@ func Register(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": msgEmailNotInWhitelist})
 		return
 	}
-	if err := verify.Verify(emailNorm, verify.SceneRegister, req.Code); err != nil {
-		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": err.Error()})
-		return
+	if authEmailVerifyRequired() {
+		if strings.TrimSpace(req.Code) == "" {
+			c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "请输入邮箱验证码"})
+			return
+		}
+		if err := verify.Verify(emailNorm, verify.SceneRegister, req.Code); err != nil {
+			c.JSON(http.StatusOK, gin.H{"code": -1, "msg": err.Error()})
+			return
+		}
 	}
 	// 强密码复杂度校验（安全审计 H-4）
 	if msg := utils.ValidatePasswordStrength(req.Password); msg != "" {

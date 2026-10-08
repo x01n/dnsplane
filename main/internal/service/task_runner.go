@@ -9,7 +9,9 @@ import (
 	"sync"
 	"time"
 
+	"main/internal/cert"
 	"main/internal/cert/deploy"
+	"main/internal/cert/deploy/base"
 	"main/internal/database"
 	"main/internal/logger"
 	"main/internal/models"
@@ -18,7 +20,6 @@ import (
 	"main/internal/whois"
 )
 
-/* 部署重试间隔（秒），参考 dnsmgr 的指数退避 */
 var deployRetryIntervals = []int{60, 300, 600, 1800, 3600}
 
 /* TaskRunner 后台任务管理器，负责证书续期、部署执行、到期通知等定时任务 */
@@ -344,7 +345,9 @@ func (r *TaskRunner) executeSingleDeploy(deployTask *models.CertDeploy, order *m
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	if err := provider.Deploy(ctx, order.FullChain, order.PrivateKey, deployConfig); err != nil {
+	/* 回传信息与配置以原始 JSON 文本启动，避免部署器解析时的类型转换丢失原始精度 */
+	deployInfo := &base.DeployInfo{}
+	if err := base.ProviderDeployWithInfo(ctx, provider, order.FullChain, order.PrivateKey, deployConfig, deployInfo); err != nil {
 		logBuilder.WriteString(fmt.Sprintf("[%s] 部署失败: %s\n", time.Now().Format("2006-01-02 15:04:05"), err.Error()))
 		r.updateDeployFailedWithLog(deployTask, err.Error(), logBuilder.String())
 		logger.Error("部署任务 %d 执行失败: %v", deployTask.ID, err)
@@ -359,7 +362,7 @@ func (r *TaskRunner) executeSingleDeploy(deployTask *models.CertDeploy, order *m
 	}
 	logBuilder.WriteString(fmt.Sprintf("[%s] 部署成功\n", time.Now().Format("2006-01-02 15:04:05")))
 	deployNow := time.Now()
-	database.DB.Model(deployTask).Updates(map[string]interface{}{
+	updates := map[string]interface{}{
 		"status":      2,
 		"error":       "",
 		"is_lock":     false,
@@ -367,7 +370,11 @@ func (r *TaskRunner) executeSingleDeploy(deployTask *models.CertDeploy, order *m
 		"log_content": logBuilder.String(),
 		"last_time":   deployNow,
 		"issue_time":  order.IssueTime,
-	})
+	}
+	for field, value := range base.InfoUpdates(deployTask.Config, deployTask.Info, deployInfo) {
+		updates[field] = value
+	}
+	database.DB.Model(deployTask).Updates(updates)
 
 	logger.Info("部署任务 %d 执行成功", deployTask.ID)
 
@@ -426,6 +433,11 @@ func (r *TaskRunner) releaseExpiredLocks() {
 	}
 
 	orderLockTimeout := time.Now().Add(-15 * time.Minute)
+	// 先取出将被释放的订单 ID，状态更新为 -6 后补发签发失败通知
+	var expiredOrderIDs []uint
+	database.DB.Model(&models.CertOrder{}).
+		Where("is_lock = ? AND lock_time < ? AND status = ?", true, orderLockTimeout, 1).
+		Pluck("id", &expiredOrderIDs)
 	if result := database.DB.Model(&models.CertOrder{}).
 		Where("is_lock = ? AND lock_time < ? AND status = ?", true, orderLockTimeout, 1).
 		Updates(map[string]interface{}{
@@ -434,6 +446,10 @@ func (r *TaskRunner) releaseExpiredLocks() {
 			"error":   "申请超时，锁已自动释放",
 		}); result.RowsAffected > 0 {
 		logger.Warn("释放 %d 个超时的证书订单锁", result.RowsAffected)
+	}
+	// 通知在锁释放后发送，避免长时间持锁期间被并发重复处理
+	for _, orderID := range expiredOrderIDs {
+		SendCertIssueFailNotification(orderID)
 	}
 }
 
@@ -463,6 +479,203 @@ func (r *TaskRunner) sendDeployNotification(deployTask *models.CertDeploy, domai
 	if err := r.notifyManager.Send(ctx, title, content); err != nil {
 		logger.Error("发送部署通知失败: %v", err)
 	}
+}
+
+/*
+ * certOrderDomainList 读取证书订单关联域名（按 sort 排序，与订单展示顺序一致）
+ * @param orderID 证书订单 ID
+ * @returns 域名列表
+ */
+func certOrderDomainList(orderID uint) []string {
+	var names []string
+	database.DB.Model(&models.CertDomain{}).Where("oid = ?", orderID).Order("sort ASC").Pluck("domain", &names)
+	return names
+}
+
+/*
+ * certAccountTypeName 证书账户类型显示名
+ * @param accType 账户类型标识（如 acme）
+ * @returns 显示名
+ */
+func certAccountTypeName(accType string) string {
+	if pc, ok := cert.GetProviderConfig(accType); ok && pc.Name != "" {
+		return pc.Name
+	}
+	if accType != "" {
+		return accType
+	}
+	return "未知"
+}
+
+/*
+ * certNoticeSiteName 证书通知署名用的站点名称，未配置时回退为应用名
+ * @returns 站点名称
+ */
+func certNoticeSiteName() string {
+	if v := strings.TrimSpace(sysconfig.GetValue("site_name")); v != "" {
+		return v
+	}
+	return "DNSPlane"
+}
+
+/*
+ * certOrderNoticeTitle 证书订单通知标题
+ * 单域名「{域名}域名{suffix}」，多域名「{首个域名}等{N}个域名{suffix}」
+ * @param domains 域名列表
+ * @param suffix  标题后缀（如 SSL证书签发成功通知）
+ * @returns 标题；域名为空时返回空串
+ */
+func certOrderNoticeTitle(domains []string, suffix string) string {
+	if len(domains) == 0 {
+		return ""
+	}
+	if len(domains) > 1 {
+		return fmt.Sprintf("%s等%d个域名%s", domains[0], len(domains), suffix)
+	}
+	return domains[0] + "域名" + suffix
+}
+
+/*
+ * certIssueStatusName 证书订单失败状态的中文名
+ * @param status 订单状态
+ * @returns 状态中文名
+ */
+func certIssueStatusName(status int) string {
+	switch status {
+	case 0:
+		return "失败"
+	case -1:
+		return "购买证书失败"
+	case -2:
+		return "创建订单失败"
+	case -3:
+		return "添加DNS失败"
+	case -4:
+		return "验证DNS失败"
+	case -5:
+		return "验证订单失败"
+	case -6:
+		return "订单验证未通过"
+	case -7:
+		return "签发证书失败"
+	}
+	return "处理失败"
+}
+
+/*
+ * formatNoticeTime 通知中的时间展示，nil 时返回空串
+ * @param t 时间指针
+ * @returns 格式化时间
+ */
+func formatNoticeTime(t *time.Time) string {
+	if t == nil {
+		return ""
+	}
+	return t.Format("2006-01-02 15:04:05")
+}
+
+/*
+ * buildCertIssueSuccessMessage 构建证书签发成功通知的标题与正文
+ * @param order    证书订单
+ * @param domains  域名列表
+ * @param typeName 证书账户类型显示名
+ * @param now      通知时间（时间与站点名拼在正文末尾）
+ * @returns 标题与正文
+ */
+func buildCertIssueSuccessMessage(order *models.CertOrder, domains []string, typeName string, now time.Time) (string, string) {
+	title := certOrderNoticeTitle(domains, "SSL证书签发成功通知")
+	content := fmt.Sprintf(
+		"尊敬的用户，您好：您的SSL证书已签发成功！\n证书账户： %s(%d)\n证书域名： %s\n签发时间： %s\n到期时间： %s\n颁发机构： %s\n%s\n%s",
+		typeName, order.AccountID, strings.Join(domains, "、"),
+		formatNoticeTime(order.IssueTime), formatNoticeTime(order.ExpireTime), order.Issuer,
+		certNoticeSiteName(), now.Format("2006-01-02 15:04:05"),
+	)
+	return title, content
+}
+
+/*
+ * buildCertIssueFailMessage 构建证书签发失败通知的标题与正文
+ * @param order    证书订单
+ * @param domains  域名列表
+ * @param typeName 证书账户类型显示名
+ * @param now      通知时间
+ * @returns 标题与正文
+ */
+func buildCertIssueFailMessage(order *models.CertOrder, domains []string, typeName string, now time.Time) (string, string) {
+	statusName := certIssueStatusName(order.Status)
+	title := certOrderNoticeTitle(domains, "SSL证书"+statusName+"通知")
+	content := fmt.Sprintf(
+		"尊敬的用户，您好：您的SSL证书%s！\n证书账户： %s(%d)\n证书域名： %s\n失败时间： %s\n失败原因： %s\n%s\n%s",
+		statusName, typeName, order.AccountID, strings.Join(domains, "、"),
+		now.Format("2006-01-02 15:04:05"), order.Error,
+		certNoticeSiteName(), now.Format("2006-01-02 15:04:05"),
+	)
+	return title, content
+}
+
+/* sendCertNotification 通过已配置的通知渠道发送证书类通知，失败仅记录日志不阻塞调用方 */
+func sendCertNotification(title, content string) {
+	mgr := notify.NewManager()
+	notify.LoadNotifiersWithGetter(mgr, sysconfig.GetValue)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := mgr.Send(ctx, title, content); err != nil {
+		logger.Error("发送证书通知失败: %v", err)
+	}
+}
+
+/*
+ * SendCertIssueSuccessNotification 发送证书签发成功通知
+ * 触发点：internal/api/handler/cert.go 在订单 status 置为 3 之后调用（手动处理与自动续期两条路径）
+ * @param orderID 证书订单 ID
+ */
+func SendCertIssueSuccessNotification(orderID uint) {
+	// 与「证书部署成功通知」同策略：默认关闭，避免每次自动续期都打扰
+	if !sysconfigBoolExplicitOn("cert_issue_success_notice_enabled") {
+		return
+	}
+	var order models.CertOrder
+	if err := database.DB.First(&order, orderID).Error; err != nil {
+		return
+	}
+	domains := certOrderDomainList(orderID)
+	if len(domains) == 0 {
+		return
+	}
+	typeName := "未知"
+	var account models.CertAccount
+	if err := database.DB.First(&account, order.AccountID).Error; err == nil {
+		typeName = certAccountTypeName(account.Type)
+	}
+	title, content := buildCertIssueSuccessMessage(&order, domains, typeName, time.Now())
+	sendCertNotification(title, content)
+}
+
+/*
+ * SendCertIssueFailNotification 发送证书签发失败通知
+ * 触发点：internal/api/handler/cert.go 的签发失败分支与 task_runner 释放超时订单锁处
+ * @param orderID 证书订单 ID
+ */
+func SendCertIssueFailNotification(orderID uint) {
+	// 与「证书部署失败告警」同策略：默认开启
+	if !sysconfigBoolDefaultTrue("cert_issue_notice_enabled") {
+		return
+	}
+	var order models.CertOrder
+	if err := database.DB.First(&order, orderID).Error; err != nil {
+		return
+	}
+	domains := certOrderDomainList(orderID)
+	if len(domains) == 0 {
+		return
+	}
+	typeName := "未知"
+	var account models.CertAccount
+	if err := database.DB.First(&account, order.AccountID).Error; err == nil {
+		typeName = certAccountTypeName(account.Type)
+	}
+	title, content := buildCertIssueFailMessage(&order, domains, typeName, time.Now())
+	sendCertNotification(title, content)
 }
 
 func SendCertRenewFailNotification(orderID uint, domainNames []string, errSummary string) {
@@ -531,8 +744,7 @@ func sysconfigBoolDefaultTrue(key string) bool {
 
 /* sysconfigBoolExplicitOn 未配置视为 false；仅 true/1/yes/on 为开 */
 func sysconfigBoolExplicitOn(key string) bool {
-	v := strings.TrimSpace(strings.ToLower(sysconfig.GetValue(key)))
-	return v == "true" || v == "1" || v == "yes" || v == "on"
+	return sysconfig.ExplicitOn(sysconfig.GetValue(key))
 }
 
 /* certExpireNoticeLeadDays 证书到期推送提前天数：优先 cert_expire_notice_days，≤0 或未配则用 cert_expire_days，再默认 30 */

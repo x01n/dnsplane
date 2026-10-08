@@ -31,12 +31,12 @@ func init() {
 		Config: []cert.ConfigField{
 			{Name: "AccessKeyId", Key: "AccessKeyId", Type: "input", Required: true},
 			{Name: "SecretAccessKey", Key: "SecretAccessKey", Type: "input", Required: true},
-			{
-				Name: "使用代理服务器", Key: "proxy", Type: "radio",
-				Options: []cert.ConfigOption{{Value: "0", Label: "否"}, {Value: "1", Label: "是"}},
-				Value:   "0",
-			},
 		},
+		/*
+		 * CNAME 与 IsDeploy 保持 false：该注册对应「证书申请」用途。
+		 * 部署用途由 internal/cert/deploy/config_cloud.go 的 huoshan 提供（含产品/Domain 等任务字段）
+		 * 并经 deploy.MergeDeployProviderConfigsForAPI 在 /api/cert/providers 的 deploy 视图输出。
+		 */
 		CNAME:    false,
 		IsDeploy: false,
 	})
@@ -45,7 +45,6 @@ func init() {
 type Provider struct {
 	accessKeyID     string
 	secretAccessKey string
-	proxy           bool
 	client          *http.Client
 	logger          cert.Logger
 }
@@ -55,9 +54,6 @@ func NewProvider(config, ext map[string]interface{}) cert.Provider {
 		accessKeyID:     getString(config, "AccessKeyId"),
 		secretAccessKey: getString(config, "SecretAccessKey"),
 		client:          &http.Client{Timeout: 30 * time.Second},
-	}
-	if v, ok := config["proxy"]; ok {
-		p.proxy = fmt.Sprintf("%v", v) == "1"
 	}
 	return p
 }
@@ -106,14 +102,11 @@ func (p *Provider) BuyCert(ctx context.Context, domains []string, order *cert.Or
 	}
 	_ = org
 
-	// We can store orgID in order.Identifiers? No, Identifiers are domain identifiers.
-	// We can store it in OrderURL or somewhere?
-	// But CreateOrder needs it.
-	// We can't persist it in OrderInfo easily if we don't have a field.
-	// However, we can fetch it again in CreateOrder. It's an extra call but safer.
-	// Or we can abuse `OrderURL` to store it temporarily if BuyCert is called before CreateOrder.
-	// But `OrderURL` is used for InstanceID later.
-	// Let's just fetch it in CreateOrder.
+	/*
+	 * BuyCert 只校验控制台已存在信息模板，不在此保存组织 ID：
+	 * OrderInfo 没有承载组织 ID 的字段，OrderURL 又要留给 CertificateGetInstance 返回的实例 ID。
+	 * 组织 ID 由 CreateOrder 重新查询后直接用于 QuickApplyCertificate 的 organization_id 参数
+	 */
 
 	return nil
 }
@@ -161,34 +154,12 @@ func (p *Provider) CreateOrder(ctx context.Context, domains []string, order *cer
 	if err != nil {
 		return nil, err
 	}
-
-	// Response is the instance ID directly?
-	// PHP: $instance_id = $this->request('POST', 'QuickApplyCertificate', $param);
-	// Wait, does PHP request return the body or a specific field?
-	// PHP Volcengine::request returns json_decoded body.
-	// If QuickApplyCertificate returns just a string? Unlikely.
-	// Documentation says it returns object.
-	// Wait, PHP code: `if(empty($instance_id)) throw...`
-	// Let's assume it returns a map and we need to find the ID.
-	// Or maybe the PHP client wrapper returns `Result` field?
-	// Let's look at PHP Volcengine.php `request`:
-	// `return $this->curl(...)` -> returns json_decode array.
-	// If `QuickApplyCertificate` returns `{ "Result": "id" }`?
-	// I'll assume standard Volcengine response structure which usually wraps result.
-	// But wait, `CertificateGetInstance` returned `content` array.
-	// I'll assume `applyResp` is the map. I need to find the ID.
-	// Let's check keys.
-
 	var instanceID string
 	if id, ok := applyResp["result"].(string); ok {
 		instanceID = id
 	} else if id, ok := applyResp["Result"].(string); ok {
 		instanceID = id
 	} else {
-		// Fallback: maybe the whole response is the ID? (Unlikely)
-		// Let's log keys if possible or assume it's "result" based on typical APIs.
-		// Actually, I should check if I can debug this.
-		// But I'll assume "result" or "Result".
 		return nil, fmt.Errorf("failed to get instance id from response")
 	}
 
@@ -242,9 +213,6 @@ func (p *Provider) AuthOrder(ctx context.Context, domains []string, order *cert.
 	params := map[string]interface{}{
 		"action": "",
 	}
-	// Query params in URL? PHP: request('POST', ..., $param, $query)
-	// $query = ['instance_id' => $order['instance_id']]
-	// $param = ['action' => '']
 
 	queryParams := map[string]string{
 		"instance_id": order.OrderURL,

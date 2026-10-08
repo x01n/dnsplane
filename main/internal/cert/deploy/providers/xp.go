@@ -18,7 +18,6 @@ import (
 
 func init() {
 	base.Register("xp", NewXPProvider)
-	base.Register("xpanel", NewXPProvider)
 }
 
 // XPProvider 小皮面板部署器

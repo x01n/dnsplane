@@ -61,6 +61,10 @@ func Recovery() gin.HandlerFunc {
 				// 标记到RequestTrace用于数据库记录
 				SetError(c, errMsg)
 				c.Set(ErrorStackKey, stackTrace)
+				if c.Writer.Written() {
+					c.Abort()
+					return
+				}
 
 				// 返回500错误
 				c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{

@@ -23,10 +23,6 @@ func init() {
 			{Name: "IP地址", Key: "ip", Type: "input", Required: true},
 			{Name: "端口", Key: "port", Type: "input", Required: true},
 			{Name: "API KEY", Key: "apikey", Type: "input", Required: true},
-			{Name: "使用代理服务器", Key: "proxy", Type: "radio", Options: []dns.ConfigOption{
-				{Value: "0", Label: "否"},
-				{Value: "1", Label: "是"},
-			}, Value: "0"},
 		},
 		Features: dns.ProviderFeatures{
 			Remark: 2, Status: true, Redirect: false, Log: false, Weight: false, Page: true, Add: true,
@@ -40,7 +36,6 @@ type Provider struct {
 	serverID string
 	domain   string
 	domainID string
-	proxy    bool
 	client   *http.Client
 	lastErr  string
 	cache    map[string][]rrset
@@ -75,7 +70,6 @@ func NewProvider(config map[string]string, domain, domainID string) dns.Provider
 		serverID: "localhost",
 		domain:   domain,
 		domainID: domainID,
-		proxy:    config["proxy"] == "1",
 		client:   &http.Client{Timeout: 30 * time.Second},
 		cache:    make(map[string][]rrset),
 	}

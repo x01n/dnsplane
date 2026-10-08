@@ -16,7 +16,6 @@ import (
 
 func init() {
 	base.Register("kangleadmin", NewKangleAdminProvider)
-	base.Register("kangle_admin", NewKangleAdminProvider)
 }
 
 // KangleAdminProvider Kangle管理员面板部署器

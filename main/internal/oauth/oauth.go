@@ -123,7 +123,17 @@ func LoadProviderConfig(name string) ProviderConfig {
 	}
 }
 
-// GetEnabledProviders 获取所有已启用的提供商信息（供前端展示）
+/*
+ * GetEnabledProviders 获取已启用的提供商信息（供前端展示）
+ *
+ * 「已启用」= 已配置凭据，由 GetProvider 的配置校验实际把关：
+ * 只有能构造出实例的提供商才进列表，未配置的直接跳过。
+ * 这与后端 OAuthLogin 的判定同源，前端据此渲染的入口不会一进就报「未配置」。
+ *
+ * 注意 Enabled 字段当前恒为 true，不能当作「管理员允许该来源登录」使用 ——
+ * 那个开关是 sys_configs 的 auth_oauth_<provider>_login，由 auth_control.go 读写；
+ * 前端若要在登录页据此隐藏按钮，必须自行读取该开关，不能依赖本函数的返回值
+ */
 func GetEnabledProviders() []ProviderInfo {
 	var result []ProviderInfo
 	for name := range providerFactories {

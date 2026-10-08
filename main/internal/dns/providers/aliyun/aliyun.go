@@ -37,7 +37,9 @@ type Provider struct {
 
 func NewProvider(config map[string]string, domain, domainID string) dns.Provider {
 	cred := credentials.NewAccessKeyCredential(config["AccessKeyId"], config["AccessKeySecret"])
-	conf := sdk.NewConfig()
+	// 必须显式指定 https：SDK 的 NewConfig 默认 Scheme 为 "HTTP"，
+	// 而本路径携带 AccessKey 签名凭据，明文传输会使其可被中间人重放
+	conf := sdk.NewConfig().WithScheme("https")
 	client, err := alidns.NewClientWithOptions("cn-hangzhou", conf, cred)
 	if err != nil {
 		return &Provider{lastErr: err.Error()}

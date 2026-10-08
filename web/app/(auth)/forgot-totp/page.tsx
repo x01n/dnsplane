@@ -5,13 +5,18 @@ import { toast } from 'sonner'
 import { CheckCircle } from 'lucide-react'
 import { authApi } from '@/lib/api'
 import { isValidUserEmail } from '@/lib/email'
+import { useTurnstileGate } from '@/lib/hooks'
+import { TurnstileWidget } from '@/components/turnstile-widget'
+import { TurnstileGateNotice } from '@/components/turnstile-gate-notice'
 import { AuthAnimatedLayout } from '@/components/auth/auth-animated-layout'
 import { AuthFooterNav } from '@/components/auth/auth-footer-nav'
 import shell from '@/components/auth/animated-login-shell.module.css'
 import { cn } from '@/lib/utils'
 
 /**
- * POST /api/auth/forgot-totp，仅 { email }。未配置邮件时服务端仍返回成功提示。
+ * POST /api/auth/forgot-totp，body { email, turnstile_token }。
+ * turnstile_token 仅在服务端配置了 turnstile_secret_key 时才被强制校验，否则传空串即可。
+ * 未配置邮件时服务端仍返回成功提示。
  */
 export default function ForgotTOTPPage() {
   const [step, setStep] = useState(1)
@@ -19,6 +24,9 @@ export default function ForgotTOTPPage() {
   const [email, setEmail] = useState('')
   const [emailFocus, setEmailFocus] = useState(false)
   const [characterErrorNonce, setCharacterErrorNonce] = useState(0)
+  const turnstile = useTurnstileGate()
+  const [turnstileToken, setTurnstileToken] = useState('')
+  const [turnstileRefreshSignal, setTurnstileRefreshSignal] = useState(0)
 
   const bumpError = () => setCharacterErrorNonce((n) => n + 1)
 
@@ -73,17 +81,28 @@ export default function ForgotTOTPPage() {
               bumpError()
               return
             }
+            if (turnstile.enabled && !turnstileToken) {
+              toast.error('请先完成人机验证')
+              bumpError()
+              return
+            }
             if (submitLockRef.current) return
             submitLockRef.current = true
             setStep(2)
             toast.success('请求已提交，请留意邮箱与垃圾箱')
             void authApi
-              .forgotTotp({ email: trimmed })
+              .forgotTotp({
+                email: trimmed,
+                // 契约：后端配置了私有密钥就会校验，有合法站点密钥时必须带上 token
+                ...(turnstile.enabled ? { turnstile_token: turnstileToken } : {}),
+              })
               .then((res) => {
                 if (res.code !== 0) {
                   toast.error(res.msg || '发送失败')
                   setStep(1)
                   bumpError()
+                  setTurnstileToken('')
+                  setTurnstileRefreshSignal((n) => n + 1)
                 }
               })
               .catch((e) => {
@@ -91,6 +110,8 @@ export default function ForgotTOTPPage() {
                 toast.error('发送失败')
                 setStep(1)
                 bumpError()
+                setTurnstileToken('')
+                setTurnstileRefreshSignal((n) => n + 1)
               })
               .finally(() => {
                 submitLockRef.current = false
@@ -118,6 +139,18 @@ export default function ForgotTOTPPage() {
               />
             </div>
           </div>
+
+          {turnstile.status === 'ready' && (
+            <div className="mb-4">
+              <TurnstileWidget
+                siteKey={turnstile.siteKey}
+                onToken={setTurnstileToken}
+                refreshSignal={turnstileRefreshSignal}
+              />
+            </div>
+          )}
+
+          <TurnstileGateNotice status={turnstile.status} onRetry={turnstile.retry} />
 
           <button type="submit" className={shell.btnPrimaryClassic}>
             发送重置链接

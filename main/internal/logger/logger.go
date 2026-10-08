@@ -63,6 +63,10 @@ func NewWithOptions(logDir string, level LogLevel, consoleOutput, colorEnabled b
 		consoleOutput: consoleOutput,
 		colorEnabled:  colorEnabled,
 	}
+	if runningUnderGoTest() {
+		l.logger = log.New(os.Stdout, "", 0)
+		return l
+	}
 	if err := os.MkdirAll(l.logDir, 0755); err != nil {
 		log.Printf("创建日志目录失败: %v", err)
 	}
@@ -335,6 +339,18 @@ var globalLogger *Logger
 
 func init() {
 	globalLogger = New()
+}
+
+func runningUnderGoTest() bool {
+	if !strings.HasSuffix(os.Args[0], ".test") {
+		return false
+	}
+	for _, arg := range os.Args[1:] {
+		if strings.HasPrefix(arg, "-test.") {
+			return true
+		}
+	}
+	return false
 }
 
 

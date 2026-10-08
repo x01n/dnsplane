@@ -582,7 +582,7 @@ export default function ProfilePage() {
                             </Button>
                           </>
                         ) : (
-                          <span className="text-xs text-muted-foreground">请联系管理员开启 API 后由系统生成密钥</span>
+                          <span className="text-xs text-muted-foreground">密钥尚未生成，点「重置」即可获取</span>
                         )}
                       </div>
                     </div>

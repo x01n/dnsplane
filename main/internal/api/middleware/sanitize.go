@@ -56,6 +56,18 @@ var sensitiveKeys = map[string]struct{}{
 	"mail_password":     {},
 }
 
+/* normalizedSensitiveKeys 是 sensitiveKeys 的归一化副本
+ * isSensitiveKey 对每个 JSON key 都会调用一次，若在函数内遍历原表并对每项
+ * 重新执行 normalizeKey，单次判断将从 O(1) 退化为 O(表大小) 次字符串分配
+ */
+var normalizedSensitiveKeys = func() map[string]struct{} {
+	m := make(map[string]struct{}, len(sensitiveKeys))
+	for k := range sensitiveKeys {
+		m[normalizeKey(k)] = struct{}{}
+	}
+	return m
+}()
+
 var sensitiveHeaders = map[string]struct{}{
 	"authorization":   {},
 	"cookie":          {},
@@ -78,16 +90,10 @@ func normalizeKey(k string) string {
 
 // isSensitiveKey 判断 JSON key / form 字段是否属于敏感列表。
 func isSensitiveKey(k string) bool {
-	normalized := normalizeKey(k)
-	for key := range sensitiveKeys {
-		if normalized == normalizeKey(key) {
-			return true
-		}
-	}
-	if longCredentialRe.MatchString(k) {
+	if _, ok := normalizedSensitiveKeys[normalizeKey(k)]; ok {
 		return true
 	}
-	return false
+	return longCredentialRe.MatchString(k)
 }
 
 // SanitizeBodyForLog 接收请求/响应的原始 body 字符串，返回脱敏后的版本。
@@ -125,6 +131,7 @@ func SanitizeBodyForLog(body string, contentType string) string {
 	return body
 }
 
+// redactJSON 递归脱敏 map 与 slice 中的敏感字段值
 func redactJSON(v *any) {
 	switch node := (*v).(type) {
 	case map[string]any:

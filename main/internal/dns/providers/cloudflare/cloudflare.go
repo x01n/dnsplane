@@ -486,10 +486,10 @@ func (p *Provider) GetDomainRecordLog(ctx context.Context, page, pageSize int, k
 }
 
 func (p *Provider) GetRecordLine(ctx context.Context) ([]dns.RecordLine, error) {
-	return []dns.RecordLine{
-		{ID: "0", Name: "仅DNS"},
-		{ID: "1", Name: "已代理"},
-	}, nil
+	// 编目见 lines.go，与下方 AddDomainRecord/UpdateDomainRecord 的 proxied 判定同源
+	lines := make([]dns.RecordLine, len(Lines))
+	copy(lines, Lines)
+	return lines, nil
 }
 
 func (p *Provider) GetMinTTL() int {

@@ -22,18 +22,16 @@ type EnhanceService struct {
 	email     string
 	apiKey    string
 	auth      int // 0=Global API Key, 1=API Token
-	proxy     bool
 	accountID string
 	client    *http.Client
 }
 
 // NewEnhanceService 创建增强服务
-func NewEnhanceService(email, apiKey string, auth int, proxy bool, accountID string) *EnhanceService {
+func NewEnhanceService(email, apiKey string, auth int, accountID string) *EnhanceService {
 	return &EnhanceService{
 		email:     email,
 		apiKey:    strings.ReplaceAll(apiKey, " ", ""),
 		auth:      auth,
-		proxy:     proxy,
 		accountID: accountID,
 		client:    &http.Client{Timeout: 30 * time.Second},
 	}

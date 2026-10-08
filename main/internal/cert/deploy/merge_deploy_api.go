@@ -2,19 +2,13 @@ package deploy
 
 import "main/internal/cert"
 
-/*
- * MergeDeployProviderConfigsForAPI 合并 cert 注册表中的部署类型与 AllDeployConfigs（dnsmgr 同源），
- * 供 /api/cert/providers 使用：不修改进程内 cert 注册表，避免覆盖 DNS 验证等同名类型（如 huoshan、ucloud）的工厂函数。
- *
- * - 已在 cert 中带 IsDeploy 的条目保留，并对 ssh/ftp/local 用 AllDeployConfigs 覆盖任务表单字段。
- * - 仅存在于 AllDeployConfigs、或 cert 中仅有非部署定义（IsDeploy=false）的类型，补充为独立 deploy 视图。
- */
 func MergeDeployProviderConfigsForAPI(base map[string]cert.ProviderConfig) map[string]cert.ProviderConfig {
 	out := make(map[string]cert.ProviderConfig, len(base)+len(AllDeployConfigs))
 	for k, v := range base {
 		out[k] = v
 	}
 
+	// 表单字段以 AllDeployConfigs 为准的类型；不在名单内时保留 cert 注册表的定义
 	patchServer := map[string]struct{}{"ssh": {}, "ftp": {}, "local": {}}
 
 	for typ, dcfg := range AllDeployConfigs {

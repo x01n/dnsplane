@@ -27,11 +27,6 @@ func registerCertProviders() {
 				Options: []ConfigOption{{Value: "live", Label: "正式环境"}, {Value: "staging", Label: "测试环境"}},
 				Value:   "live",
 			},
-			{
-				Name: "使用代理服务器", Key: "proxy", Type: "radio",
-				Options: []ConfigOption{{Value: "0", Label: "否"}, {Value: "1", Label: "是"}},
-				Value:   "0",
-			},
 		},
 		CNAME: true,
 	})
@@ -44,14 +39,15 @@ func registerCertProviders() {
 			{Name: "邮箱地址", Key: "email", Type: "input", Placeholder: "EAB申请邮箱", Required: true},
 			{Name: "EAB KID", Key: "kid", Type: "input", Required: true},
 			{Name: "EAB HMAC Key", Key: "key", Type: "input", Required: true},
-			{
-				Name: "使用代理服务器", Key: "proxy", Type: "radio",
-				Options: []ConfigOption{{Value: "0", Label: "否"}, {Value: "1", Label: "是"}},
-				Value:   "0",
-			},
 		},
 		CNAME: true,
 	})
+	/*
+	 * tencent 与 aliyun_cert 的工厂由子包补全：
+	 * internal/cert/tencent 与 internal/cert/aliyun 在各自 init 中以 ProviderConfig{}（Type 留空）注册，
+	 * 依 registry.go 的「Type 为空且已有配置则跳过」语义仅补工厂，本处表单字段与说明保持不变。
+	 * 若需移除本处注册，必须先确认子包已带完整表单，否则 /api/cert/providers 会丢失表单定义。
+	 */
 	Register("tencent", nil, ProviderConfig{
 		Type: "tencent",
 		Name: "腾讯云免费SSL",
@@ -61,11 +57,6 @@ func registerCertProviders() {
 			{Name: "SecretId", Key: "secret_id", Type: "input", Required: true},
 			{Name: "SecretKey", Key: "secret_key", Type: "input", Required: true},
 			{Name: "邮箱地址", Key: "email", Type: "input", Placeholder: "申请证书时填写的邮箱", Required: true},
-			{
-				Name: "使用代理服务器", Key: "proxy", Type: "radio",
-				Options: []ConfigOption{{Value: "0", Label: "否"}, {Value: "1", Label: "是"}},
-				Value:   "0",
-			},
 		},
 		CNAME: false,
 	})
@@ -82,11 +73,6 @@ func registerCertProviders() {
 			{Name: "姓名", Key: "username", Type: "input", Placeholder: "申请联系人的姓名", Required: true},
 			{Name: "手机号码", Key: "phone", Type: "input", Placeholder: "申请联系人的手机号码", Required: true},
 			{Name: "邮箱地址", Key: "email", Type: "input", Placeholder: "申请联系人的邮箱地址", Required: true},
-			{
-				Name: "使用代理服务器", Key: "proxy", Type: "radio",
-				Options: []ConfigOption{{Value: "0", Label: "否"}, {Value: "1", Label: "是"}},
-				Value:   "0",
-			},
 		},
 		CNAME: false,
 	})
@@ -101,11 +87,6 @@ func registerCertProviders() {
 			{Name: "邮箱地址", Key: "email", Type: "input", Placeholder: "证书申请邮箱", Required: true},
 			{Name: "EAB KID", Key: "kid", Type: "input", Placeholder: "留空则不使用EAB认证"},
 			{Name: "EAB HMAC Key", Key: "key", Type: "input", Placeholder: "留空则不使用EAB认证"},
-			{
-				Name: "使用代理服务器", Key: "proxy", Type: "radio",
-				Options: []ConfigOption{{Value: "0", Label: "否"}, {Value: "1", Label: "是"}},
-				Value:   "0",
-			},
 		},
 		CNAME: true,
 	})
@@ -125,11 +106,6 @@ func registerDeployProviders() {
 			{
 				Name: "面板版本", Key: "version", Type: "radio",
 				Options: []ConfigOption{{Value: "0", Label: "Linux面板+Win经典版"}, {Value: "1", Label: "Win极速版"}},
-				Value:   "0",
-			},
-			{
-				Name: "使用代理服务器", Key: "proxy", Type: "radio",
-				Options: []ConfigOption{{Value: "0", Label: "否"}, {Value: "1", Label: "是"}},
 				Value:   "0",
 			},
 		},
@@ -188,11 +164,6 @@ func registerDeployProviders() {
 		Config: []ConfigField{
 			{Name: "AccessKeyId", Key: "access_key_id", Type: "input", Required: true},
 			{Name: "AccessKeySecret", Key: "access_key_secret", Type: "input", Required: true},
-			{
-				Name: "使用代理服务器", Key: "proxy", Type: "radio",
-				Options: []ConfigOption{{Value: "0", Label: "否"}, {Value: "1", Label: "是"}},
-				Value:   "0",
-			},
 		},
 		DeployConfig: []ConfigField{
 			{Name: "域名", Key: "domains", Type: "textarea", Placeholder: "每行一个域名", Required: true},
@@ -209,18 +180,13 @@ func registerDeployProviders() {
 		Config: []ConfigField{
 			{Name: "AccessKeyId", Key: "access_key_id", Type: "input", Required: true},
 			{Name: "AccessKeySecret", Key: "access_key_secret", Type: "input", Required: true},
-			{
-				Name: "使用代理服务器", Key: "proxy", Type: "radio",
-				Options: []ConfigOption{{Value: "0", Label: "否"}, {Value: "1", Label: "是"}},
-				Value:   "0",
-			},
 		},
 		DeployConfig: []ConfigField{
 			{Name: "域名", Key: "domains", Type: "textarea", Placeholder: "每行一个域名", Required: true},
 		},
 	})
 
-	// 腾讯云（与 deploy/config_cloud 及 dnsmgr tencent.php 能力对齐：按产品部署到 CDN / EdgeOne / CLB 等）
+	// 腾讯云
 	Register("tencent_cdn", nil, ProviderConfig{
 		Type:     "tencent_cdn",
 		Name:     "腾讯云",
@@ -230,11 +196,6 @@ func registerDeployProviders() {
 		Config: []ConfigField{
 			{Name: "SecretId", Key: "secret_id", Type: "input", Required: true},
 			{Name: "SecretKey", Key: "secret_key", Type: "input", Required: true},
-			{
-				Name: "使用代理服务器", Key: "proxy", Type: "radio",
-				Options: []ConfigOption{{Value: "0", Label: "否"}, {Value: "1", Label: "是"}},
-				Value:   "0",
-			},
 		},
 		DeployConfig: []ConfigField{
 			{Name: "要部署的产品", Key: "product", Type: "select", Required: true, Value: "cdn", Options: []ConfigOption{
@@ -312,11 +273,6 @@ func registerDeployProviders() {
 		Config: []ConfigField{
 			{Name: "AccessKey", Key: "access_key", Type: "input", Required: true},
 			{Name: "SecretKey", Key: "secret_key", Type: "input", Required: true},
-			{
-				Name: "使用代理服务器", Key: "proxy", Type: "radio",
-				Options: []ConfigOption{{Value: "0", Label: "否"}, {Value: "1", Label: "是"}},
-				Value:   "0",
-			},
 		},
 		DeployConfig: []ConfigField{
 			{Name: "要部署的产品", Key: "product", Type: "select", Required: true, Value: "cdn", Options: []ConfigOption{
@@ -337,11 +293,6 @@ func registerDeployProviders() {
 		IsDeploy: true,
 		Config: []ConfigField{
 			{Name: "Token", Key: "token", Type: "input", Required: true},
-			{
-				Name: "使用代理服务器", Key: "proxy", Type: "radio",
-				Options: []ConfigOption{{Value: "0", Label: "否"}, {Value: "1", Label: "是"}},
-				Value:   "0",
-			},
 		},
 		DeployConfig: []ConfigField{},
 		DeployNote:   "系统会根据关联SSL证书的域名自动更新",
@@ -396,43 +347,9 @@ func registerDeployProviders() {
 		Config: []ConfigField{
 			{Name: "控制台地址", Key: "url", Type: "input", Placeholder: "如: https://192.168.1.100:9443", Required: true},
 			{Name: "API Token", Key: "token", Type: "input", Required: true},
-			{
-				Name: "使用代理服务器", Key: "proxy", Type: "radio",
-				Options: []ConfigOption{{Value: "0", Label: "否"}, {Value: "1", Label: "是"}},
-				Value:   "0",
-			},
 		},
 		DeployConfig: []ConfigField{},
 		DeployNote:   "系统会根据关联SSL证书的域名自动更新",
-	})
-
-	// 1Panel（账户字段与 deploy/config_selfhosted opanel 对齐：key；DeployConfig 与 TaskInputs 对齐）
-	Register("1panel", nil, ProviderConfig{
-		Type:     "1panel",
-		Name:     "1Panel",
-		Icon:     "1panel.png",
-		Note:     "更新 1Panel 证书管理内的 SSL 证书",
-		IsDeploy: true,
-		Config: []ConfigField{
-			{Name: "面板地址", Key: "url", Type: "input", Placeholder: "如: http://192.168.1.100:8090", Required: true},
-			{Name: "接口密钥", Key: "key", Type: "input", Placeholder: "1Panel API 接口密钥", Required: true},
-			{Name: "API版本", Key: "version", Type: "select", Options: []ConfigOption{
-				{Value: "v1", Label: "1.x (v1)"},
-				{Value: "v2", Label: "2.x (v2)"},
-			}, Value: "v2"},
-			{
-				Name: "使用代理服务器", Key: "proxy", Type: "radio",
-				Options: []ConfigOption{{Value: "0", Label: "否"}, {Value: "1", Label: "是"}},
-				Value:   "0",
-			},
-		},
-		DeployConfig: []ConfigField{
-			{Name: "部署类型", Key: "type", Type: "radio", Required: true, Options: []ConfigOption{
-				{Value: "0", Label: "更新已有证书"},
-				{Value: "3", Label: "面板本身"},
-			}, Value: "0"},
-			{Name: "证书ID", Key: "id", Type: "input", Placeholder: "在证书列表查看ID", Show: "type==0"},
-		},
 	})
 
 	// Cdnfly（DeployConfig 与 deploy/config_selfhosted.go TaskInputs 一致）
@@ -446,11 +363,6 @@ func registerDeployProviders() {
 			{Name: "API地址", Key: "url", Type: "input", Placeholder: "如: https://cdn.example.com", Required: true},
 			{Name: "用户ID", Key: "user_id", Type: "input", Required: true},
 			{Name: "API密钥", Key: "api_key", Type: "input", Required: true},
-			{
-				Name: "使用代理服务器", Key: "proxy", Type: "radio",
-				Options: []ConfigOption{{Value: "0", Label: "否"}, {Value: "1", Label: "是"}},
-				Value:   "0",
-			},
 		},
 		DeployConfig: []ConfigField{
 			{Name: "证书ID", Key: "id", Type: "input", Placeholder: "留空则为添加证书"},
@@ -467,11 +379,6 @@ func registerDeployProviders() {
 		Config: []ConfigField{
 			{Name: "API地址", Key: "url", Type: "input", Placeholder: "如: https://lecdn.example.com", Required: true},
 			{Name: "API密钥", Key: "api_key", Type: "input", Required: true},
-			{
-				Name: "使用代理服务器", Key: "proxy", Type: "radio",
-				Options: []ConfigOption{{Value: "0", Label: "否"}, {Value: "1", Label: "是"}},
-				Value:   "0",
-			},
 		},
 		DeployConfig: []ConfigField{
 			{Name: "证书ID", Key: "id", Type: "input", Placeholder: "留空则为添加证书"},
@@ -497,11 +404,6 @@ func registerDeployProviders() {
 				{Value: "0", Label: "GoEdge"},
 				{Value: "1", Label: "FlexCDN"},
 			}, Value: "0"},
-			{
-				Name: "使用代理服务器", Key: "proxy", Type: "radio",
-				Options: []ConfigOption{{Value: "0", Label: "否"}, {Value: "1", Label: "是"}},
-				Value:   "0",
-			},
 		},
 		DeployConfig: []ConfigField{},
 		DeployNote:   "系统会根据关联SSL证书的域名自动更新",
@@ -518,30 +420,6 @@ func registerDeployProviders() {
 			{Name: "面板地址", Key: "url", Type: "input", Placeholder: "如: http://192.168.1.100:3312", Required: true},
 			{Name: "用户名", Key: "username", Type: "input", Required: true},
 			{Name: "密码", Key: "password", Type: "input", Required: true},
-			{
-				Name: "使用代理服务器", Key: "proxy", Type: "radio",
-				Options: []ConfigOption{{Value: "0", Label: "否"}, {Value: "1", Label: "是"}},
-				Value:   "0",
-			},
-		},
-	})
-
-	// Kangle管理员
-	Register("kangle_admin", nil, ProviderConfig{
-		Type:     "kangle_admin",
-		Name:     "Kangle管理员",
-		Icon:     "kangle.png",
-		Note:     "部署证书到Kangle站点(管理员)",
-		IsDeploy: true,
-		Config: []ConfigField{
-			{Name: "面板地址", Key: "url", Type: "input", Placeholder: "如: http://192.168.1.100:3311", Required: true},
-			{Name: "用户名", Key: "username", Type: "input", Required: true},
-			{Name: "密码", Key: "password", Type: "input", Required: true},
-			{
-				Name: "使用代理服务器", Key: "proxy", Type: "radio",
-				Options: []ConfigOption{{Value: "0", Label: "否"}, {Value: "1", Label: "是"}},
-				Value:   "0",
-			},
 		},
 	})
 
@@ -549,35 +427,20 @@ func registerDeployProviders() {
 	Register("mwpanel", nil, ProviderConfig{
 		Type:     "mwpanel",
 		Name:     "MW面板",
-		Icon:     "mw.png",
+		Icon:     "mwpanel.ico",
 		Note:     "部署证书到MW面板",
 		IsDeploy: true,
 		Config: []ConfigField{
-			{Name: "面板地址", Key: "url", Type: "input", Placeholder: "如: http://192.168.1.100:7200", Required: true},
-			{Name: "API密钥", Key: "api_key", Type: "input", Required: true},
-			{
-				Name: "使用代理服务器", Key: "proxy", Type: "radio",
-				Options: []ConfigOption{{Value: "0", Label: "否"}, {Value: "1", Label: "是"}},
-				Value:   "0",
-			},
+			{Name: "面板地址", Key: "url", Type: "input", Placeholder: "如: http://192.168.1.100:8888", Required: true},
+			{Name: "应用ID", Key: "appid", Type: "input", Required: true},
+			{Name: "应用密钥", Key: "appsecret", Type: "input", Required: true},
 		},
-	})
-
-	// 堡垒云WAF
-	Register("baolei", nil, ProviderConfig{
-		Type:     "baolei",
-		Name:     "堡垒云WAF",
-		Icon:     "baolei.png",
-		Note:     "部署证书到堡垒云WAF",
-		IsDeploy: true,
-		Config: []ConfigField{
-			{Name: "API地址", Key: "url", Type: "input", Placeholder: "如: https://api.baolei.com", Required: true},
-			{Name: "API密钥", Key: "api_key", Type: "input", Required: true},
-			{
-				Name: "使用代理服务器", Key: "proxy", Type: "radio",
-				Options: []ConfigOption{{Value: "0", Label: "否"}, {Value: "1", Label: "是"}},
-				Value:   "0",
-			},
+		DeployConfig: []ConfigField{
+			{Name: "部署类型", Key: "type", Type: "radio", Required: true, Options: []ConfigOption{
+				{Value: "0", Label: "网站证书"},
+				{Value: "1", Label: "面板本身"},
+			}, Value: "0"},
+			{Name: "网站名称列表", Key: "sites", Type: "textarea", Placeholder: "每行一个网站名称", Show: "type==0", Required: true},
 		},
 	})
 
@@ -593,11 +456,6 @@ func registerDeployProviders() {
 			{Name: "用户名", Key: "username", Type: "input", Required: true},
 			{Name: "密码", Key: "password", Type: "input", Required: true},
 			{Name: "OTP码", Key: "otp", Type: "input", Placeholder: "如启用二步验证则填写"},
-			{
-				Name: "使用代理服务器", Key: "proxy", Type: "radio",
-				Options: []ConfigOption{{Value: "0", Label: "否"}, {Value: "1", Label: "是"}},
-				Value:   "0",
-			},
 		},
 		DeployConfig: []ConfigField{
 			{Name: "群晖证书描述", Key: "desc", Type: "input", Placeholder: "留空则根据证书通用名匹配"},
@@ -615,11 +473,6 @@ func registerDeployProviders() {
 			{Name: "面板地址", Key: "url", Type: "input", Placeholder: "如: http://192.168.1.100:16601", Required: true},
 			{Name: "安全入口", Key: "path", Type: "input", Placeholder: "如有路径前缀则填写"},
 			{Name: "OpenToken", Key: "opentoken", Type: "input", Required: true},
-			{
-				Name: "使用代理服务器", Key: "proxy", Type: "radio",
-				Options: []ConfigOption{{Value: "0", Label: "否"}, {Value: "1", Label: "是"}},
-				Value:   "0",
-			},
 		},
 		DeployConfig: []ConfigField{},
 		DeployNote:   "系统会根据关联SSL证书的域名自动更新",
@@ -637,11 +490,6 @@ func registerDeployProviders() {
 			{Name: "SSH端口", Key: "port", Type: "input", Value: "22", Required: true},
 			{Name: "用户名", Key: "username", Type: "input", Required: true},
 			{Name: "密码", Key: "password", Type: "input", Required: true},
-			{
-				Name: "使用代理服务器", Key: "proxy", Type: "radio",
-				Options: []ConfigOption{{Value: "0", Label: "否"}, {Value: "1", Label: "是"}},
-				Value:   "0",
-			},
 		},
 		DeployConfig: []ConfigField{},
 		DeployNote:   "系统会根据关联SSL证书的域名自动更新",
@@ -658,11 +506,6 @@ func registerDeployProviders() {
 			{Name: "面板地址", Key: "url", Type: "input", Placeholder: "如: https://192.168.1.100:8006", Required: true},
 			{Name: "API令牌ID", Key: "api_user", Type: "input", Required: true},
 			{Name: "API令牌密钥", Key: "api_key", Type: "input", Required: true},
-			{
-				Name: "使用代理服务器", Key: "proxy", Type: "radio",
-				Options: []ConfigOption{{Value: "0", Label: "否"}, {Value: "1", Label: "是"}},
-				Value:   "0",
-			},
 		},
 		DeployConfig: []ConfigField{
 			{Name: "节点名称", Key: "node", Type: "input", Placeholder: "如: pve", Required: true},
@@ -686,45 +529,6 @@ func registerDeployProviders() {
 		},
 	})
 
-	// 筷子面板
-	Register("chopsticks", nil, ProviderConfig{
-		Type:     "chopsticks",
-		Name:     "筷子面板",
-		Icon:     "chopsticks.png",
-		Note:     "部署筷子面板 v2.5+ 版本使用",
-		IsDeploy: true,
-		Config: []ConfigField{
-			{Name: "面板地址", Key: "url", Type: "input", Placeholder: "如: http://192.168.1.100:8888", Required: true},
-			{Name: "API密钥", Key: "api_key", Type: "input", Required: true},
-			{
-				Name: "使用代理服务器", Key: "proxy", Type: "radio",
-				Options: []ConfigOption{{Value: "0", Label: "否"}, {Value: "1", Label: "是"}},
-				Value:   "0",
-			},
-		},
-	})
-
-	// 小皮面板（与 deploy/config_selfhosted 中 xp：url/apikey + TaskInputs sites；部署注册名 xp / xpanel）
-	Register("xpanel", nil, ProviderConfig{
-		Type:     "xpanel",
-		Name:     "小皮面板",
-		Icon:     "xpanel.png",
-		Note:     "部署证书到小皮面板",
-		IsDeploy: true,
-		Config: []ConfigField{
-			{Name: "面板地址", Key: "url", Type: "input", Placeholder: "如: http://192.168.1.100:9080", Required: true},
-			{Name: "接口密钥", Key: "apikey", Type: "input", Required: true},
-			{
-				Name: "使用代理服务器", Key: "proxy", Type: "radio",
-				Options: []ConfigOption{{Value: "0", Label: "否"}, {Value: "1", Label: "是"}},
-				Value:   "0",
-			},
-		},
-		DeployConfig: []ConfigField{
-			{Name: "网站名称列表", Key: "sites", Type: "textarea", Placeholder: "每行一个网站名称", Required: true},
-		},
-	})
-
 	// 华为云CDN（DeployConfig 与 deploy/config_cloud.go 中 huawei_cdn TaskInputs 一致）
 	Register("huawei_cdn", nil, ProviderConfig{
 		Type:     "huawei_cdn",
@@ -735,11 +539,6 @@ func registerDeployProviders() {
 		Config: []ConfigField{
 			{Name: "Access Key", Key: "access_key", Type: "input", Required: true},
 			{Name: "Secret Key", Key: "secret_key", Type: "input", Required: true},
-			{
-				Name: "使用代理服务器", Key: "proxy", Type: "radio",
-				Options: []ConfigOption{{Value: "0", Label: "否"}, {Value: "1", Label: "是"}},
-				Value:   "0",
-			},
 		},
 		DeployConfig: []ConfigField{
 			{Name: "域名", Key: "domains", Type: "textarea", Placeholder: "每行一个域名", Required: true},
@@ -756,14 +555,69 @@ func registerDeployProviders() {
 		Config: []ConfigField{
 			{Name: "公钥", Key: "public_key", Type: "input", Required: true},
 			{Name: "私钥", Key: "private_key", Type: "input", Required: true},
-			{
-				Name: "使用代理服务器", Key: "proxy", Type: "radio",
-				Options: []ConfigOption{{Value: "0", Label: "否"}, {Value: "1", Label: "是"}},
-				Value:   "0",
-			},
 		},
 		DeployConfig: []ConfigField{
 			{Name: "云分发资源ID", Key: "domain_id", Type: "input", Required: true},
+		},
+	})
+
+	// 1Panel
+	Register("opanel", nil, ProviderConfig{
+		Type:     "opanel",
+		Name:     "1Panel",
+		Icon:     "opanel.png",
+		Note:     "更新1Panel证书管理内的SSL证书",
+		IsDeploy: true,
+		Config: []ConfigField{
+			{Name: "面板地址", Key: "url", Type: "input", Placeholder: "如: http://192.168.1.100:8888", Required: true},
+			{Name: "接口密钥", Key: "key", Type: "input", Placeholder: "1Panel API接口密钥", Required: true},
+			{Name: "版本", Key: "version", Type: "radio", Options: []ConfigOption{{Value: "v1", Label: "1.x"}, {Value: "v2", Label: "2.x"}}, Value: "v2"},
+		},
+		DeployConfig: []ConfigField{
+			{Name: "部署类型", Key: "type", Type: "radio", Required: true, Options: []ConfigOption{
+				{Value: "0", Label: "更新已有证书"},
+				{Value: "3", Label: "面板本身"},
+			}, Value: "0"},
+			{Name: "证书ID", Key: "id", Type: "input", Placeholder: "在证书列表查看ID", Show: "type==0"},
+		},
+	})
+
+	// 小皮面板
+	Register("xp", nil, ProviderConfig{
+		Type:     "xp",
+		Name:     "小皮面板",
+		Icon:     "xp.png",
+		Note:     "部署证书到小皮面板",
+		IsDeploy: true,
+		Config: []ConfigField{
+			{Name: "面板地址", Key: "url", Type: "input", Required: true},
+			{Name: "接口密钥", Key: "apikey", Type: "input", Required: true},
+		},
+		DeployConfig: []ConfigField{
+			{Name: "网站名称列表", Key: "sites", Type: "textarea", Placeholder: "每行一个网站名称", Required: true},
+		},
+	})
+
+	// Kangle管理员
+	Register("kangleadmin", nil, ProviderConfig{
+		Type:     "kangleadmin",
+		Name:     "Kangle管理员",
+		Icon:     "host.png",
+		Note:     "支持虚拟主机与CDN站点",
+		IsDeploy: true,
+		Config: []ConfigField{
+			{Name: "面板地址", Key: "url", Type: "input", Required: true},
+			{Name: "管理员面板路径", Key: "path", Type: "input", Placeholder: "留空默认为/admin"},
+			{Name: "管理员用户名", Key: "username", Type: "input", Required: true},
+			{Name: "面板安全码", Key: "skey", Type: "input", Required: true},
+		},
+		DeployConfig: []ConfigField{
+			{Name: "网站用户名", Key: "name", Type: "input", Required: true},
+			{Name: "部署类型", Key: "type", Type: "radio", Required: true, Options: []ConfigOption{
+				{Value: "0", Label: "网站SSL证书"},
+				{Value: "1", Label: "单域名SSL证书"},
+			}, Value: "0"},
+			{Name: "CDN域名列表", Key: "domains", Type: "textarea", Placeholder: "每行一个域名", Show: "type==1", Required: true},
 		},
 	})
 }

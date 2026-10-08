@@ -2,31 +2,7 @@
 
 import { useEffect, useRef } from 'react'
 import { Label } from '@/components/ui/label'
-
-function loadScriptOnce(src: string, attr: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const existing = document.querySelector(`script[${attr}]`)
-    if (existing) {
-      if ((existing as HTMLScriptElement).dataset.loaded === '1') {
-        resolve()
-        return
-      }
-      existing.addEventListener('load', () => resolve(), { once: true })
-      existing.addEventListener('error', () => reject(new Error('script load failed')), { once: true })
-      return
-    }
-    const s = document.createElement('script')
-    s.src = src
-    s.async = true
-    s.setAttribute(attr, '1')
-    s.onload = () => {
-      s.dataset.loaded = '1'
-      resolve()
-    }
-    s.onerror = () => reject(new Error('script load failed'))
-    document.body.appendChild(s)
-  })
-}
+import { loadScriptOnce } from '@/lib/script-loader'
 
 type Props = {
   siteKey: string

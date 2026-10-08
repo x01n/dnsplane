@@ -45,10 +45,13 @@ func init() {
 	base.Register("tencent_upload", NewTencentProvider)
 	base.Register("tencent_lighthouse", NewTencentProvider)
 	base.Register("tencent_ddos", NewTencentProvider)
+	base.Register("tencent_tse", NewTencentProvider)
+	base.Register("tencent_tcb", NewTencentProvider)
+	base.Register("tencent_update", NewTencentProvider)
+	base.Register("tencent_update_new", NewTencentProvider)
 }
 
 // TencentProvider 腾讯云统一证书部署器
-// 参考 dnsmgr 实现：上传证书后使用 SSL 服务的 DeployCertificateInstance API 部署
 type TencentProvider struct {
 	base.BaseProvider
 }
@@ -90,6 +93,11 @@ func (p *TencentProvider) Deploy(ctx context.Context, fullchain, privateKey stri
 	product := base.GetConfigString(config, "product")
 	if product == "" {
 		product = "cdn" // 默认CDN
+	}
+
+	// update / update_new 需要回传新的证书ID，统一走 DeployWithInfo
+	if product == "update" || product == "update_new" {
+		return p.DeployWithInfo(ctx, fullchain, privateKey, config, nil)
 	}
 
 	// upload 模式：仅上传证书不部署
@@ -166,7 +174,7 @@ func (p *TencentProvider) deployCommon(fullchain, privateKey, product string, co
 		}
 	}
 
-	// 确定 region（与 PHP dnsmgr 一致：COS/TKE/WAF/SCF/轻量等需指定地域）
+	// 确定 region
 	region := ""
 	if product == "cos" || product == "tke" || product == "waf" || product == "scf" || product == "lighthouse" {
 		region = base.GetConfigString(config, "regionid")
@@ -322,7 +330,6 @@ func (p *TencentProvider) queryDeployResult(client *ssl.Client, recordID uint64)
 }
 
 // deployTEO 部署到腾讯云 EdgeOne (EO)
-// 参考 dnsmgr: 先上传证书到 SSL 获取 CertId，再调用 TEO API ModifyHostsCertificate
 func (p *TencentProvider) deployTEO(fullchain, privateKey string, config map[string]interface{}) error {
 	siteID := base.GetConfigString(config, "site_id")
 	domain := base.GetConfigString(config, "domain")
@@ -351,8 +358,6 @@ func (p *TencentProvider) deployTEO(fullchain, privateKey string, config map[str
 	}
 
 	p.Log(fmt.Sprintf("正在部署证书到腾讯云EdgeOne: %s (ZoneId=%s)", domain, siteID))
-
-	// 构建 TEO API ModifyHostsCertificate 请求（与 dnsmgr tencent.php 一致：国际站走独立 endpoint）
 	teoHost := "teo.tencentcloudapi.com"
 	if base.GetConfigString(config, "site_type") == "intl" {
 		teoHost = "teo.intl.tencentcloudapi.com"

@@ -79,7 +79,7 @@ import { domainApi, accountApi, domainCategoryApi, Domain, Account, DomainItem, 
 import { formatDate, getDaysRemaining } from '@/lib/utils'
 import { usePageSize } from '@/lib/hooks'
 import { ProviderBadge } from '@/components/provider-icon'
-import { SortableHeader, SortState, handleSortToggle } from '@/components/sortable-header'
+import { SortableHeader, SortState } from '@/components/sortable-header'
 import { Pagination } from '@/components/pagination'
 
 const LIST_PAGE_SIZE_OPTIONS = [10, 20, 50, 100] as const
@@ -928,7 +928,7 @@ export default function DomainsPage() {
                     <TableCell>
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
-                          <Button variant="ghost" size="icon">
+                          <Button variant="ghost" size="icon" aria-label="更多操作">
                             <MoreHorizontal className="h-4 w-4" />
                           </Button>
                         </DropdownMenuTrigger>
@@ -1400,13 +1400,13 @@ export default function DomainsPage() {
                         <span className="text-xs text-muted-foreground ml-2">({cat.domain_count} 个域名)</span>
                       </div>
                       <div className="flex gap-1">
-                        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => {
+                        <Button variant="ghost" size="icon" className="h-7 w-7" aria-label="编辑分类" onClick={() => {
                           setEditingCategory(cat)
                           setCategoryForm({ name: cat.name, remark: cat.remark, sort: cat.sort })
                         }}>
                           <Pencil className="h-3.5 w-3.5" />
                         </Button>
-                        <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={async () => {
+                        <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" aria-label="删除分类" onClick={async () => {
                           if (cat.domain_count > 0) { toast.error('该分类下存在域名，无法删除'); return }
                           const res = await domainCategoryApi.delete(cat.id)
                           if (res.code === 0) { toast.success('删除成功'); fetchCategories() } else { toast.error(res.msg || '删除失败') }
