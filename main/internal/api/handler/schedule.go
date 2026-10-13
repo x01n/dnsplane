@@ -14,19 +14,19 @@ import (
 )
 
 type scheduleTaskPayload struct {
-	DomainID    uint   `json:"did"`
-	RR          string `json:"rr"`
-	RecordID    string `json:"recordid"`
-	Type        int    `json:"type"`
-	Cycle       int    `json:"cycle"`
-	SwitchType  int    `json:"switchtype"`
-	SwitchDate  string `json:"switchdate"`
-	SwitchTime  string `json:"switchtime"`
-	Value       string `json:"value"`
-	Line        string `json:"line"`
-	Remark      string `json:"remark"`
-	RecordInfo  string `json:"recordinfo"`
-	Active      *bool  `json:"active"`
+	DomainID   uint   `json:"did"`
+	RR         string `json:"rr"`
+	RecordID   string `json:"recordid"`
+	Type       int    `json:"type"`
+	Cycle      int    `json:"cycle"`
+	SwitchType int    `json:"switchtype"`
+	SwitchDate string `json:"switchdate"`
+	SwitchTime string `json:"switchtime"`
+	Value      string `json:"value"`
+	Line       string `json:"line"`
+	Remark     string `json:"remark"`
+	RecordInfo string `json:"recordinfo"`
+	Active     *bool  `json:"active"`
 }
 
 type scheduleListRequest struct {
@@ -74,11 +74,15 @@ func GetScheduleTasks(c *gin.Context) {
 	var total int64
 	q.Count(&total)
 	var list []row
-	q.Order("a.id desc").Offset((req.Page-1)*req.PageSize).Limit(req.PageSize).Find(&list)
+	q.Order("a.id desc").Offset((req.Page - 1) * req.PageSize).Limit(req.PageSize).Find(&list)
 	middleware.SuccessResponse(c, gin.H{"total": total, "list": list})
 }
 
 func CreateScheduleTask(c *gin.Context) {
+	/* 配额校验：定时切换任务数 */
+	if !CheckQuota(c, "schedules") {
+		return
+	}
 	if !requireUserModule(c, "domain") {
 		return
 	}
@@ -119,7 +123,19 @@ func UpdateScheduleTask(c *gin.Context) {
 	if !requireUserModule(c, "domain") {
 		return
 	}
+	/*
+	 * 路径参数为空时必须早退，不能把空串交给 GORM
+	 *
+	 * First(&task, "") 会退化成不带主键条件的查询，静默命中全表第一条——
+	 * 策略会被改写而不是报「不存在」，且随后的 ensureDomainWrite 用的正是
+	 * 那条被误取记录自己的 DomainID，越权检查会一并落空。
+	 * 对外 API 的路由表没有路径参数，c.Param 恒为空串，这条退化路径是可达的
+	 */
 	id := c.Param("id")
+	if id == "" {
+		middleware.ErrorResponse(c, "缺少任务ID")
+		return
+	}
 	var task models.ScheduleTask
 	if err := database.WithContext(c).First(&task, id).Error; err != nil {
 		middleware.ErrorResponse(c, "策略不存在")
@@ -160,7 +176,12 @@ func DeleteScheduleTask(c *gin.Context) {
 	if !requireUserModule(c, "domain") {
 		return
 	}
+	// 同 UpdateScheduleTask：空 ID 会让 First 取到全表第一条，删除落在错误的策略上
 	id := c.Param("id")
+	if id == "" {
+		middleware.ErrorResponse(c, "缺少任务ID")
+		return
+	}
 	var task models.ScheduleTask
 	if err := database.WithContext(c).First(&task, id).Error; err != nil {
 		middleware.ErrorResponse(c, "策略不存在")
@@ -177,7 +198,12 @@ func ToggleScheduleTask(c *gin.Context) {
 	if !requireUserModule(c, "domain") {
 		return
 	}
+	// 同 UpdateScheduleTask：空 ID 会让 First 取到全表第一条，开关状态改在错误的策略上
 	id := c.Param("id")
+	if id == "" {
+		middleware.ErrorResponse(c, "缺少任务ID")
+		return
+	}
 	var task models.ScheduleTask
 	if err := database.WithContext(c).First(&task, id).Error; err != nil {
 		middleware.ErrorResponse(c, "策略不存在")

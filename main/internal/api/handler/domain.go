@@ -324,7 +324,7 @@ func CreateDomain(c *gin.Context) {
 	}
 
 	/* 套餐配额检查 */
-	if !CheckQuota(c, currentUID(c), "domains") {
+	if !CheckQuota(c, "domains") {
 		return
 	}
 
@@ -612,6 +612,20 @@ func DeleteDomain(c *gin.Context) {
 	database.WithContext(c).Where("did = ?", req.ID).Delete(&models.ScheduleTask{})
 	database.WithContext(c).Where("did = ?", req.ID).Delete(&models.OptimizeIP{})
 	database.WithContext(c).Where("did = ?", req.ID).Delete(&models.DomainNote{})
+	/*
+	 * 解析记录副本与子域名占用一并清掉
+	 *
+	 * 域名是软删除（Domain 带 DeletedAt），行仍在表里。若不清这两张表：
+	 *   dns_records——副本继续占着该 did，而不查 domains 表的统计
+	 *                会把它算进「这个域名的记录数」
+	 *   subdomain_claims——占用按 uid 跨域名全表计数，这就是 records 维度的用量。
+	 *                域名删了占用还在，用户的额度被一个不存在的域名永久占住
+	 *
+	 * 占用表还有一层：它按 did 记，而 did 在域名删除后若被新域名复用，
+	 * 旧占用会落到新域名上把人挡在门外
+	 */
+	database.WithContext(c).Where("did = ?", req.ID).Delete(&models.DNSRecord{})
+	database.WithContext(c).Where("did = ?", req.ID).Delete(&models.SubdomainClaim{})
 
 	database.WithContext(c).Delete(&models.Domain{}, req.ID)
 
@@ -902,6 +916,11 @@ func CreateRecord(c *gin.Context) {
 		return
 	}
 
+	/* 配额校验：解析记录数（读本地副本，不查云端） */
+	if !CheckQuota(c, "records") {
+		return
+	}
+
 	provider := getProviderByDomain(c, &domain)
 	if provider == nil {
 		return
@@ -920,16 +939,44 @@ func CreateRecord(c *gin.Context) {
 	ip := c.ClientIP()
 	ua := c.Request.UserAgent()
 	domainName := domain.Name
+	level := c.GetInt("level")
 
 	utils.SafeGo(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		_, err := provider.AddDomainRecord(ctx, req.Name, req.Type, req.Value, req.Line, req.TTL, req.MX, req.Weight, req.Remark)
+		/*
+		 * 子域名前缀占用判定，在云端写入之前
+		 *
+		 * 控制台版本把写入放在 SafeGo 里，接口早已回「提交成功」，
+		 * 调用方看不到这里的拒绝——但占用必须拦在写入前，
+		 * 否则云端会先出现一条属于他人的记录
+		 */
+		uidNum, _ := strconv.ParseUint(userID, 10, 32)
+		switch service.CheckSubdomainClaim(&domain, req.Name, uint(uidNum), level) {
+		case service.ClaimTakenByOther, service.ClaimDeniedByExisting:
+			service.Audit.LogActionDirect(userID, username, ip, ua, "add_record_denied", domainName,
+				fmt.Sprintf("%s.%s 的子域名前缀已被占用", req.Name, domainName))
+			return
+		}
+
+		recordID, err := provider.AddDomainRecord(ctx, req.Name, req.Type, req.Value, req.Line, req.TTL, req.MX, req.Weight, req.Remark)
 		if err != nil {
 			service.Audit.LogActionDirect(userID, username, ip, ua, "add_record_failed", domainName, fmt.Sprintf("%s.%s -> %s 失败: %s", req.Name, domainName, req.Value, err.Error()))
 			return
 		}
+		service.RegisterSubdomainClaim(&domain, req.Name, uint(uidNum))
 		service.Audit.LogActionDirect(userID, username, ip, ua, "add_record", domainName, fmt.Sprintf("%s.%s -> %s", req.Name, domainName, req.Value))
+		// 云端写成功后回填本地副本：配额判定读的是它，等下一轮同步会漏掉一个窗口
+		uid, _ := strconv.ParseUint(userID, 10, 32)
+		weight := 0
+		if req.Weight != nil {
+			weight = *req.Weight
+		}
+		service.UpsertLocalRecord(&models.DNSRecord{
+			DomainID: domain.ID, RecordID: recordID, Name: req.Name, Type: req.Type,
+			Value: req.Value, Line: req.Line, TTL: req.TTL, MX: req.MX, Weight: weight,
+			Remark: req.Remark, Status: "enable", Domain: domainName, CreatedBy: uint(uid),
+		})
 	})
 
 	middleware.SuccessMsg(c, "提交成功")
@@ -991,6 +1038,30 @@ func UpdateRecord(c *gin.Context) {
 		return
 	}
 
+	/*
+	 * 改名时旧名也要校验
+	 *
+	 * 上面那次只查了 req.Name（要改成的新名）。改名的安全条件是**两侧都授权**：
+	 * 只看新名的话，持有 new 前缀授权的用户可以改 old 前缀下他人的记录
+	 *（传 name=new + 别人的 record_id），把他人的记录从他的前缀下劫走。
+	 * 探针实测确认过：只授权 hijack 前缀的用户能改掉 victim 前缀下的记录，
+	 * 接口回「提交成功」
+	 *
+	 * 旧名从本地副本取。取不到（副本尚未落库、或记录由云端直接建）时跳过——
+	 * 此时无法确定旧名，强行校验会误伤正常编辑。回查云端更准，但那会给
+	 * 每一次编辑都加一跳外部请求，对「改值、改 TTL」这类常规操作不划算
+	 */
+	oldName := ""
+	if local, ok := service.LocalRecord(domain.ID, req.RecordID); ok {
+		oldName = local.Name
+	}
+	if oldName != "" && service.NormalizeRecordPrefix(oldName) != service.NormalizeRecordPrefix(req.Name) {
+		if !middleware.CheckSubDomainPermission(c.GetString("user_id"), c.GetInt("level"), req.DomainID, oldName) {
+			middleware.ErrorResponse(c, "无权操作该子域名")
+			return
+		}
+	}
+
 	/* 提取上下文信息后异步执行 */
 	userID := c.GetString("user_id")
 	username := c.GetString("username")
@@ -1001,11 +1072,57 @@ func UpdateRecord(c *gin.Context) {
 	utils.SafeGo(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
+
+		/*
+		 * 改名要迁移子域名前缀的占用
+		 *
+		 * oldPrefix 必须在写入云端**之前**取：写入后本地副本已被更新成新名，
+		 * 再查这条记录拿到的就是新前缀，旧占用水远释放不掉
+		 *
+		 * 控制台的取法比 v1 多一层兜底：本地副本取不到（例如副本尚未落库、
+		 * 或这条记录是云端直接建的）时留空前缀，直接跳过占用迁移。
+		 * v1 那边有 original.Name 可回退——它已经为子域校验回查过云端了
+		 */
+		oldPrefix := ""
+		if local, ok := service.LocalRecord(domain.ID, req.RecordID); ok {
+			oldPrefix = local.Name
+		}
+		uidNum, _ := strconv.ParseUint(userID, 10, 32)
+		renamed := oldPrefix != "" && service.NormalizeRecordPrefix(oldPrefix) != service.NormalizeRecordPrefix(req.Name)
+
+		/*
+		 * 改名到他人已占的前缀要拒绝，判据与建记录时一致
+		 *
+		 * 同前缀内的常规改动（改值、改 TTL）不属于改名，不参与占用判定——
+		 * 那会对每一次编辑都跑一遍「该前缀是否已有记录」的回查
+		 */
+		if renamed {
+			switch service.CheckSubdomainClaim(&domain, req.Name, uint(uidNum), c.GetInt("level")) {
+			case service.ClaimTakenByOther, service.ClaimDeniedByExisting:
+				service.Audit.LogActionDirect(userID, username, ip, ua, "update_record_denied", domainName,
+					fmt.Sprintf("改名为 %s.%s 被拒：该子域名前缀已被占用", req.Name, domainName))
+				return
+			}
+		}
+
 		if err := provider.UpdateDomainRecord(ctx, req.RecordID, req.Name, req.Type, req.Value, req.Line, req.TTL, req.MX, req.Weight, req.Remark); err != nil {
 			service.Audit.LogActionDirect(userID, username, ip, ua, "update_record_failed", domainName, fmt.Sprintf("%s.%s -> %s 失败: %s", req.Name, domainName, req.Value, err.Error()))
 			return
 		}
 		service.Audit.LogActionDirect(userID, username, ip, ua, "update_record", domainName, fmt.Sprintf("%s.%s -> %s", req.Name, domainName, req.Value))
+		if local, ok := service.LocalRecord(domain.ID, req.RecordID); ok {
+			local.Name, local.Type, local.Value = req.Name, req.Type, req.Value
+			local.Line, local.TTL, local.MX = req.Line, req.TTL, req.MX
+			if req.Weight != nil {
+				local.Weight = *req.Weight
+			}
+			service.UpsertLocalRecord(&local)
+		}
+		if renamed {
+			service.RegisterSubdomainClaim(&domain, req.Name, uint(uidNum))
+			// 旧前缀下再无记录才释放：多值 A 改掉其中一条时保留占用
+			service.ReleaseSubdomainClaimIfEmpty(domain.ID, oldPrefix)
+		}
 	})
 
 	middleware.SuccessMsg(c, "提交成功")
@@ -1080,6 +1197,16 @@ func DeleteRecord(c *gin.Context) {
 			return
 		}
 		service.Audit.LogActionDirect(userID, username, ip, ua, "delete_record", domainName, fmt.Sprintf("删除记录ID: %s", recordID))
+
+		// 释放占用前先取前缀：本地副本删掉后就查不到它的 name 了
+		releasedPrefix := ""
+		if local, ok := service.LocalRecord(domain.ID, recordID); ok {
+			releasedPrefix = local.Name
+		}
+		service.DeleteLocalRecord(domain.ID, recordID)
+		if releasedPrefix != "" {
+			service.ReleaseSubdomainClaimIfEmpty(domain.ID, releasedPrefix)
+		}
 	})
 
 	middleware.SuccessMsg(c, "提交成功")
@@ -1161,9 +1288,21 @@ func SetRecordStatus(c *gin.Context) {
 			return
 		}
 		service.Audit.LogActionDirect(userID, username, ip, ua, "set_record_status", domainName, fmt.Sprintf("%s记录: %s", status, recordID))
+		if local, ok := service.LocalRecord(domain.ID, recordID); ok {
+			local.Status = recordStatusValue(enable)
+			service.UpsertLocalRecord(&local)
+		}
 	})
 
 	middleware.SuccessMsg(c, "提交成功")
+}
+
+/* recordStatusValue 本地副本里记录状态的取值，与云端记录字段同口径 */
+func recordStatusValue(enable bool) string {
+	if enable {
+		return "enable"
+	}
+	return "disable"
 }
 
 type GetRecordLinesRequest struct {
@@ -1460,6 +1599,9 @@ func BatchDomainAction(c *gin.Context) {
 		database.WithContext(c).Where("did IN ?", req.IDs).Delete(&models.ScheduleTask{})
 		database.WithContext(c).Where("did IN ?", req.IDs).Delete(&models.CertCNAME{})
 		database.WithContext(c).Where("did IN ?", req.IDs).Delete(&models.DomainNote{})
+		// 解析记录副本与子域名占用：与单条删除同理，见 DeleteDomain 的说明
+		database.WithContext(c).Where("did IN ?", req.IDs).Delete(&models.DNSRecord{})
+		database.WithContext(c).Where("did IN ?", req.IDs).Delete(&models.SubdomainClaim{})
 	case "set_notice":
 		if req.IsNotice != nil {
 			database.WithContext(c).Model(&models.Domain{}).Where("id IN ?", req.IDs).Update("is_notice", *req.IsNotice)

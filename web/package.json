@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev --turbopack",
-    "build": "set \"ANALYZE=true\" && next build && powershell -NoProfile -Command \"Remove-Item ..\\main\\web -Recurse -Force -ErrorAction SilentlyContinue; Copy-Item -Recurse -Force out ..\\main\\web\"",
+    "build": "set \"ANALYZE=true\" && next build && pwsh -NoProfile -Command \"Remove-Item ..\\main\\web -Recurse -Force -ErrorAction SilentlyContinue; Copy-Item -Recurse -Force out ..\\main\\web\"",
     "build:ci": "next build --webpack && node scripts/sync-main-web.cjs",
     "start": "next start",
     "lint": "eslint"

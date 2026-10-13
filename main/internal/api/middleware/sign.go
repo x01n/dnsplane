@@ -128,7 +128,17 @@ func BindDecryptedData(c *gin.Context, v interface{}) error {
 
 // BindJSONFlexible 优先绑定 DecryptAndVerify 放入上下文的明文；否则按普通 JSON body 绑定（便于未启用加密链路的客户端）
 func BindJSONFlexible(c *gin.Context, v interface{}) error {
-	if data := GetDecryptedData(c); data != nil {
+	/*
+	 * 判据是 len(data) > 0 而非 data != nil
+	 *
+	 * decrypted_data 是一个非 nil 的空 map 时（请求体为 `{}`、或链路未启用加密），
+	 * 走上面这一支会把空 map 序列化成 `{}` 再 Unmarshal 进 v——
+	 * 结果 v 被整体重置为零值，而调用方以为已按明文 body 绑定过。
+	 * 落在参数校验上就是「明明传了参数却说缺少必填项」
+	 *
+	 * 落到 ShouldBindJSON 那支才是对的：明文 body 里可能真有内容
+	 */
+	if data := GetDecryptedData(c); len(data) > 0 {
 		jsonBytes, err := json.Marshal(data)
 		if err != nil {
 			return err
@@ -142,6 +152,20 @@ func BindJSONFlexible(c *gin.Context, v interface{}) error {
 func EncryptedResponse(c *gin.Context, data interface{}) {
 	// 保存原始响应数据用于日志记录
 	c.Set("original_response", data)
+
+	/*
+	 * 对外 API 不参与载荷加密
+	 *
+	 * 那套加密是为控制台前端设计的：密钥来自登录时下发的会话材料，浏览器持有并自行解密。
+	 * 外部调用方只有 API Key，没有解密所需的密钥材料，加密后拿到的是无法解析的密文。
+	 * 识别依据是认证阶段写入的 auth_type，而不是路径——路径可以改，认证方式才是本质区别
+	 */
+	if v, ok := c.Get("auth_type"); ok {
+		if s, _ := v.(string); s == "apikey" {
+			c.JSON(http.StatusOK, data)
+			return
+		}
+	}
 
 	aesKey := GetAESKey(c)
 	if aesKey == nil {

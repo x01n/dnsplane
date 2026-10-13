@@ -22,6 +22,7 @@ var (
 	keyOnce sync.Once
 	cached  []byte
 )
+
 func deriveKey() []byte {
 	keyOnce.Do(func() {
 		cfg := config.Get()

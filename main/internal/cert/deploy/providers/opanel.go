@@ -22,6 +22,7 @@ type OPanelProvider struct {
 	base.BaseProvider
 	client *http.Client
 }
+
 func (p *OPanelProvider) panelAPIKey() string {
 	k := p.GetString("key")
 	if k != "" {

@@ -23,25 +23,25 @@ import (
 // AccelConfig 加速配置
 type AccelConfig struct {
 	// CF
-	CFEnabled       bool   `json:"cf_enabled"`
-	CFPreferDomain  string `json:"cf_prefer_domain"`  // CF 优选域名
-	CFZoneID        string `json:"cf_zone_id"`        // CF SaaS zone ID（复用 hostname 功能）
-	CFDomainID      uint   `json:"cf_domain_id"`      // 面板域名 ID（CF SaaS 配置）
+	CFEnabled      bool   `json:"cf_enabled"`
+	CFPreferDomain string `json:"cf_prefer_domain"` // CF 优选域名
+	CFZoneID       string `json:"cf_zone_id"`       // CF SaaS zone ID（复用 hostname 功能）
+	CFDomainID     uint   `json:"cf_domain_id"`     // 面板域名 ID（CF SaaS 配置）
 
 	// 腾讯云 EO
 	EOEnabled   bool   `json:"eo_enabled"`
 	EOSecretID  string `json:"eo_secret_id"`
 	EOSecretKey string `json:"eo_secret_key"`
-	EOZoneID    string `json:"eo_zone_id"`    // EO 站点 ID
-	EOEndpoint  string `json:"eo_endpoint"`   // cn 或 intl
-	EOPlanID    string `json:"eo_plan_id"`    // EO 套餐 ID
+	EOZoneID    string `json:"eo_zone_id"`  // EO 站点 ID
+	EOEndpoint  string `json:"eo_endpoint"` // cn 或 intl
+	EOPlanID    string `json:"eo_plan_id"`  // EO 套餐 ID
 
 	// 阿里云 ESA
 	ESAEnabled         bool   `json:"esa_enabled"`
 	ESAAccessKeyID     string `json:"esa_access_key_id"`
 	ESAAccessKeySecret string `json:"esa_access_key_secret"`
-	ESASiteID          string `json:"esa_site_id"`   // ESA 站点 ID
-	ESARegion          string `json:"esa_region"`    // cn-hangzhou 或 ap-southeast-1
+	ESASiteID          string `json:"esa_site_id"` // ESA 站点 ID
+	ESARegion          string `json:"esa_region"`  // cn-hangzhou 或 ap-southeast-1
 
 	// 策略
 	Strategy string `json:"strategy"` // "cf_only", "eo_only", "esa_only", "mixed_cf_eo", "mixed_cf_esa"

@@ -321,6 +321,16 @@ func getDomainPermission(userID string, domainID string) (perm *models.Permissio
 	return &m, false, true
 }
 
+/*
+ * DomainPermissionOf 暴露域名权限明细（perm / isOwner / allowed）
+ *
+ * getDomainPermission 只按 ID 判定「有没有权限」，调用方拿不到 read_only 与
+ * sub_domain 两个字段；v1 需要在写操作前拒绝只读授权，故把明细一并暴露
+ */
+func DomainPermissionOf(userID, domainID string) (*models.Permission, bool, bool) {
+	return getDomainPermission(userID, domainID)
+}
+
 /* CheckDomainPermission 检查用户是否有域名权限（供 handler 直接调用） */
 func CheckDomainPermission(userID string, userLevel int, domainID string) bool {
 	if userLevel >= 2 {

@@ -129,7 +129,6 @@ func checkPingICMP(ctx context.Context, ip string, timeout int) *CheckResult {
 	}
 }
 
-
 // resolveIPv4 解析IP或域名为IPv4地址
 func resolveIPv4(ip string) net.IP {
 	dst := net.ParseIP(ip)
@@ -160,7 +159,6 @@ func checkTCPFallback(ctx context.Context, host string, timeout int) *CheckResul
 	conn.Close()
 	return &CheckResult{Success: true, Duration: duration}
 }
-
 
 func CheckTCP(ctx context.Context, host string, port int, timeout int) *CheckResult {
 	start := time.Now()
@@ -343,7 +341,6 @@ func CheckHTTP(ctx context.Context, rawURL string, timeout int, opts *HTTPCheckO
 	out.Success = true
 	return out
 }
-
 
 func ResolveDomain(domain string) ([]string, error) {
 	ips, err := net.LookupIP(domain)

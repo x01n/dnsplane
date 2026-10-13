@@ -65,12 +65,12 @@ func isPrivateOrReservedIP(ip net.IP) bool {
 			return true
 		case 169:
 			if v4[1] == 254 {
-				return true 
+				return true
 			}
 		case 224, 225, 226, 227, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239:
-			return true 
+			return true
 		case 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255:
-			return true 
+			return true
 		}
 	}
 	return false

@@ -267,7 +267,6 @@ func trimRequestLogs(db *gorm.DB, isError bool, keepCount int, label string) {
 	}
 }
 
-
 func (m *MaintenanceService) runVacuumAndOptimize() {
 	logger.Debug("[Maintenance] 开始数据库压缩与优化...")
 	start := time.Now()
@@ -319,7 +318,6 @@ func optimizeGormDB(gormDB *gorm.DB, name string) {
 		logger.Debug("[Maintenance] %s: %s (已是最优)", name, formatBytes(sizeAfter))
 	}
 }
-
 
 var (
 	maintenanceStatsMu   sync.RWMutex

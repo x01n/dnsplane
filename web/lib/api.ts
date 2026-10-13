@@ -467,6 +467,24 @@ export interface TaskStatus {
   last_run?: string
   next_run?: string
   error?: string
+  /**
+   * 解析记录副本同步状态
+   *
+   * 此前这一路只有后台一行日志，副本冻结时面板与管理員都看不见。
+   * 未启动同步服务时为 null（短命实例或测试进程）
+   */
+  record_sync?: {
+    last_time: string
+    /** 上轮成功同步的域名数 */
+    ok: number
+    /** 上轮失败的域名数 */
+    fail: number
+    /** 上轮因分页上限被截断的域名数 */
+    truncated: number
+    last_error: string
+    interval_minutes: number
+    next_time: string
+  } | null
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   [key: string]: any
 }
@@ -756,7 +774,8 @@ export const systemApi = {
     pass?: string
   }) => api.post<{ latency?: number; status?: number }>('/system/proxy/test', data),
   clearCache: () => api.post('/system/cache/clear'),
-  getTaskStatus: () => api.get<{ running: boolean; last_run: string; error?: string }>('/system/task/status'),
+  // 类型集中在 TaskStatus 上：状态页要读 record_sync，内联定义会让它拿不到
+  getTaskStatus: () => api.get<TaskStatus>('/system/task/status'),
   getCronConfig: () => api.get<CronConfig>('/system/cron'),
   updateCronConfig: (data: CronConfig) => api.post('/system/cron', data),
   getDNSProviders: () => api.get<DNSProvider[]>('/dns/providers'),
@@ -1620,4 +1639,116 @@ export interface HostnameRoute {
   hostname: string
   comment: string
   created_at: string
+}
+
+/** 配额维度键 → 上限；-1 不限、0 禁止、正数为上限 */
+export type QuotaMap = Record<string, number>
+
+/**
+ * 个体配额表单：值为 undefined 表示该维度未被覆盖，回落到套餐或系统默认
+ *
+ * 与 -1（不限）语义不同，所以不能复用 QuotaMap——那个类型不允许缺值，
+ * 而缺值正是「继承」的表达
+ */
+export type QuotaOverlayForm = Record<string, number | undefined>
+
+/** 套餐（models.Plan），subscriber_count 为在用订阅数，删除前用于判断影响面 */
+export interface Plan {
+  id: string
+  name: string
+  description: string
+  is_default: boolean
+  sort: number
+  /** 0 停用 1 启用 */
+  status: number
+  quotas: string
+  features: string
+  /**
+   * 套餐绑定的域名，逗号分隔；授予套餐时一并下发访问权限
+   *
+   * 与 quotas.max_domains 是两回事：后者限「用户自己接入多少域名」，
+   * 这个列出「套餐连同哪几个域名一起给用户」
+   */
+  included_domains: string
+  created_at: string
+  updated_at: string
+  subscriber_count: number
+}
+
+/** 用户套餐订阅（models.UserSubscription）；expire_time 为空表示永久 */
+export interface UserSubscription {
+  id: string
+  user_id: number
+  plan_id: string
+  plan_name: string
+  /** 0 停用 1 启用 */
+  status: number
+  auto_renew: boolean
+  start_time: string
+  expire_time: string | null
+  created_at: string
+  updated_at: string
+}
+
+/** 配额来源：admin=个体覆盖、plan=套餐、system=系统默认 */
+export type QuotaSource = 'admin' | 'plan' | 'system'
+
+export interface QuotaDetail {
+  source: QuotaSource
+  plan_id: string
+  plan_name: string
+  quotas: QuotaMap
+  used: QuotaMap
+}
+
+/** 用户配额列表的一行（handler.GetUserQuotas） */
+export interface UserQuotaRow {
+  user_id: number
+  username: string
+  level: number
+  source: QuotaSource
+  plan_id: string
+  plan_name: string
+  /** 是否存在订阅记录（含已过期）。过期时 plan_name 为空，撤销按钮需据此判断 */
+  has_subscription: boolean
+  /**
+   * 只属于个体覆盖的维度（不是三层合并后的生效值）
+   *
+   * 表单要用它预填：用 quotas（生效值）预填会把套餐与系统默认的值一并写上，
+   * 保存后固化成个体覆盖，此后调套餐该用户永远停在旧值
+   */
+  overlays: QuotaMap
+  quotas: QuotaMap
+  used: QuotaMap
+  remark: string
+  updated_at: string | null
+}
+
+// 配额与套餐 APIs
+export const quotaApi = {
+  /** 当前用户自己的配额与用量（handler.GetMyQuota） */
+  getMine: () => api.get<QuotaDetail>('/user/quota'),
+
+  listPlans: () => api.get<{ total: number; list: Plan[] }>('/system/plans'),
+  createPlan: (data: { name: string; description?: string; status?: number; sort?: number; quotas: QuotaMap; features?: Record<string, boolean> }) =>
+    api.post<Plan>('/system/plans', data),
+  updatePlan: (id: string, data: { name?: string; description?: string; status?: number; sort?: number; quotas: QuotaMap; features?: Record<string, boolean> }) =>
+    api.post<Plan>(`/system/plans/${id}`, data),
+  deletePlan: (id: string) => api.post(`/system/plans/${id}/delete`, {}),
+  setDefaultPlan: (id: string) => api.post(`/system/plans/${id}/default`, {}),
+
+  listUserQuotas: () => api.get<{ total: number; list: UserQuotaRow[] }>('/system/user-quotas'),
+  setUserQuota: (uid: number | string, data: { quotas: QuotaMap; remark?: string }) =>
+    api.post(`/system/user-quotas/${uid}`, data),
+  resetUserQuota: (uid: number | string) => api.post(`/system/user-quotas/${uid}/reset`, {}),
+  /** 未订阅时后端返回 data: null，不是错误 */
+  getUserSubscription: (uid: number | string) =>
+    api.get<UserSubscription | null>(`/system/user-quotas/${uid}/sub`),
+  setUserSubscription: (uid: number | string, data: { plan_id: string; expire_at?: string }) =>
+    api.post(`/system/user-quotas/${uid}/sub`, data),
+  revokeUserSubscription: (uid: number | string) =>
+    api.post(`/system/user-quotas/${uid}/sub/revoke`, {}),
+
+  getQuotaDefault: () => api.get<{ quotas: QuotaMap; limits: QuotaMap }>('/system/quota-default'),
+  updateQuotaDefault: (data: { quotas: QuotaMap }) => api.post('/system/quota-default', data),
 }

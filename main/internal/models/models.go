@@ -110,7 +110,14 @@ type Permission struct {
 	SubDomain  string     `gorm:"size:80" json:"sub"`              // 子域名限制，空表示所有
 	ReadOnly   bool       `gorm:"default:false" json:"read_only"`  // 只读权限
 	ExpireTime *time.Time `json:"expire_time"`                     // 权限过期时间
-	CreatedAt  time.Time  `json:"created_at"`
+	/*
+	 * Source 权限来源：空为管理员手工授予，"plan" 为套餐绑定域名时自动下发
+	 *
+	 * 区分来源是撤销套餐的必要条件：撤销时只能删掉套餐下发的那些，
+	 * 管理员单独给过的授权必须保留，否则撤销套餐会连带削掉他的手工授权
+	 */
+	Source    string    `gorm:"size:16" json:"source"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 // Log 操作日志表
@@ -132,47 +139,47 @@ type Log struct {
 
 // DMTask 容灾切换任务表
 type DMTask struct {
-	ID             uint   `gorm:"primaryKey" json:"id"`
-	DomainID       uint   `gorm:"column:did;index" json:"did"`
-	RR             string `gorm:"size:128;not null" json:"rr"`
-	RecordID       string `gorm:"size:60;not null" json:"record_id"`
-	RecordType     string `gorm:"size:20" json:"record_type"`
-	RecordLine     string `gorm:"size:64" json:"record_line"`
-	Type           int    `gorm:"default:0" json:"type"` // 0: pause/resume, 1: delete, 2: switch backup
-	MainValue      string `gorm:"size:128" json:"main_value"`
-	BackupValue    string `gorm:"size:128" json:"backup_value"`
-	BackupValues   string `gorm:"size:1024" json:"backup_values"` // 多备用，逗号分隔；非空时优先于 BackupValue
-	BackupType     string `gorm:"size:16" json:"backup_type"`     // ip / cname 等
-	CheckType      int    `gorm:"default:0" json:"check_type"`    // 0: ping, 1: tcp, 2: http, 3: https
-	CheckURL       string `gorm:"size:512" json:"check_url"`
-	TCPPort        int    `json:"tcp_port"`
-	Frequency      int    `gorm:"not null" json:"frequency"` // seconds
-	Cycle          int    `gorm:"default:3" json:"cycle"`    // fail count before switch
-	Timeout        int    `gorm:"default:2" json:"timeout"`  // seconds
-	Remark         string `gorm:"size:100" json:"remark"`
-	UseProxy       bool   `gorm:"default:false" json:"use_proxy"`
-	CDN            bool   `gorm:"default:false" json:"cdn"`
-	AddTime        int64  `json:"add_time"`
-	CheckTime      int64  `json:"check_time"`
-	CheckNextTime  int64  `gorm:"index:idx_dm_tasks_active_next,priority:2" json:"check_next_time"`
-	SwitchTime     int64  `json:"switch_time"`
-	ErrCount       int    `gorm:"default:0" json:"err_count"`
-	Status         int    `gorm:"default:0" json:"status"`         // 0: normal, 1: switched
-	MainHealth     bool   `gorm:"default:true" json:"main_health"` // 最后一次探测主源是否健康
-	Active         bool   `gorm:"default:false;index:idx_dm_tasks_active_next,priority:1" json:"active"`
-	RecordInfo     string `gorm:"size:200" json:"record_info"`
-	ExpectStatus   string `gorm:"size:64" json:"expect_status"`
-	ExpectKeyword  string `gorm:"size:200" json:"expect_keyword"`
-	MaxRedirects   int    `gorm:"default:0" json:"max_redirects"`
-	ProxyType      string `gorm:"size:16" json:"proxy_type"`
-	ProxyHost      string `gorm:"size:255" json:"proxy_host"`
-	ProxyPort      int    `gorm:"default:0" json:"proxy_port"`
-	ProxyUsername  string `gorm:"size:128" json:"proxy_username"`
-	ProxyPassword  string `gorm:"size:256" json:"-"`
-	NotifyEnabled  bool   `gorm:"default:false" json:"notify_enabled"`
-	NotifyChannels string `gorm:"type:text" json:"notify_channels"` // JSON 数组字符串，如 ["mail","webhook"]
-	AutoRestore    bool   `gorm:"default:false" json:"auto_restore"`
-	AllowInsecureTLS bool `gorm:"default:false" json:"allow_insecure_tls"`
+	ID               uint   `gorm:"primaryKey" json:"id"`
+	DomainID         uint   `gorm:"column:did;index" json:"did"`
+	RR               string `gorm:"size:128;not null" json:"rr"`
+	RecordID         string `gorm:"size:60;not null" json:"record_id"`
+	RecordType       string `gorm:"size:20" json:"record_type"`
+	RecordLine       string `gorm:"size:64" json:"record_line"`
+	Type             int    `gorm:"default:0" json:"type"` // 0: pause/resume, 1: delete, 2: switch backup
+	MainValue        string `gorm:"size:128" json:"main_value"`
+	BackupValue      string `gorm:"size:128" json:"backup_value"`
+	BackupValues     string `gorm:"size:1024" json:"backup_values"` // 多备用，逗号分隔；非空时优先于 BackupValue
+	BackupType       string `gorm:"size:16" json:"backup_type"`     // ip / cname 等
+	CheckType        int    `gorm:"default:0" json:"check_type"`    // 0: ping, 1: tcp, 2: http, 3: https
+	CheckURL         string `gorm:"size:512" json:"check_url"`
+	TCPPort          int    `json:"tcp_port"`
+	Frequency        int    `gorm:"not null" json:"frequency"` // seconds
+	Cycle            int    `gorm:"default:3" json:"cycle"`    // fail count before switch
+	Timeout          int    `gorm:"default:2" json:"timeout"`  // seconds
+	Remark           string `gorm:"size:100" json:"remark"`
+	UseProxy         bool   `gorm:"default:false" json:"use_proxy"`
+	CDN              bool   `gorm:"default:false" json:"cdn"`
+	AddTime          int64  `json:"add_time"`
+	CheckTime        int64  `json:"check_time"`
+	CheckNextTime    int64  `gorm:"index:idx_dm_tasks_active_next,priority:2" json:"check_next_time"`
+	SwitchTime       int64  `json:"switch_time"`
+	ErrCount         int    `gorm:"default:0" json:"err_count"`
+	Status           int    `gorm:"default:0" json:"status"`         // 0: normal, 1: switched
+	MainHealth       bool   `gorm:"default:true" json:"main_health"` // 最后一次探测主源是否健康
+	Active           bool   `gorm:"default:false;index:idx_dm_tasks_active_next,priority:1" json:"active"`
+	RecordInfo       string `gorm:"size:200" json:"record_info"`
+	ExpectStatus     string `gorm:"size:64" json:"expect_status"`
+	ExpectKeyword    string `gorm:"size:200" json:"expect_keyword"`
+	MaxRedirects     int    `gorm:"default:0" json:"max_redirects"`
+	ProxyType        string `gorm:"size:16" json:"proxy_type"`
+	ProxyHost        string `gorm:"size:255" json:"proxy_host"`
+	ProxyPort        int    `gorm:"default:0" json:"proxy_port"`
+	ProxyUsername    string `gorm:"size:128" json:"proxy_username"`
+	ProxyPassword    string `gorm:"size:256" json:"-"`
+	NotifyEnabled    bool   `gorm:"default:false" json:"notify_enabled"`
+	NotifyChannels   string `gorm:"type:text" json:"notify_channels"` // JSON 数组字符串，如 ["mail","webhook"]
+	AutoRestore      bool   `gorm:"default:false" json:"auto_restore"`
+	AllowInsecureTLS bool   `gorm:"default:false" json:"allow_insecure_tls"`
 }
 
 // DMCheckLog 容灾监控探测历史
@@ -217,9 +224,9 @@ type CertAccount struct {
 type CertOrder struct {
 	ID                uint       `gorm:"primaryKey" json:"id"`
 	AccountID         uint       `gorm:"column:aid" json:"aid"`
-	KeyType           string     `gorm:"size:20" json:"key_type"`              // RSA, EC
-	KeySize           string     `gorm:"size:20" json:"key_size"`              // 2048, 4096, 256, 384
-	OrderKind         string     `gorm:"size:12;default:''" json:"order_kind"` // dns | ip | mixed（由域名/IP 自动判定）
+	KeyType           string     `gorm:"size:20" json:"key_type"`                  // RSA, EC
+	KeySize           string     `gorm:"size:20" json:"key_size"`                  // 2048, 4096, 256, 384
+	OrderKind         string     `gorm:"size:12;default:''" json:"order_kind"`     // dns | ip | mixed（由域名/IP 自动判定）
 	ChallengeType     string     `gorm:"size:16;default:''" json:"challenge_type"` // 空|dns-01|http-01（ACME 域名验证方式；通配符仅 dns-01）
 	ProcessID         string     `gorm:"size:32" json:"process_id"`
 	IssueTime         *time.Time `json:"issue_time"`

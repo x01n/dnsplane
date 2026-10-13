@@ -1496,6 +1496,8 @@ func Register(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": -1, "msg": "注册失败"})
 		return
 	}
+	/* 默认套餐在建号成功后授予，失败只记日志，不把注册整体回滚 */
+	grantDefaultPlanIfAny(user.ID)
 	dbcache.BustUserList()
 	logger.Info("用户自助注册成功: %s", username)
 	c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "注册成功"})

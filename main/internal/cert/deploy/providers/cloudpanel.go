@@ -23,10 +23,10 @@ func init() {
 }
 
 var (
-	cpSiteLinkPattern = regexp.MustCompile(`(?i)href="/site/([^"/]+)"`)
-	cpAlertPattern = regexp.MustCompile(`(?is)class="alert alert-(?:danger|warning|success)"[^>]*>(.*?)</div>`)
-	cpTagPattern = regexp.MustCompile(`(?s)<[^>]+>`)
-	cpSpacePattern = regexp.MustCompile(`\s+`)
+	cpSiteLinkPattern  = regexp.MustCompile(`(?i)href="/site/([^"/]+)"`)
+	cpAlertPattern     = regexp.MustCompile(`(?is)class="alert alert-(?:danger|warning|success)"[^>]*>(.*?)</div>`)
+	cpTagPattern       = regexp.MustCompile(`(?s)<[^>]+>`)
+	cpSpacePattern     = regexp.MustCompile(`\s+`)
 	cpSiteSplitPattern = regexp.MustCompile(`\r\n|\r|\n|,`)
 )
 

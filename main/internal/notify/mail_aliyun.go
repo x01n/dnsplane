@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	aliyunDirectMailURL = "https://dm.aliyuncs.com/"
+	aliyunDirectMailURL     = "https://dm.aliyuncs.com/"
 	aliyunDirectMailVersion = "2015-11-23"
 )
 

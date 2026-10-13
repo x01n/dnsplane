@@ -10,7 +10,8 @@ import (
 const usersListPrefix = "db:v1:users:list:"
 const usersAdminFullListKey = "db:v1:users:admin_full"
 const certAccountsListPrefix = "db:v1:cert:accounts:list:"
-func KeyAccountsAdmin() string { return "db:v1:accounts:admin" }
+
+func KeyAccountsAdmin() string          { return "db:v1:accounts:admin" }
 func KeyAccountsUser(uid string) string { return "db:v1:accounts:user:" + uid }
 func KeyUsersList(page, pageSize int, keyword string) string {
 	kwPart := "_"
@@ -21,7 +22,7 @@ func KeyUsersList(page, pageSize int, keyword string) string {
 	return fmt.Sprintf("%s%d:%d:%s", usersListPrefix, page, pageSize, kwPart)
 }
 
-func PrefixUsersList() string { return usersListPrefix }
+func PrefixUsersList() string       { return usersListPrefix }
 func KeyUsersAdminFullList() string { return usersAdminFullListKey }
 func BustAccounts(ownerUID string) {
 	_ = Delete(context.Background(), KeyAccountsAdmin(), KeyAccountsUser(ownerUID))

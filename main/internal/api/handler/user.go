@@ -142,6 +142,13 @@ func CreateUser(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": -1, "msg": "创建失败"})
 		return
 	}
+	/*
+	 * 默认套餐只给非管理员：管理员在 quotaForUser 里不受配额约束，
+	 * 给它落一条订阅只会在用户列表里显示一个不生效的套餐来源
+	 */
+	if user.Level < 2 {
+		grantDefaultPlanIfAny(user.ID)
+	}
 	dbcache.BustUserList()
 
 	c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "创建成功", "data": gin.H{"id": user.ID, "api_key": user.APIKey}})
@@ -224,19 +231,32 @@ func DeleteUser(c *gin.Context) {
 	}
 	id, _ := strconv.ParseUint(c.Param("id"), 10, 32)
 
+	/*
+	 * 先确认目标存在
+	 *
+	 * 此前没有这一步，而「不能删自己」与「不能删同级管理员」两个判定都建立在
+	 * 查库结果上：查不到时前者仍生效（只比数字），后者被 `err == nil` 静默跳过，
+	 * 于是不存在的 uid 一路走到最后，回的是「删除成功」。
+	 *
+	 * 更实际的问题是 uid=0：`Where("uid = ?", 0)` 会真的删掉 uid 为 0 的
+	 * oauth 绑定与权限行（那些是数据异常残留），而调用方看到的是成功
+	 */
+	var target models.User
+	if err := database.DB.Select("id", "level").First(&target, id).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"code": -1, "msg": "用户不存在"})
+		return
+	}
+
 	currentUserID := middleware.AuthUserID(c)
-	if uint(id) == currentUserID {
+	if target.ID == currentUserID {
 		c.JSON(http.StatusBadRequest, gin.H{"code": -1, "msg": "不能删除自己"})
 		return
 	}
 
 	// 安全审计 M-3：不允许删除等级 ≥ 自己的其他管理员
-	var target models.User
-	if err := database.DB.Select("id", "level").First(&target, id).Error; err == nil {
-		if target.Level >= c.GetInt("level") {
-			middleware.ErrorResponse(c, "无权删除同级或更高权限的用户")
-			return
-		}
+	if target.Level >= c.GetInt("level") {
+		middleware.ErrorResponse(c, "无权删除同级或更高权限的用户")
+		return
 	}
 
 	/*
@@ -478,14 +498,10 @@ func GetLogs(c *gin.Context) {
 	// 与侧栏 adminOnly 一致：非管理员只看得到自己的操作，且统计口径同步收窄，
 	// 否则会出现列表只有自己的日志、卡片却显示全站数字
 	scope := func() *gorm.DB {
-		q := applyLogDateRange(
-			applyOperationLogFilters(database.LogDB.Model(&models.Log{}), keyword, entity, action, userID, domain),
+		return applyLogDateRange(
+			applyOperationLogFilters(operationLogScope(c), keyword, entity, action, userID, domain),
 			dateFrom, dateTo,
 		)
-		if !isAdmin(c) {
-			q = q.Where("uid = ?", middleware.AuthUserID(c))
-		}
-		return q
 	}
 
 	scope().Count(&total)
@@ -529,6 +545,26 @@ func GetLogs(c *gin.Context) {
 	})
 }
 
+/*
+ * operationLogScope 操作日志的归属作用域
+ *
+ * 控制台对日志的隔离约定是「非管理员只看得到自己的操作」，但这条约定此前
+ * 只以 GetLogs 内部局部闭包的形式存在（那个闭包不导出、别处无法复用），
+ * 于是同族的 GetLogDetail 直接按主键取行，绕过了它——任意登录用户遍历
+ * /api/logs/:id 即可读到全站操作明细（操作类型、用户名、IP、UA，以及记录类
+ * 操作写进 data 的「子域名 -> 记录值」明文）
+ *
+ * 列表与详情必须共用同一入口，否则每新增一个日志读取点都要作者手抄一遍
+ * if !isAdmin，漏一处就是一条越权路径。cert 族的 cert_authz.go 是同一思路的先例
+ */
+func operationLogScope(c *gin.Context) *gorm.DB {
+	q := database.LogDB.Model(&models.Log{})
+	if !isAdmin(c) {
+		q = q.Where("uid = ?", middleware.AuthUserID(c))
+	}
+	return q
+}
+
 // GetLogDetail 获取日志详情
 func GetLogDetail(c *gin.Context) {
 	id, _ := strconv.ParseUint(c.Param("id"), 10, 32)
@@ -538,7 +574,8 @@ func GetLogDetail(c *gin.Context) {
 		return
 	}
 	var log models.Log
-	if err := database.LogDB.First(&log, id).Error; err != nil {
+	if err := operationLogScope(c).First(&log, id).Error; err != nil {
+		// 他人的 id 与不存在的 id 返回同一句话，避免 id 有效性成为可枚举的预言机
 		c.JSON(http.StatusNotFound, gin.H{"code": -1, "msg": "日志不存在"})
 		return
 	}

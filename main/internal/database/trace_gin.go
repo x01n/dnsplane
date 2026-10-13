@@ -11,7 +11,7 @@ import (
 
 const GinContextKey = "gin_context"
 
-var traceGinByGoroutine sync.Map 
+var traceGinByGoroutine sync.Map
 
 func currentGoroutineID() uint64 {
 	var buf [128]byte

@@ -9,7 +9,6 @@ import (
 	"main/internal/models"
 )
 
-
 const (
 	cachePrefix = "syscfg:"
 	cacheTTL    = 60 * time.Second

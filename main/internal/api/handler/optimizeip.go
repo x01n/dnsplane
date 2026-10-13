@@ -237,6 +237,10 @@ func validateOptimizeIPTask(req *optimizeIPTaskRequest, excludeID uint) string {
 
 /* CreateOptimizeIPTask 新增优选任务 */
 func CreateOptimizeIPTask(c *gin.Context) {
+	/* 配额校验：优选 IP 任务数 */
+	if !CheckQuota(c, "optimize_ip") {
+		return
+	}
 	if !requireAdmin(c) {
 		return
 	}

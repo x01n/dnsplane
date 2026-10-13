@@ -262,6 +262,12 @@ func migrate() error {
 		&models.CloudflareCIDRRoute{},
 		&models.CloudflareHostnameRoute{},
 		&models.DomainAlias{},
+		// 配额与套餐；DNSRecord 是云端解析记录的本地副本，配额判定只读它
+		&models.Plan{},
+		&models.UserSubscription{},
+		&models.UserQuota{},
+		&models.DNSRecord{},
+		&models.SubdomainClaim{},
 	); err != nil {
 		return err
 	}

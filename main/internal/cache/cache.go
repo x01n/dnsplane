@@ -40,7 +40,7 @@ type Config struct {
 	DB           int    `json:"db"`
 	PoolSize     int    `json:"pool_size"`
 	MinIdleConns int    `json:"min_idle_conns"`
-	KeyPrefix    string `json:"key_prefix"` 
+	KeyPrefix    string `json:"key_prefix"`
 }
 
 func Init(cfg *Config) {
@@ -90,7 +90,6 @@ func Close() error {
 	return C.Close()
 }
 
-
 type memoryEntry struct {
 	Value    string
 	ExpireAt time.Time
@@ -100,7 +99,7 @@ type memoryCache struct {
 	mu     sync.RWMutex
 	prefix string
 	store  map[string]memoryEntry
-	lists  map[string][]string 
+	lists  map[string][]string
 }
 
 func NewMemoryCache(keyPrefix string) Cache {

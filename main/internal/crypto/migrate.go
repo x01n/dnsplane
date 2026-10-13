@@ -56,7 +56,7 @@ func encryptColumn(db *gorm.DB, table, column string) (int, error) {
 	updated := 0
 	for _, r := range rows {
 		if IsEncrypted(r.Value) {
-			continue 
+			continue
 		}
 		enc, err := Encrypt(r.Value)
 		if err != nil {

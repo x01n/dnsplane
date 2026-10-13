@@ -75,7 +75,9 @@ func DeployAccountAdd(c *gin.Context) {
 	}
 
 	/* 套餐配额检查 */
-	if !CheckQuota(c, currentUID(c), "accounts") {
+	// 维度从 accounts 改为 cert_accounts：这个函数写的是 cert_accounts 表，
+	// 而 accounts 维度统计的是 DNS 账户，两者无关
+	if !CheckQuota(c, "cert_accounts") {
 		return
 	}
 

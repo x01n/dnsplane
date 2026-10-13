@@ -21,14 +21,14 @@ import (
 
 const (
 	defaultEndpoint = "cas.aliyuncs.com"
-	defaultVersion = "2020-04-07"
+	defaultVersion  = "2020-04-07"
 	/* 证书下载相关超时沿用同目录提供商的 30 秒 */
 	requestTimeout = 30 * time.Second
 
 	/* 阿里云免费证书实例类型：测试证书 */
 	instanceTypeTest = "TEST"
 	/* 申请轮询上限 */
-	maxTaskPoll = 30
+	maxTaskPoll      = 30
 	taskPollInterval = time.Second
 )
 

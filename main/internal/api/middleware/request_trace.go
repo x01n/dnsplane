@@ -245,7 +245,7 @@ func RequestTrace() gin.HandlerFunc {
 			}
 		}
 		// 响应体里可能回显 token（如登录 204、refresh），同样脱敏
-		responseStr = SanitizeBodyForLog(responseStr, c.Writer.Header().Get("Content-Type"))
+		responseStr = SanitizeResponseForLog(responseStr, c.Writer.Header().Get("Content-Type"))
 
 		// 获取数据库查询记录
 		var dbQueriesJSON string

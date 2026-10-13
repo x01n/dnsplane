@@ -82,3 +82,34 @@ func scopeCertOrderQuery(c *gin.Context, q *gorm.DB) *gorm.DB {
 		database.DB.Model(&models.CertAccount{}).Select("id").Where("uid = ?", currentUIDUint(c)),
 	)
 }
+
+// requireCertDeployOwner 校验当前用户对 certDeployID 是否有写权限。
+//
+// 不复用 requireCertOrderOwner：后者的所有权链是 CertOrder.aid → CertAccount.uid，
+// 而 CertDeploy 自带 uid 列（创建时写 currentUIDUint），且 CertDeploy.aid 指向
+// **部署账户**，与 CertOrder.aid（证书账户）是不同实体，走订单链会判错属主。
+//
+// 安全审计：部署任务的 config 里含外送目标地址，越权修改等于把他人私钥改送到自己机器；
+// 越权触发 process 更会直接把 order.FullChain + order.PrivateKey 外送。
+// 修复前创建/更新/删除/执行四个入口均无校验，仅有 checkLocalDeployAllowed 拦 local 类型，
+// 而后者只防「借进程权限执行命令」，改用 ssh 类型即可绕开。
+func requireCertDeployOwner(c *gin.Context, deployID uint) (*models.CertDeploy, bool) {
+	var deploy models.CertDeploy
+	if err := database.DB.First(&deploy, deployID).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"code": -1, "msg": "部署任务不存在"})
+		return nil, false
+	}
+	if !isAdmin(c) && deploy.UserID != currentUIDUint(c) {
+		middleware.ErrorResponse(c, "无权操作该部署任务")
+		return nil, false
+	}
+	return &deploy, true
+}
+
+// scopeCertDeployQuery 给 CertDeploy 列表查询补 UID 过滤；管理员看全量。
+func scopeCertDeployQuery(c *gin.Context, q *gorm.DB) *gorm.DB {
+	if isAdmin(c) {
+		return q
+	}
+	return q.Where("cert_deploys.uid = ?", currentUIDUint(c))
+}

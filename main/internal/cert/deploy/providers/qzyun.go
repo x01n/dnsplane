@@ -32,11 +32,11 @@ const (
 )
 
 var (
-	qzyunRSCPattern = regexp.MustCompile(`(?s)self\.__next_f\.push\((\[.*?\])\)</script>`)
+	qzyunRSCPattern          = regexp.MustCompile(`(?s)self\.__next_f\.push\((\[.*?\])\)</script>`)
 	qzyunActionResultPattern = regexp.MustCompile(`(?i)(?:^|\n)[a-z0-9]+:(\{[^\r\n]*\})`)
-	qzyunScriptSrcPattern = regexp.MustCompile(`(?i)<script[^>]+src=["']([^"']+\.js[^"']*)["']`)
-	qzyunDocumentIDPattern = regexp.MustCompile(`(?i)^[a-z0-9]{24}$`)
-	qzyunTLSErrorPattern = regexp.MustCompile(`(?i)SSL|TLS|handshake|alert`)
+	qzyunScriptSrcPattern    = regexp.MustCompile(`(?i)<script[^>]+src=["']([^"']+\.js[^"']*)["']`)
+	qzyunDocumentIDPattern   = regexp.MustCompile(`(?i)^[a-z0-9]{24}$`)
+	qzyunTLSErrorPattern     = regexp.MustCompile(`(?i)SSL|TLS|handshake|alert`)
 )
 
 func init() {

@@ -34,22 +34,22 @@ var csrfSkipPrefixes = []string{
 
 // 完全放行的精确路径（无认证即可调用的）
 var csrfSkipExact = map[string]struct{}{
-	"/api/csrf":                   {}, // 发 token 自身
-	"/api/login":                  {}, // 登录
-	"/api/install":                {}, // 首次安装
-	"/api/install/status":         {},
-	"/api/auth/captcha":           {},
-	"/api/auth/config":            {},
-	"/api/auth/forgot-password":   {},
-	"/api/auth/reset-password":    {},
-	"/api/auth/forgot-totp":       {},
-	"/api/auth/reset-totp":        {},
-	"/api/auth/refresh":           {}, // refresh 自带一次性 JTI，单独保护
-	"/api/auth/send-code":         {},
-	"/api/auth/register":          {},
-	"/api/auth/magic-link":        {},
-	"/api/auth/magic-link/totp":   {},
-	"/api/auth/oauth/providers":   {},
+	"/api/csrf":                 {}, // 发 token 自身
+	"/api/login":                {}, // 登录
+	"/api/install":              {}, // 首次安装
+	"/api/install/status":       {},
+	"/api/auth/captcha":         {},
+	"/api/auth/config":          {},
+	"/api/auth/forgot-password": {},
+	"/api/auth/reset-password":  {},
+	"/api/auth/forgot-totp":     {},
+	"/api/auth/reset-totp":      {},
+	"/api/auth/refresh":         {}, // refresh 自带一次性 JTI，单独保护
+	"/api/auth/send-code":       {},
+	"/api/auth/register":        {},
+	"/api/auth/magic-link":      {},
+	"/api/auth/magic-link/totp": {},
+	"/api/auth/oauth/providers": {},
 }
 
 func newCSRFToken() string {

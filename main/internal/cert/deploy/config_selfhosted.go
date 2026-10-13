@@ -159,11 +159,11 @@ func registerSelfHostedConfigs() {
 
 	// Cdnfly
 	registerDeployConfig(DeployProviderConfig{
-		Type: "cdnfly",
-		Name: "Cdnfly",
+		Type:  "cdnfly",
+		Name:  "Cdnfly",
 		Class: ClassSelfHosted,
-		Icon: "waf.png",
-		Desc: "部署证书到Cdnfly",
+		Icon:  "waf.png",
+		Desc:  "部署证书到Cdnfly",
 		Inputs: []cert.ConfigField{
 			{Name: "控制台地址", Key: "url", Type: "input", Required: true},
 			{Name: "认证方式", Key: "auth", Type: "radio", Options: []cert.ConfigOption{{Value: "0", Label: "接口密钥"}, {Value: "1", Label: "模拟登录"}}, Value: "0"},
@@ -216,11 +216,11 @@ func registerSelfHostedConfigs() {
 
 	// Kangle用户
 	registerDeployConfig(DeployProviderConfig{
-		Type: "kangle",
-		Name: "Kangle用户",
+		Type:  "kangle",
+		Name:  "Kangle用户",
 		Class: ClassSelfHosted,
-		Icon: "host.png",
-		Desc: "支持虚拟主机与CDN站点",
+		Icon:  "host.png",
+		Desc:  "支持虚拟主机与CDN站点",
 		Inputs: []cert.ConfigField{
 			{Name: "面板地址", Key: "url", Type: "input", Required: true},
 			{Name: "认证方式", Key: "auth", Type: "radio", Options: []cert.ConfigOption{{Value: "0", Label: "网站密码"}, {Value: "1", Label: "面板安全码"}}, Value: "0"},
@@ -239,11 +239,11 @@ func registerSelfHostedConfigs() {
 
 	// Kangle管理员
 	registerDeployConfig(DeployProviderConfig{
-		Type: "kangleadmin",
-		Name: "Kangle管理员",
+		Type:  "kangleadmin",
+		Name:  "Kangle管理员",
 		Class: ClassSelfHosted,
-		Icon: "host.png",
-		Desc: "支持虚拟主机与CDN站点",
+		Icon:  "host.png",
+		Desc:  "支持虚拟主机与CDN站点",
 		Inputs: []cert.ConfigField{
 			{Name: "面板地址", Key: "url", Type: "input", Required: true},
 			{Name: "管理员面板路径", Key: "path", Type: "input", Placeholder: "留空默认为/admin"},
@@ -283,11 +283,11 @@ func registerSelfHostedConfigs() {
 
 	// 耗子面板
 	registerDeployConfig(DeployProviderConfig{
-		Type: "ratpanel",
-		Name: "耗子面板",
+		Type:  "ratpanel",
+		Name:  "耗子面板",
 		Class: ClassSelfHosted,
-		Icon: "ratpanel.ico",
-		Desc: "支持耗子面板 v2.5+ 版本",
+		Icon:  "ratpanel.ico",
+		Desc:  "支持耗子面板 v2.5+ 版本",
 		Inputs: []cert.ConfigField{
 			{Name: "面板地址", Key: "url", Type: "input", Required: true},
 			{Name: "访问令牌ID", Key: "id", Type: "input", Required: true},
@@ -320,11 +320,11 @@ func registerSelfHostedConfigs() {
 
 	// 群晖面板
 	registerDeployConfig(DeployProviderConfig{
-		Type: "synology",
-		Name: "群晖面板",
+		Type:  "synology",
+		Name:  "群晖面板",
 		Class: ClassSelfHosted,
-		Icon: "synology.png",
-		Desc: "支持群晖DSM 6.x/7.x版本",
+		Icon:  "synology.png",
+		Desc:  "支持群晖DSM 6.x/7.x版本",
 		Inputs: []cert.ConfigField{
 			{Name: "面板地址", Key: "url", Type: "input", Required: true},
 			{Name: "登录账号", Key: "username", Type: "input", Required: true},
@@ -371,11 +371,11 @@ func registerSelfHostedConfigs() {
 
 	// Proxmox VE
 	registerDeployConfig(DeployProviderConfig{
-		Type: "proxmox",
-		Name: "Proxmox VE",
+		Type:  "proxmox",
+		Name:  "Proxmox VE",
 		Class: ClassSelfHosted,
-		Icon: "proxmox.ico",
-		Desc: "部署到PVE节点",
+		Icon:  "proxmox.ico",
+		Desc:  "部署到PVE节点",
 		Inputs: []cert.ConfigField{
 			{Name: "面板地址", Key: "url", Type: "input", Required: true},
 			{Name: "API令牌ID", Key: "api_user", Type: "input", Required: true},
@@ -388,11 +388,11 @@ func registerSelfHostedConfigs() {
 
 	// K8S
 	registerDeployConfig(DeployProviderConfig{
-		Type: "k8s",
-		Name: "K8S",
+		Type:  "k8s",
+		Name:  "K8S",
 		Class: ClassSelfHosted,
-		Icon: "server.png",
-		Desc: "部署到K8S集群的Secret和Ingress",
+		Icon:  "server.png",
+		Desc:  "部署到K8S集群的Secret和Ingress",
 		Inputs: []cert.ConfigField{
 			{Name: "名称", Key: "name", Type: "input", Required: true},
 			{Name: "kubeconfig", Key: "kubeconfig", Type: "textarea", Required: true},

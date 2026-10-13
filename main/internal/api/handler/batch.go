@@ -55,7 +55,7 @@ func BatchAddRecords(c *gin.Context) {
 	}
 
 	/* 套餐功能检查：批量操作 */
-	if !CheckFeature(c, c.GetString("user_id"), "batch_ops") {
+	if !CheckFeature(c, "batch_ops") {
 		return
 	}
 
@@ -79,6 +79,23 @@ func BatchAddRecords(c *gin.Context) {
 		return
 	}
 
+	/*
+	 * 子域校验：本接口的文本模式一行是「rr value」、结构模式带 Name，
+	 * 两者都直接落成写入目标，故从请求里取 rr 即可判定，无需回查云端
+	 */
+	targets := make([]string, 0, len(req.Items))
+	for _, item := range req.Items {
+		targets = append(targets, item.Name)
+	}
+	for _, line := range strings.Split(req.Records, "\n") {
+		if fields := strings.Fields(strings.TrimSpace(line)); len(fields) >= 2 {
+			targets = append(targets, fields[0])
+		}
+	}
+	if !checkBatchRecordSubDomain(c, &domain, c.GetString("user_id"), c.GetInt("level"), batchRecordAuthReq{Targets: targets}) {
+		return
+	}
+
 	provider, err := getDNSProviderByDomain(&domain)
 	if err != nil {
 		middleware.ErrorResponse(c, err.Error())
@@ -93,6 +110,8 @@ func BatchAddRecords(c *gin.Context) {
 	domainName := domain.Name
 	records := req.Records
 	items := req.Items
+	batchUID := currentUIDUint(c)
+	batchLevel := c.GetInt("level")
 	defaultTTL := req.TTL
 	defaultLine := req.Line
 	recordType := req.Type
@@ -110,6 +129,7 @@ func BatchAddRecords(c *gin.Context) {
 
 		successCount := 0
 		failCount := 0
+		deniedCount := 0
 
 		if records != "" {
 			lines := strings.Split(strings.TrimSpace(records), "\n")
@@ -129,10 +149,18 @@ func BatchAddRecords(c *gin.Context) {
 				if rType == "" || rType == "auto" {
 					rType = detectRecordType(value)
 				}
-				if _, err := provider.AddDomainRecord(ctx, name, rType, value, defaultLine, defaultTTL, 0, nil, ""); err != nil {
+				// 子域名前缀占用：批量里逐条判，被占的跳过而不整批失败
+				if service.CheckSubdomainClaim(&domain, name, batchUID, batchLevel) != service.ClaimGranted {
+					deniedCount++
+					continue
+				}
+				recordID, err := provider.AddDomainRecord(ctx, name, rType, value, defaultLine, defaultTTL, 0, nil, "")
+				if err != nil {
 					failCount++
 				} else {
 					successCount++
+					service.RegisterSubdomainClaim(&domain, name, batchUID)
+					upsertBatchLocalRecord(domain.ID, domainName, recordID, name, rType, value, defaultLine, defaultTTL, 0, "")
 				}
 			}
 		} else {
@@ -145,17 +173,39 @@ func BatchAddRecords(c *gin.Context) {
 				if line == "" {
 					line = "default"
 				}
-				if _, err := provider.AddDomainRecord(ctx, rec.Name, rec.Type, rec.Value, line, ttl, rec.MX, nil, rec.Remark); err != nil {
+				if service.CheckSubdomainClaim(&domain, rec.Name, batchUID, batchLevel) != service.ClaimGranted {
+					deniedCount++
+					continue
+				}
+				recordID, err := provider.AddDomainRecord(ctx, rec.Name, rec.Type, rec.Value, line, ttl, rec.MX, nil, rec.Remark)
+				if err != nil {
 					failCount++
 				} else {
 					successCount++
+					service.RegisterSubdomainClaim(&domain, rec.Name, batchUID)
+					upsertBatchLocalRecord(domain.ID, domainName, recordID, rec.Name, rec.Type, rec.Value, line, ttl, rec.MX, rec.Remark)
 				}
 			}
 		}
-		service.Audit.LogActionDirect(userID, username, ip, ua, "batch_add_records", domainName, fmt.Sprintf("批量添加记录: 成功%d, 失败%d", successCount, failCount))
+		service.Audit.LogActionDirect(userID, username, ip, ua, "batch_add_records", domainName,
+			fmt.Sprintf("批量添加记录: 成功%d, 失败%d, 子域名被占%d", successCount, failCount, deniedCount))
 	})
 
 	middleware.SuccessMsg(c, "提交成功")
+}
+
+/*
+ * upsertBatchLocalRecord 批量新增成功后回填本地副本
+ *
+ * 批量的文本模式与结构模式字段形态不同（前者一行 "rr value"，后者带 Name/Type），
+ * 但落库的目标结构一致，故共用一个助手而不是在两处各写一份 Create
+ */
+func upsertBatchLocalRecord(domainID uint, domainName, recordID, name, recordType, value, line string, ttl, mx int, remark string) {
+	service.UpsertLocalRecord(&models.DNSRecord{
+		DomainID: domainID, RecordID: recordID, Name: name, Type: recordType,
+		Value: value, Line: line, TTL: ttl, MX: mx,
+		Remark: remark, Status: "enable", Domain: domainName,
+	})
 }
 
 /* detectRecordType 根据值自动检测记录类型（A/AAAA/CNAME） */
@@ -196,7 +246,7 @@ func BatchEditRecords(c *gin.Context) {
 	}
 
 	/* 套餐功能检查：批量操作 */
-	if !CheckFeature(c, c.GetString("user_id"), "batch_ops") {
+	if !CheckFeature(c, "batch_ops") {
 		return
 	}
 
@@ -217,6 +267,11 @@ func BatchEditRecords(c *gin.Context) {
 	/* 非管理员校验域名权限 */
 	if !isAdmin(c) && !middleware.CheckDomainPermission(c.GetString("user_id"), c.GetInt("level"), strconv.FormatUint(uint64(domain.ID), 10)) {
 		middleware.ErrorResponse(c, "无权限操作该域名")
+		return
+	}
+
+	/* 子域校验：请求里只有 record_id，真实 rr 由云端记录反查，见 batch_authz.go */
+	if !checkBatchRecordSubDomain(c, &domain, c.GetString("user_id"), c.GetInt("level"), batchRecordAuthReq{RecordIDs: req.RecordIDs}) {
 		return
 	}
 
@@ -261,6 +316,10 @@ func BatchEditRecords(c *gin.Context) {
 				failCount++
 			} else {
 				successCount++
+				if local, ok := service.LocalRecord(domain.ID, recordID); ok {
+					local.Line, local.TTL = line, ttl
+					service.UpsertLocalRecord(&local)
+				}
 			}
 		}
 		service.Audit.LogActionDirect(userID, username, ip, ua, "batch_edit_records", domainName, fmt.Sprintf("批量编辑记录: 成功%d, 失败%d", successCount, failCount))
@@ -291,7 +350,7 @@ func BatchActionRecords(c *gin.Context) {
 	}
 
 	/* 套餐功能检查：批量操作 */
-	if !CheckFeature(c, c.GetString("user_id"), "batch_ops") {
+	if !CheckFeature(c, "batch_ops") {
 		return
 	}
 
@@ -312,6 +371,11 @@ func BatchActionRecords(c *gin.Context) {
 	/* 非管理员校验域名权限 */
 	if !isAdmin(c) && !middleware.CheckDomainPermission(c.GetString("user_id"), c.GetInt("level"), strconv.FormatUint(uint64(domain.ID), 10)) {
 		middleware.ErrorResponse(c, "无权限操作该域名")
+		return
+	}
+
+	/* 子域校验：同 batch/edit，批量启用/暂停/删除都可能落在未授权子域上 */
+	if !checkBatchRecordSubDomain(c, &domain, c.GetString("user_id"), c.GetInt("level"), batchRecordAuthReq{RecordIDs: req.RecordIDs}) {
 		return
 	}
 
@@ -339,18 +403,41 @@ func BatchActionRecords(c *gin.Context) {
 
 		for _, recordID := range recordIDs {
 			var opErr error
+			status := ""
 			switch action {
 			case "enable", "open":
 				opErr = provider.SetDomainRecordStatus(ctx, recordID, true)
+				status = "enable"
 			case "disable", "pause":
 				opErr = provider.SetDomainRecordStatus(ctx, recordID, false)
+				status = "disable"
 			case "delete":
 				opErr = provider.DeleteDomainRecord(ctx, recordID)
 			}
 			if opErr != nil {
 				failCount++
-			} else {
-				successCount++
+				continue
+			}
+			successCount++
+			if action == "delete" {
+				/*
+				 * 释放占用前先取前缀：本地副本删掉后就查不到它的 name 了，
+				 * 与 DeleteRecord 同一条路径
+				 *
+				 * 不释放的话该前缀会被永久锁死（他人建不了同前缀的记录），
+				 * 且持续占住创建者一条 records 额度
+				 */
+				releasedPrefix := ""
+				if local, ok := service.LocalRecord(domain.ID, recordID); ok {
+					releasedPrefix = local.Name
+				}
+				service.DeleteLocalRecord(domain.ID, recordID)
+				if releasedPrefix != "" {
+					service.ReleaseSubdomainClaimIfEmpty(domain.ID, releasedPrefix)
+				}
+			} else if local, ok := service.LocalRecord(domain.ID, recordID); ok {
+				local.Status = status
+				service.UpsertLocalRecord(&local)
 			}
 		}
 		service.Audit.LogActionDirect(userID, username, ip, ua, "batch_action_records", domainName, fmt.Sprintf("批量操作记录: action=%s, 成功%d, 失败%d", action, successCount, failCount))

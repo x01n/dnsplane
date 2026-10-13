@@ -4,36 +4,36 @@ import "time"
 
 // CloudflareHostname Cloudflare 自定义主机名表
 type CloudflareHostname struct {
-	ID                   uint      `gorm:"primaryKey" json:"id"`
-	DomainID             uint      `gorm:"column:did;index" json:"did"`
-	HostnameID           string    `gorm:"size:64;not null" json:"hostname_id"` // Cloudflare hostname ID
-	Hostname             string    `gorm:"size:255;not null;index" json:"hostname"`
-	CustomOriginServer   string    `gorm:"size:255" json:"custom_origin_server"`
-	SSLMethod            string    `gorm:"size:10" json:"ssl_method"` // txt | http
-	SSLMinTLSVersion     string    `gorm:"size:10" json:"ssl_min_tls_version"`
-	SSLStatus            string    `gorm:"size:32" json:"ssl_status"`
-	SSLValidationStatus  string    `gorm:"size:32" json:"ssl_validation_status"`
-	VerificationStatus   string    `gorm:"size:32" json:"verification_status"`
-	ValidationErrors     string    `gorm:"type:text" json:"validation_errors"`
-	OwnershipVerification string   `gorm:"type:text" json:"ownership_verification"`
-	CreatedOn            *time.Time `json:"created_on"`
-	SyncedAt             *time.Time `json:"synced_at"`
-	CreatedAt            time.Time `json:"created_at"`
-	UpdatedAt            time.Time `json:"updated_at"`
+	ID                    uint       `gorm:"primaryKey" json:"id"`
+	DomainID              uint       `gorm:"column:did;index" json:"did"`
+	HostnameID            string     `gorm:"size:64;not null" json:"hostname_id"` // Cloudflare hostname ID
+	Hostname              string     `gorm:"size:255;not null;index" json:"hostname"`
+	CustomOriginServer    string     `gorm:"size:255" json:"custom_origin_server"`
+	SSLMethod             string     `gorm:"size:10" json:"ssl_method"` // txt | http
+	SSLMinTLSVersion      string     `gorm:"size:10" json:"ssl_min_tls_version"`
+	SSLStatus             string     `gorm:"size:32" json:"ssl_status"`
+	SSLValidationStatus   string     `gorm:"size:32" json:"ssl_validation_status"`
+	VerificationStatus    string     `gorm:"size:32" json:"verification_status"`
+	ValidationErrors      string     `gorm:"type:text" json:"validation_errors"`
+	OwnershipVerification string     `gorm:"type:text" json:"ownership_verification"`
+	CreatedOn             *time.Time `json:"created_on"`
+	SyncedAt              *time.Time `json:"synced_at"`
+	CreatedAt             time.Time  `json:"created_at"`
+	UpdatedAt             time.Time  `json:"updated_at"`
 }
 
 // CloudflareTunnel Cloudflare Tunnel 表
 type CloudflareTunnel struct {
-	ID               uint       `gorm:"primaryKey" json:"id"`
-	AccountID        uint       `gorm:"column:aid;index" json:"aid"` // 本地 DNS 账户 ID
-	TunnelID         string     `gorm:"size:64;not null" json:"tunnel_id"`
-	Name             string     `gorm:"size:255;not null" json:"name"`
-	Status           string     `gorm:"size:32" json:"status"`
-	Token            string     `gorm:"size:512" json:"-"`
-	ConnectionCount  int        `gorm:"default:0" json:"connection_count"`
-	CreatedAt        time.Time  `json:"created_at"`
-	UpdatedAt        time.Time  `json:"updated_at"`
-	DeletedAt        *time.Time `json:"deleted_at"`
+	ID              uint       `gorm:"primaryKey" json:"id"`
+	AccountID       uint       `gorm:"column:aid;index" json:"aid"` // 本地 DNS 账户 ID
+	TunnelID        string     `gorm:"size:64;not null" json:"tunnel_id"`
+	Name            string     `gorm:"size:255;not null" json:"name"`
+	Status          string     `gorm:"size:32" json:"status"`
+	Token           string     `gorm:"size:512" json:"-"`
+	ConnectionCount int        `gorm:"default:0" json:"connection_count"`
+	CreatedAt       time.Time  `json:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at"`
+	DeletedAt       *time.Time `json:"deleted_at"`
 }
 
 // CloudflareCIDRRoute Cloudflare CIDR 路由表

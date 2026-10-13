@@ -209,7 +209,7 @@ func CreateAccount(c *gin.Context) {
 	}
 
 	/* 套餐配额检查 */
-	if !CheckQuota(c, currentUID(c), "accounts") {
+	if !CheckQuota(c, "accounts") {
 		return
 	}
 

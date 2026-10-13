@@ -121,7 +121,27 @@ func testChannelNotification(c *gin.Context, t notify.NotifyType) {
 }
 
 // GetDashboardStats 获取仪表盘统计数据
+/*
+ * GetDashboardStats 首页统计
+ *
+ * 管理员看全站，普通用户只看自己名下的资源
+ *
+ * 此前一律返回全站计数：普通用户打开首页，卡片上的「域名总数」是全站的，
+ * 既泄露实例规模，又与他实际拥有的数量不符——同一个数字对两类用户
+ * 意味着不同的事。同文件的 GetSystemInfo 早已按 level 门控，
+ * 这一路漏了
+ */
 func GetDashboardStats(c *gin.Context) {
+	/*
+	 * 普通用户走按操作者收窄的统计，与配额口径一致（详见 quotaUsed）
+	 *
+	 * 不复用校验用的配额函数：那些返回的是「上限」相关的结果，
+	 * 首页要的是实际计数，且不受 max_* 为 -1（不限）的影响
+	 */
+	if c.GetInt("level") < 2 {
+		ownerScopeDashboardStats(c)
+		return
+	}
 	now := time.Now()
 	expireSoon := now.AddDate(0, 0, 7)
 
@@ -348,8 +368,20 @@ func proxyTargetRejectReason(host string) string {
 	return ""
 }
 
-// GetTaskStatus 获取后台任务状态
+/*
+ * GetTaskStatus 获取后台任务状态
+ *
+ * 限定管理员：返回的是全站运营信息（定时任务数、证书续期数、到期域名数、
+ * 解析记录同步状态与最近一次错误）。同族的 GetSystemConfig 与 UpdateSystemConfig
+ * 都有 requireAdmin，这两个端点没有——属同族缺一个校验的形态
+ *
+ * 前端侧栏把「系统设置」标为 adminOnly 只是隐藏入口，不是路由守卫：
+ * 非管理员直接访问该路径仍会进页面并发起这个请求，后端是唯一可靠的边界
+ */
 func GetTaskStatus(c *gin.Context) {
+	if !requireAdmin(c) {
+		return
+	}
 
 	// 获取各任务统计
 	var scheduleCount, certAutoCount, domainNoticeCount int64
@@ -373,11 +405,22 @@ func GetTaskStatus(c *gin.Context) {
 		},
 		"cert_auto":     certAutoCount,
 		"domain_notice": domainNoticeCount,
+		// 记录副本同步状态：此前只有一行日志，失败不可见，副本冻结无法察觉
+		"record_sync": service.RecordSyncStatus(),
 	})
 }
 
-// GetCronConfig 获取定时任务配置
+/*
+ * GetCronConfig 获取定时任务配置
+ *
+ * 限定管理员，理由同 GetTaskStatus：三个调度表达式属于运维配置，
+ * 泄露即暴露系统的调度节奏。同族的 UpdateCronConfig 已有 requireAdmin，
+ * 只读的那一侧漏了
+ */
 func GetCronConfig(c *gin.Context) {
+	if !requireAdmin(c) {
+		return
+	}
 
 	// 从数据库读取cron配置
 	configKeys := []string{"cron_schedule", "cron_cert", "cron_expire"}

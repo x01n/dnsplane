@@ -225,6 +225,17 @@ func UpdateRecordWeight(c *gin.Context) {
 	if req.DomainID == "" {
 		req.DomainID = c.Param("id")
 	}
+	/*
+	 * 域名 ID 必须显式判空，不能让空串流进 First
+	 *
+	 * First(&domain, "") 会退化成不带主键条件的查询，静默命中全表第一条——
+	 * 权重会落到别人的域名上。对外 API 的路由表没有路径参数，
+	 * 上面的 c.Param 兜底恒为空串，这条退化路径是可达的
+	 */
+	if req.DomainID == "" {
+		middleware.ErrorResponse(c, "缺少域名ID")
+		return
+	}
 	if req.RecordID == "" {
 		middleware.ErrorResponse(c, "缺少记录ID")
 		return
@@ -306,12 +317,12 @@ func GetRecordQuickInfo(c *gin.Context) {
 	}
 	features, _ := providerFeatureByDomain(domain)
 	middleware.SuccessResponse(c, gin.H{
-		"lines":            lines,
-		"min_ttl":          provider.GetMinTTL(),
-		"supports_weight":  features.Weight,
-		"supports_remark":  features.Remark,
-		"supports_log":     features.Log,
-		"supports_status":  features.Status,
+		"lines":           lines,
+		"min_ttl":         provider.GetMinTTL(),
+		"supports_weight": features.Weight,
+		"supports_remark": features.Remark,
+		"supports_log":    features.Log,
+		"supports_status": features.Status,
 	})
 }
 

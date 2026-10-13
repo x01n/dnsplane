@@ -24,6 +24,7 @@ import {
   Cloud,
   Network,
   Clock3,
+  Gauge,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
@@ -85,6 +86,7 @@ const navigation: NavItem[] = [
     ],
   },
   { name: '用户管理', href: '/dashboard/users', icon: Users, adminOnly: true },
+  { name: '套餐管理', href: '/dashboard/plans', icon: Gauge, adminOnly: true },
   { name: '操作日志', href: '/dashboard/logs', icon: Shield, adminOnly: true },
   { name: '请求日志', href: '/dashboard/request-logs', icon: FileText, adminOnly: true },
   { name: '系统设置', href: '/dashboard/settings', icon: Settings, adminOnly: true },

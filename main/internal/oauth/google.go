@@ -12,8 +12,8 @@ type google struct{ cfg ProviderConfig }
 func NewGoogle(cfg ProviderConfig) Provider { return &google{cfg} }
 
 func (g *google) Name() string        { return "google" }
-func (g *google) DisplayName() string  { return "Google" }
-func (g *google) Icon() string         { return "google" }
+func (g *google) DisplayName() string { return "Google" }
+func (g *google) Icon() string        { return "google" }
 
 func (g *google) AuthorizeURL(state, redirectURI string) string {
 	scopes := "openid email profile"

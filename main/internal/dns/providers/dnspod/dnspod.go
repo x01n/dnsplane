@@ -77,7 +77,7 @@ func (p *Provider) GetDomainList(ctx context.Context, keyword string, page, page
 	request.Offset = common.Int64Ptr(int64((page - 1) * pageSize))
 	request.Limit = common.Int64Ptr(int64(pageSize))
 
-	response, err := p.client.DescribeDomainList(request)
+	response, err := p.client.DescribeDomainListWithContext(ctx, request)
 	if err != nil {
 		return nil, err
 	}
@@ -116,7 +116,7 @@ func (p *Provider) GetDomainRecords(ctx context.Context, page, pageSize int, key
 		request.RecordLine = common.StringPtr(normalizeRecordLine(line))
 	}
 
-	response, err := p.client.DescribeRecordList(request)
+	response, err := p.client.DescribeRecordListWithContext(ctx, request)
 	if err != nil {
 		/* 按子域名等条件查询时，若该条件下尚无任何记录，DNSPod 返回 ResourceNotFound.NoDataOfRecord
 		   而非空列表；ACME 自动写 _acme-challenge 前会先 List，需当作 0 条否则无法 Create */
@@ -168,7 +168,7 @@ func (p *Provider) GetDomainRecordInfo(ctx context.Context, recordID string) (*d
 	request.Domain = common.StringPtr(p.domain)
 	request.RecordId = common.Uint64Ptr(id)
 
-	response, err := p.client.DescribeRecord(request)
+	response, err := p.client.DescribeRecordWithContext(ctx, request)
 	if err != nil {
 		return nil, err
 	}
@@ -201,7 +201,7 @@ func (p *Provider) AddDomainRecord(ctx context.Context, name, recordType, value,
 		request.Weight = common.Uint64Ptr(uint64(*weight))
 	}
 
-	response, err := p.client.CreateRecord(request)
+	response, err := p.client.CreateRecordWithContext(ctx, request)
 	if err != nil {
 		return "", err
 	}
@@ -233,7 +233,7 @@ func (p *Provider) UpdateDomainRecord(ctx context.Context, recordID, name, recor
 		request.Weight = common.Uint64Ptr(uint64(*weight))
 	}
 
-	_, err := p.client.ModifyRecord(request)
+	_, err := p.client.ModifyRecordWithContext(ctx, request)
 	if err != nil {
 		return err
 	}
@@ -252,7 +252,7 @@ func (p *Provider) UpdateDomainRecordRemark(ctx context.Context, recordID, remar
 	request.RecordId = common.Uint64Ptr(id)
 	request.Remark = common.StringPtr(remark)
 
-	_, err := p.client.ModifyRecordRemark(request)
+	_, err := p.client.ModifyRecordRemarkWithContext(ctx, request)
 	return err
 }
 
@@ -262,7 +262,7 @@ func (p *Provider) DeleteDomainRecord(ctx context.Context, recordID string) erro
 	request.Domain = common.StringPtr(p.domain)
 	request.RecordId = common.Uint64Ptr(id)
 
-	_, err := p.client.DeleteRecord(request)
+	_, err := p.client.DeleteRecordWithContext(ctx, request)
 	return err
 }
 
@@ -277,7 +277,7 @@ func (p *Provider) SetDomainRecordStatus(ctx context.Context, recordID string, e
 		request.Status = common.StringPtr("DISABLE")
 	}
 
-	_, err := p.client.ModifyRecordStatus(request)
+	_, err := p.client.ModifyRecordStatusWithContext(ctx, request)
 	return err
 }
 
@@ -311,7 +311,7 @@ func (p *Provider) GetRecordLine(ctx context.Context) ([]dns.RecordLine, error) 
 	request.Domain = common.StringPtr(p.domain)
 	request.DomainGrade = common.StringPtr("DP_FREE")
 
-	response, err := p.client.DescribeRecordLineList(request)
+	response, err := p.client.DescribeRecordLineListWithContext(ctx, request)
 	if err != nil {
 		return nil, err
 	}
@@ -334,7 +334,7 @@ func (p *Provider) GetMinTTL() int {
 func (p *Provider) AddDomain(ctx context.Context, domain string) error {
 	request := dnspod.NewCreateDomainRequest()
 	request.Domain = common.StringPtr(domain)
-	_, err := p.client.CreateDomain(request)
+	_, err := p.client.CreateDomainWithContext(ctx, request)
 	return err
 }
 
@@ -401,7 +401,7 @@ func (p *Provider) GetRecordGroups(ctx context.Context) ([]dns.RecordGroup, erro
 	request := dnspod.NewDescribeRecordGroupListRequest()
 	request.Domain = common.StringPtr(p.domain)
 
-	response, err := p.client.DescribeRecordGroupList(request)
+	response, err := p.client.DescribeRecordGroupListWithContext(ctx, request)
 	if err != nil {
 		return nil, err
 	}
@@ -429,7 +429,7 @@ func (p *Provider) ChangeRecordGroup(ctx context.Context, recordIDs []string, gr
 	request.GroupId = common.Uint64Ptr(gid)
 	request.RecordId = common.StringPtr(recordIDStr)
 
-	_, err = p.client.ModifyRecordToGroup(request)
+	_, err = p.client.ModifyRecordToGroupWithContext(ctx, request)
 	return err
 }
 
@@ -459,7 +459,7 @@ func (p *Provider) GetDomainRecordsByGroup(ctx context.Context, groupID string, 
 		request.RecordLine = common.StringPtr(normalizeRecordLine(line))
 	}
 
-	response, err := p.client.DescribeRecordList(request)
+	response, err := p.client.DescribeRecordListWithContext(ctx, request)
 	if err != nil {
 		var sdkErr *tcerr.TencentCloudSDKError
 		if errors.As(err, &sdkErr) && sdkErr.Code == "ResourceNotFound.NoDataOfRecord" {
@@ -504,7 +504,7 @@ func (p *Provider) GetDomainAliasList(ctx context.Context) ([]dns.DomainAlias, e
 	request := dnspod.NewDescribeDomainAliasListRequest()
 	request.Domain = common.StringPtr(p.domain)
 
-	response, err := p.client.DescribeDomainAliasList(request)
+	response, err := p.client.DescribeDomainAliasListWithContext(ctx, request)
 	if err != nil {
 		return nil, err
 	}
@@ -526,7 +526,7 @@ func (p *Provider) AddDomainAlias(ctx context.Context, alias string) error {
 	request.Domain = common.StringPtr(p.domain)
 	request.DomainAlias = common.StringPtr(alias)
 
-	_, err := p.client.CreateDomainAlias(request)
+	_, err := p.client.CreateDomainAliasWithContext(ctx, request)
 	return err
 }
 
@@ -541,6 +541,6 @@ func (p *Provider) DeleteDomainAlias(ctx context.Context, aliasID string) error 
 	request.Domain = common.StringPtr(p.domain)
 	request.DomainAliasId = common.Int64Ptr(aid)
 
-	_, err = p.client.DeleteDomainAlias(request)
+	_, err = p.client.DeleteDomainAliasWithContext(ctx, request)
 	return err
 }

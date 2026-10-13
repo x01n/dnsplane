@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"main/internal/api/handler"
 	"main/internal/api/middleware"
+	"main/internal/apiv1"
 	"net/http"
 	"strings"
 
@@ -53,6 +54,13 @@ func applyAPIMiddleware(api *gin.RouterGroup) {
 
 func setupRouter(staticFS fs.FS) *gin.Engine {
 	r := newBaseEngine()
+	/*
+	 * 对外 API 独立于 /api 分组挂载
+	 *
+	 * /api 分组带 CSRF double-submit 校验，而 API Key 客户端没有 cookie，
+	 * 继承那条链会让所有写请求在 CSRF 处被拒；签名本身即是身份与完整性凭据
+	 */
+	apiv1.Setup(r)
 	api := r.Group("/api")
 	applyAPIMiddleware(api)
 	{
@@ -86,8 +94,17 @@ func setupRouter(staticFS fs.FS) *gin.Engine {
 
 		auth := api.Group("")
 		auth.Use(middleware.Auth())
+		/*
+		 * 域名权限中间件：必须在 Auth 之后（它读 user_id/level），在全部路由之前
+		 *
+		 * 此前只定义了 Permission() 而从未挂载，导致它写入的 perm_read_only /
+		 * perm_sub_domain 三个上下文键恒不存在，下游三处依赖它们的拦截全部失效：
+		 * 只读用户可删记录、子域受限用户能读到该域名全部记录、审计日志的 domain 恒为空
+		 */
+		auth.Use(middleware.Permission())
 		{
 			auth.GET("/user/info", handler.GetUserInfo)
+			auth.GET("/user/quota", handler.GetMyQuota)
 			auth.POST("/user/password", handler.ChangePassword)
 			auth.POST("/user/bind-email/send-code", handler.SendBindEmailCode)
 			auth.POST("/user/bind-email", handler.BindEmail)
@@ -196,6 +213,23 @@ func setupRouter(staticFS fs.FS) *gin.Engine {
 			auth.POST("/users/:id/reset-apikey", handler.ResetAPIKey)
 			auth.POST("/users/:id/send-reset", handler.AdminSendResetEmail)
 			auth.POST("/users/:id/reset-totp", handler.AdminResetTOTP)
+
+			// 套餐与配额：管理员维护配额模板、个体覆盖与套餐订阅
+			auth.GET("/system/plans", handler.GetPlans)
+			auth.POST("/system/plans", handler.CreatePlan)
+			auth.POST("/system/plans/:id", handler.UpdatePlan)
+			auth.POST("/system/plans/:id/delete", handler.DeletePlan)
+			auth.POST("/system/plans/:id/default", handler.SetDefaultPlan)
+
+			auth.GET("/system/user-quotas", handler.GetUserQuotas)
+			auth.POST("/system/user-quotas/:uid", handler.SetUserQuota)
+			auth.POST("/system/user-quotas/:uid/reset", handler.ResetUserQuota)
+			auth.GET("/system/user-quotas/:uid/sub", handler.GetUserSubscription)
+			auth.POST("/system/user-quotas/:uid/sub", handler.SetUserSubscription)
+			auth.POST("/system/user-quotas/:uid/sub/revoke", handler.RevokeUserSubscription)
+
+			auth.GET("/system/quota-default", handler.GetQuotaDefault)
+			auth.POST("/system/quota-default", handler.UpdateQuotaDefault)
 
 			auth.GET("/logs", handler.GetLogs)
 			auth.GET("/logs/:id", handler.GetLogDetail)

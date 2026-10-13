@@ -1,620 +1,598 @@
 # UI组件库
 
 <cite>
-**本文引用的文件**
-- [button.tsx](file://web/components/ui/button.tsx)
-- [dialog.tsx](file://web/components/ui/dialog.tsx)
-- [dropdown-menu.tsx](file://web/components/ui/dropdown-menu.tsx)
-- [input.tsx](file://web/components/ui/input.tsx)
-- [table.tsx](file://web/components/ui/table.tsx)
-- [alert-dialog.tsx](file://web/components/ui/alert-dialog.tsx)
-- [card.tsx](file://web/components/ui/card.tsx)
-- [checkbox.tsx](file://web/components/ui/checkbox.tsx)
-- [select.tsx](file://web/components/ui/select.tsx)
-- [textarea.tsx](file://web/components/ui/textarea.tsx)
-- [provider-icon.tsx](file://web/components/provider-icon.tsx)
-- [turnstile-widget.tsx](file://web/components/turnstile-widget.tsx)
-- [captcha-dialog.tsx](file://web/components/captcha-dialog.tsx)
-- [go-captcha-dialog.tsx](file://web/components/go-captcha-dialog.tsx)
-- [utils.ts](file://web/lib/utils.ts)
+**本文档引用的文件**
+- [web/components/ui/button.tsx](file://web/components/ui/button.tsx)
+- [web/components/ui/badge.tsx](file://web/components/ui/badge.tsx)
+- [web/components/ui/dialog.tsx](file://web/components/ui/dialog.tsx)
+- [web/components/ui/table.tsx](file://web/components/ui/table.tsx)
+- [web/components/ui/select.tsx](file://web/components/ui/select.tsx)
+- [web/components/ui/sheet.tsx](file://web/components/ui/sheet.tsx)
+- [web/components/ui/sonner.tsx](file://web/components/ui/sonner.tsx)
+- [web/components/ui/alert-dialog.tsx](file://web/components/ui/alert-dialog.tsx)
+- [web/components/ui/dropdown-menu.tsx](file://web/components/ui/dropdown-menu.tsx)
+- [web/components/ui/command.tsx](file://web/components/ui/command.tsx)
+- [web/components/ui/avatar.tsx](file://web/components/ui/avatar.tsx)
+- [web/components/ui/card.tsx](file://web/components/ui/card.tsx)
+- [web/components/ui/checkbox.tsx](file://web/components/ui/checkbox.tsx)
+- [web/components/ui/input.tsx](file://web/components/ui/input.tsx)
+- [web/components/ui/label.tsx](file://web/components/ui/label.tsx)
+- [web/components/ui/popover.tsx](file://web/components/ui/popover.tsx)
+- [web/components/ui/progress.tsx](file://web/components/ui/progress.tsx)
+- [web/components/ui/radio-group.tsx](file://web/components/ui/radio-group.tsx)
+- [web/components/ui/separator.tsx](file://web/components/ui/separator.tsx)
+- [web/components/ui/skeleton.tsx](file://web/components/ui/skeleton.tsx)
+- [web/components/ui/switch.tsx](file://web/components/ui/switch.tsx)
+- [web/components/ui/tabs.tsx](file://web/components/ui/tabs.tsx)
+- [web/components/ui/textarea.tsx](file://web/components/ui/textarea.tsx)
+- [web/components/ui/tooltip.tsx](file://web/components/ui/tooltip.tsx)
+- [web/components/deploy/DynamicForm.tsx](file://web/components/deploy/DynamicForm.tsx)
+- [web/components/auth/auth-animated-layout.tsx](file://web/components/auth/auth-animated-layout.tsx)
+- [web/components/auth/animated-login-characters.tsx](file://web/components/auth/animated-login-characters.tsx)
+- [web/components/auth/auth-form-skeleton.tsx](file://web/components/auth/auth-form-skeleton.tsx)
+- [web/components/auth/auth-footer-nav.tsx](file://web/components/auth/auth-footer-nav.tsx)
+- [web/components/theme-provider.tsx](file://web/components/theme-provider.tsx)
+- [web/components/theme-toggle.tsx](file://web/components/theme-toggle.tsx)
+- [web/components/pagination.tsx](file://web/components/pagination.tsx)
+- [web/components/sortable-header.tsx](file://web/components/sortable-header.tsx)
+- [web/components/empty-state.tsx](file://web/components/empty-state.tsx)
+- [web/components/table-skeleton.tsx](file://web/components/table-skeleton.tsx)
+- [web/components/page-tabs.tsx](file://web/components/page-tabs.tsx)
+- [web/components/provider-icon.tsx](file://web/components/provider-icon.tsx)
+- [web/components/captcha-dialog.tsx](file://web/components/captcha-dialog.tsx)
+- [web/components/account-form.tsx](file://web/components/account-form.tsx)
+- [web/lib/utils.ts](file://web/lib/utils.ts)
+- [web/app/layout.tsx](file://web/app/layout.tsx)
+- [web/app/globals.css](file://web/app/globals.css)
+- [web/package.json](file://web/package.json)
 </cite>
 
 ## 目录
+
 1. [简介](#简介)
 2. [项目结构](#项目结构)
 3. [核心组件](#核心组件)
 4. [架构总览](#架构总览)
 5. [详细组件分析](#详细组件分析)
 6. [依赖关系分析](#依赖关系分析)
-7. [性能考量](#性能考量)
+7. [性能考虑](#性能考虑)
 8. [故障排查指南](#故障排查指南)
 9. [结论](#结论)
 10. [附录](#附录)
 
 ## 简介
-本文件系统性梳理 DNSPlane 前端 Web 应用中的 UI 组件库，基于 Radix UI 与 Tailwind CSS 构建，覆盖基础按钮、输入框、对话框、下拉菜单、表格等通用组件，以及行为验证码弹窗、Turnstile 独立人机验证、服务商标识等自定义组件。文档从架构、数据流、处理逻辑、可访问性与键盘导航、主题定制与样式覆盖、响应式设计、组合模式与最佳实践、测试与文档生成等方面进行深入解析，并提供可视化图示帮助理解。
+
+DNSPlane 前端 `web/` 采用「Radix 无样式 Primitive + class-variance-authority 变体表 + tailwind-merge 类名合并」的三层组合结构。底层由 Radix 提供可访问性行为与受控状态，中层用 `cva` 声明变体（variant/size），顶层用 `cn()` 将三者拼接为最终 `className`。此结构保证：任意一个 UI 组件既可完全定制外观，又无需重复实现焦点管理、键盘导航、`aria-*` 属性等无障碍细节。
+
+本文覆盖以下范围：
+
+- `web/components/ui/` 下 24 个基础组件的职责、导出与行数
+- `web/components/` 与 `web/components/auth/`、`web/components/deploy/` 构成的业务组件层
+- 三层结构在典型组件（`button`、`badge`、`dialog`、`table`、`select`）中的具体写法
+- 新增组件的推荐流程与命名约定
+
+不覆盖：`app/` 路由组织、状态管理、API 客户端。
+
+**章节来源**
+- [web/components/ui/button.tsx](file://web/components/ui/button.tsx#L1-L65)
+- [web/lib/utils.ts](file://web/lib/utils.ts#L1-L7)
 
 ## 项目结构
-UI 组件主要位于 web/components/ui 目录，采用“按功能分层 + 组件原子化”的组织方式：
-- 基础组件：button、input、textarea、checkbox、select、table、card、alert-dialog、dialog、dropdown-menu 等
-- 自定义组件：provider-icon、turnstile-widget、captcha-dialog、go-captcha-dialog
-- 工具函数：web/lib/utils.ts 提供 cn 合并工具与常用格式化函数
 
-```mermaid
-graph TB
-subgraph "UI 组件层"
-Btn["Button<br/>按钮"]
-Inp["Input<br/>输入框"]
-Txt["Textarea<br/>多行文本"]
-Chk["Checkbox<br/>复选框"]
-Sel["Select<br/>选择器"]
-Tbl["Table<br/>表格"]
-Card["Card<br/>卡片"]
-Dlg["Dialog<br/>对话框"]
-ADlg["AlertDialog<br/>警示对话框"]
-Drop["DropdownMenu<br/>下拉菜单"]
-end
-subgraph "自定义组件层"
-Prov["ProviderIcon<br/>服务商标识"]
-Turn["TurnstileWidget<br/>Cloudflare Turnstile"]
-Cap["BehavioralCaptchaDialog<br/>行为验证码弹窗"]
-GoCap["GoCaptchaDialog<br/>GoCaptcha行为验证码弹窗"]
-end
-Utils["utils.ts<br/>样式合并与工具函数"]
-Btn --> Utils
-Inp --> Utils
-Txt --> Utils
-Chk --> Utils
-Sel --> Utils
-Tbl --> Utils
-Card --> Utils
-Dlg --> Utils
-ADlg --> Utils
-Drop --> Utils
-Prov --> Utils
-Turn --> Utils
-Cap --> Utils
-GoCap --> Utils
+UI 层位于 `web/components/`，按「基础组件 vs 业务组件」分目录，基础组件目录扁平、无子层；业务组件按特性拆包。
+
+```
+web/components/
+├── ui/                             # 24 个基础组件（Radix + cva + cn）
+│   ├── alert-dialog.tsx        196 行
+│   ├── avatar.tsx              109 行
+│   ├── badge.tsx                48 行
+│   ├── button.tsx               64 行
+│   ├── card.tsx                 92 行
+│   ├── checkbox.tsx             32 行
+│   ├── command.tsx             103 行
+│   ├── dialog.tsx              158 行
+│   ├── dropdown-menu.tsx       257 行
+│   ├── input.tsx                21 行
+│   ├── label.tsx                24 行
+│   ├── popover.tsx              31 行
+│   ├── progress.tsx             31 行
+│   ├── radio-group.tsx          45 行
+│   ├── select.tsx              190 行
+│   ├── separator.tsx            28 行
+│   ├── sheet.tsx               143 行
+│   ├── skeleton.tsx             13 行
+│   ├── sonner.tsx               41 行
+│   ├── switch.tsx               35 行
+│   ├── table.tsx               117 行
+│   ├── tabs.tsx                 91 行
+│   ├── textarea.tsx             18 行
+│   └── tooltip.tsx              61 行
+├── auth/                             # 登录/注册视觉层
+│   ├── animated-login-characters.tsx  568 行
+│   ├── animated-login-characters.module.css
+│   ├── animated-login-shell.module.css
+│   ├── auth-animated-layout.tsx       136 行
+│   ├── auth-footer-nav.tsx             59 行
+│   ├── auth-form-skeleton.tsx          52 行
+│   └── oauth-callback.module.css
+├── deploy/
+│   └── DynamicForm.tsx                102 行
+└── *.tsx                           # 业务组件：分页、排序表头、空态、验证码对话框、主题等
 ```
 
-**图表来源**
-- [button.tsx:1-65](file://web/components/ui/button.tsx#L1-L65)
-- [input.tsx:1-22](file://web/components/ui/input.tsx#L1-L22)
-- [textarea.tsx:1-19](file://web/components/ui/textarea.tsx#L1-L19)
-- [checkbox.tsx:1-33](file://web/components/ui/checkbox.tsx#L1-L33)
-- [select.tsx:1-191](file://web/components/ui/select.tsx#L1-L191)
-- [table.tsx:1-117](file://web/components/ui/table.tsx#L1-L117)
-- [card.tsx:1-93](file://web/components/ui/card.tsx#L1-L93)
-- [dialog.tsx:1-159](file://web/components/ui/dialog.tsx#L1-L159)
-- [alert-dialog.tsx:1-197](file://web/components/ui/alert-dialog.tsx#L1-L197)
-- [dropdown-menu.tsx:1-258](file://web/components/ui/dropdown-menu.tsx#L1-L258)
-- [provider-icon.tsx:1-313](file://web/components/provider-icon.tsx#L1-L313)
-- [turnstile-widget.tsx:1-114](file://web/components/turnstile-widget.tsx#L1-L114)
-- [captcha-dialog.tsx:1-234](file://web/components/captcha-dialog.tsx#L1-L234)
-- [go-captcha-dialog.tsx:1-234](file://web/components/go-captcha-dialog.tsx#L1-L234)
-- [utils.ts:1-129](file://web/lib/utils.ts#L1-L129)
+`web/app/layout.tsx` 将 `ThemeProvider` 与 `Toaster` 挂在根 `<html>` 下，业务页面通过 import 使用 `ui/` 基础件。
 
 **章节来源**
-- [button.tsx:1-65](file://web/components/ui/button.tsx#L1-L65)
-- [dialog.tsx:1-159](file://web/components/ui/dialog.tsx#L1-L159)
-- [dropdown-menu.tsx:1-258](file://web/components/ui/dropdown-menu.tsx#L1-L258)
-- [input.tsx:1-22](file://web/components/ui/input.tsx#L1-L22)
-- [table.tsx:1-117](file://web/components/ui/table.tsx#L1-L117)
-- [alert-dialog.tsx:1-197](file://web/components/ui/alert-dialog.tsx#L1-L197)
-- [card.tsx:1-93](file://web/components/ui/card.tsx#L1-L93)
-- [checkbox.tsx:1-33](file://web/components/ui/checkbox.tsx#L1-L33)
-- [select.tsx:1-191](file://web/components/ui/select.tsx#L1-L191)
-- [textarea.tsx:1-19](file://web/components/ui/textarea.tsx#L1-L19)
-- [provider-icon.tsx:1-313](file://web/components/provider-icon.tsx#L1-L313)
-- [turnstile-widget.tsx:1-114](file://web/components/turnstile-widget.tsx#L1-L114)
-- [captcha-dialog.tsx:1-234](file://web/components/captcha-dialog.tsx#L1-L234)
-- [go-captcha-dialog.tsx:1-234](file://web/components/go-captcha-dialog.tsx#L1-L234)
-- [utils.ts:1-129](file://web/lib/utils.ts#L1-L129)
+- [web/components/ui/](file://web/components/ui/)
+- [web/components/auth/](file://web/components/auth/)
+- [web/components/deploy/](file://web/components/deploy/)
+- [web/app/layout.tsx](file://web/app/layout.tsx)
 
 ## 核心组件
-本节对关键 UI 组件进行深入剖析，包括组件职责、属性接口、事件处理、状态管理、样式与主题定制、可访问性与键盘导航要点。
 
-- Button（按钮）
-  - 职责：统一的交互入口，支持多种变体与尺寸，支持作为容器（asChild）包裹原生按钮或链接。
-  - 关键特性：使用 class-variance-authority 定义变体与尺寸；通过 data-slot 与 data-* 属性暴露语义化标记；集成焦点可见性与无效态样式。
-  - 属性接口：className、variant、size、asChild、原生 button 属性。
-  - 事件处理：透传原生事件；支持通过 asChild 与上层组合形成点击行为。
-  - 主题与样式：基于 Tailwind 类与暗色模式变量；支持 aria-invalid 与 focus-visible ring。
-  - 可访问性：内置焦点环与可聚焦性；建议配合 Label 使用以提升可访问性。
-
-- Dialog（对话框）
-  - 职责：模态对话框容器，包含 Overlay、Portal、Content、Header/Footer、Title/Description、Trigger/Close 等子组件。
-  - 关键特性：基于 Radix UI 的受控/非受控状态；支持动画入场/出场；支持关闭按钮与 Footer 按钮组合。
-  - 属性接口：Root/Trigger/Portal/Overlay/Content/Header/Footer/Title/Description/Close 的 props；Content 支持 showCloseButton 控制关闭按钮显隐。
-  - 事件处理：通过 Radix UI 的 onOpenChange 与原生事件协作；Footer 中可直接使用 Button 组合。
-  - 主题与样式：基于 Tailwind 类；Content 支持响应式最大宽度与居中定位。
-  - 可访问性：自动管理焦点；关闭按钮包含 sr-only 文本；建议提供标题与描述。
-
-- DropdownMenu（下拉菜单）
-  - 职责：上下文菜单与选项组，支持复选/单选项、子菜单、快捷键提示等。
-  - 关键特性：基于 Radix UI；支持 inset、variant、侧向动画；支持 ItemIndicator 显示选中态。
-  - 属性接口：Root/Portal/Trigger/Content/Group/Label/Item/CheckboxItem/RadioGroup/RadioItem/Separator/Shortcut/Sub/SubTrigger/SubContent 等。
-  - 事件处理：通过原生事件与 Radix 状态联动；支持子菜单展开/收起。
-  - 主题与样式：Popover 背景与边框；支持侧向 slide-in 动画。
-  - 可访问性：自动焦点管理；键盘导航支持；建议为快捷键提供可见提示。
-
-- Input（输入框）
-  - 职责：基础文本输入，支持禁用、无效态、占位符与选择态样式。
-  - 关键特性：统一的边框、阴影、聚焦 ring；支持 aria-invalid 与 focus-visible ring。
-  - 属性接口：className、type、原生 input 属性。
-  - 事件处理：透传原生事件；建议结合表单校验与反馈。
-  - 主题与样式：基于 Tailwind 类；暗色模式适配。
-  - 可访问性：建议与 Label 配合；支持键盘导航与屏幕阅读器。
-
-- Table（表格）
-  - 职责：响应式表格容器与子元素（thead/tbody/tfoot/tr/th/td/caption），支持悬停与选中态。
-  - 关键特性：容器层提供横向滚动；tr 支持 hover 与 selected 状态；th/td 内含复选框时调整间距。
-  - 属性接口：Table/TableHeader/TableBody/TableFooter/TableRow/TableHead/TableCell/TableCaption 的 props。
-  - 事件处理：主要用于渲染；状态由上层控制（如选中）。
-  - 主题与样式：基于 Tailwind 类；支持 hover 与 border 样式。
-  - 可访问性：建议提供 caption 与 role=checkbox 的复选框语义。
-
-- AlertDialog（警示对话框）
-  - 职责：强调操作的确认/取消流程，支持媒体区域与尺寸变体。
-  - 关键特性：基于 Radix UI；Content 支持 default/sm 尺寸；Header/Footer 布局随尺寸变化。
-  - 属性接口：Root/Portal/Overlay/Content/Header/Footer/Title/Description/Media/Action/Cancel 的 props；Action/Cancel 支持 variant/size 组合。
-  - 事件处理：Action/Cancel 通过 asChild 组合 Button；Content 的 size 影响布局。
-  - 主题与样式：基于 Tailwind 类；响应式布局。
-  - 可访问性：自动焦点管理；建议提供标题与描述。
-
-- Card（卡片）
-  - 职责：内容区块容器，支持 Header/Title/Description/Action/Content/Footer。
-  - 关键特性：Header 支持 action 区域网格布局；Footer 支持边框线。
-  - 属性接口：Card/CardHeader/CardTitle/CardDescription/CardAction/CardContent/CardFooter 的 props。
-  - 事件处理：主要用于渲染；状态由上层控制。
-  - 主题与样式：基于 Tailwind 类；支持 @container 响应式断点。
-  - 可访问性：建议提供语义化标题与描述。
-
-- Checkbox（复选框）
-  - 职责：二元选择控件，支持禁用与无效态。
-  - 关键特性：Indicator 显示勾选图标；支持 focus-visible ring 与 aria-invalid。
-  - 属性接口：className、原生 checkbox 属性。
-  - 事件处理：透传原生事件。
-  - 主题与样式：基于 Tailwind 类；暗色模式适配。
-  - 可访问性：原生控件语义；建议与 Label 配合。
-
-- Select（选择器）
-  - 职责：下拉选择，支持分组、标签、滚动按钮、指示器等。
-  - 关键特性：Trigger 支持 size；Content 支持 popper/item-aligned 位置；Viewport 自适应高度。
-  - 属性接口：Root/Group/Value/Trigger/Content/Label/Item/Separator/ScrollUpButton/ScrollDownButton 的 props；Trigger 支持 size。
-  - 事件处理：通过原生事件与 Radix 状态联动。
-  - 主题与样式：基于 Tailwind 类；支持侧向 slide-in 动画。
-  - 可访问性：原生控件语义；建议提供可见的快捷键提示。
-
-- Textarea（多行文本）
-  - 职责：多行文本输入，支持禁用与无效态。
-  - 关键特性：统一的边框、阴影、聚焦 ring；支持 aria-invalid 与 focus-visible ring。
-  - 属性接口：className、原生 textarea 属性。
-  - 事件处理：透传原生事件。
-  - 主题与样式：基于 Tailwind 类；暗色模式适配。
-  - 可访问性：建议与 Label 配合。
-
-**章节来源**
-- [button.tsx:1-65](file://web/components/ui/button.tsx#L1-L65)
-- [dialog.tsx:1-159](file://web/components/ui/dialog.tsx#L1-L159)
-- [dropdown-menu.tsx:1-258](file://web/components/ui/dropdown-menu.tsx#L1-L258)
-- [input.tsx:1-22](file://web/components/ui/input.tsx#L1-L22)
-- [table.tsx:1-117](file://web/components/ui/table.tsx#L1-L117)
-- [alert-dialog.tsx:1-197](file://web/components/ui/alert-dialog.tsx#L1-L197)
-- [card.tsx:1-93](file://web/components/ui/card.tsx#L1-L93)
-- [checkbox.tsx:1-33](file://web/components/ui/checkbox.tsx#L1-L33)
-- [select.tsx:1-191](file://web/components/ui/select.tsx#L1-L191)
-- [textarea.tsx:1-19](file://web/components/ui/textarea.tsx#L1-L19)
-
-## 架构总览
-UI 组件库整体采用“原子组件 + 组合组件 + 自定义业务组件”的分层架构：
-- 原子组件：Button、Input、Textarea、Checkbox、Select、Table、Card 等，负责最小可用功能与样式。
-- 组合组件：Dialog、AlertDialog、DropdownMenu 等，基于 Radix UI 扩展语义与交互。
-- 自定义组件：ProviderIcon、TurnstileWidget、BehavioralCaptchaDialog、GoCaptchaDialog 等，封装业务逻辑与第三方 SDK。
+三层结构在每个基础组件的写法一致：`Primitive 来源 → cva 变体表 → cn 合并`。
 
 ```mermaid
 graph TB
-subgraph "原子组件"
-A["Button"]
-B["Input"]
-C["Textarea"]
-D["Checkbox"]
-E["Select"]
-F["Table"]
-G["Card"]
+subgraph "底层 Primitive"
+R1["@radix-ui/react-*"]
+R2["radix-ui 聚合包"]
+R3["原生 HTML"]
 end
-subgraph "组合组件"
-H["Dialog"]
-I["AlertDialog"]
-J["DropdownMenu"]
+subgraph "中层 变体表"
+C1["class-variance-authority cva()"]
+C2["VariantProps 类型"]
 end
-subgraph "自定义组件"
-K["ProviderIcon"]
-L["TurnstileWidget"]
-M["BehavioralCaptchaDialog"]
-N["GoCaptchaDialog"]
+subgraph "顶层 拼接器"
+U1["clsx 条件类名"]
+U2["tailwind-merge 冲突消解"]
+U3["cn() 汇总"]
 end
-O["utils.ts"]
-A --> O
-B --> O
-C --> O
-D --> O
-E --> O
-F --> O
-G --> O
-H --> O
-I --> O
-J --> O
-K --> O
-L --> O
-M --> O
-N --> O
+R1 --> C1
+R2 --> C1
+R3 --> C1
+C1 --> U3
+C2 --> U3
+U1 --> U3
+U2 --> U3
+U3 --> Final["最终 className 与 data-slot"]
 ```
 
 **图表来源**
-- [button.tsx:1-65](file://web/components/ui/button.tsx#L1-L65)
-- [input.tsx:1-22](file://web/components/ui/input.tsx#L1-L22)
-- [textarea.tsx:1-19](file://web/components/ui/textarea.tsx#L1-L19)
-- [checkbox.tsx:1-33](file://web/components/ui/checkbox.tsx#L1-L33)
-- [select.tsx:1-191](file://web/components/ui/select.tsx#L1-L191)
-- [table.tsx:1-117](file://web/components/ui/table.tsx#L1-L117)
-- [card.tsx:1-93](file://web/components/ui/card.tsx#L1-L93)
-- [dialog.tsx:1-159](file://web/components/ui/dialog.tsx#L1-L159)
-- [alert-dialog.tsx:1-197](file://web/components/ui/alert-dialog.tsx#L1-L197)
-- [dropdown-menu.tsx:1-258](file://web/components/ui/dropdown-menu.tsx#L1-L258)
-- [provider-icon.tsx:1-313](file://web/components/provider-icon.tsx#L1-L313)
-- [turnstile-widget.tsx:1-114](file://web/components/turnstile-widget.tsx#L1-L114)
-- [captcha-dialog.tsx:1-234](file://web/components/captcha-dialog.tsx#L1-L234)
-- [go-captcha-dialog.tsx:1-234](file://web/components/go-captcha-dialog.tsx#L1-L234)
-- [utils.ts:1-129](file://web/lib/utils.ts#L1-L129)
+- [web/components/ui/button.tsx](file://web/components/ui/button.tsx#L1-L65)
+- [web/components/ui/badge.tsx](file://web/components/ui/badge.tsx#L1-L49)
+- [web/lib/utils.ts](file://web/lib/utils.ts#L1-L7)
+- [web/package.json](file://web/package.json)
+
+| 组件族 | 用途 | 行数 | 主要导出 |
+|---|---|---|---|
+| button | 动作按钮，含 6 种 variant × 8 种 size | 64 | `Button`、`buttonVariants` |
+| badge | 状态徽章，支持 `asChild` | 48 | `Badge`、`badgeVariants` |
+| dialog | 模态对话框（Radix Dialog） | 158 | `Dialog` 系列 10 个组件 |
+| alert-dialog | 阻断式确认对话框 | 196 | `AlertDialog` 系列 |
+| sheet | 边缘抽屉，`side` 四向 | 143 | `Sheet` 系列 |
+| select | 下拉选择（Radix Select） | 190 | `Select` 系列 |
+| dropdown-menu | 菜单（含 checkbox/radio 项） | 257 | `DropdownMenu` 系列 |
+| command | 命令面板（基于 cmdk） | 103 | `Command` 系列 |
+| popover | 浮动面板 | 31 | `Popover` 系列 |
+| tooltip | 悬停提示 | 61 | `Tooltip` 系列 |
+| table | 数据表格 | 117 | `Table` 系列 8 个 |
+| tabs | 标签页 | 91 | `Tabs` 系列 |
+| card | 卡片容器 | 92 | `Card` 系列 |
+| input / textarea / label | 表单原子件 | 21 / 18 / 24 | `Input` / `Textarea` / `Label` |
+| checkbox / radio-group / switch | 选择控件 | 32 / 45 / 35 | 对应 Radix 封装 |
+| avatar | 头像 | 109 | `Avatar` 系列 |
+| progress / skeleton / separator | 视觉装饰 | 31 / 13 / 28 | 对应封装 |
+| sonner | Toast 通知（基于 sonner） | 41 | `Toaster` |
+
+**章节来源**
+- [web/components/ui/](file://web/components/ui/)
+- [web/package.json](file://web/package.json)
+
+## 架构总览
+
+`ui/` 基础组件与业务组件的调用关系如下：
+
+```mermaid
+graph TB
+App["app/(dashboard)/* 页面"]
+App --> Biz["业务组件层<br/>pagination / sortable-header /<br/>empty-state / table-skeleton"]
+App --> Auth["auth/ 组件层<br/>auth-animated-layout /<br/>animated-login-characters"]
+App --> Deploy["deploy/DynamicForm"]
+App --> Captcha["captcha-dialog /<br/>go-captcha-dialog /<br/>turnstile-widget"]
+Biz --> UI["ui/ 基础组件层"]
+Auth --> UI
+Deploy --> UI
+Captcha --> UI
+UI --> Radix["@radix-ui/*"]
+UI --> Cva["cva + tailwind-merge"]
+UI --> Theme["ThemeProvider<br/>next-themes"]
+Theme --> Globals["app/globals.css<br/>@theme inline 变量"]
+Radix --> DOM["浏览器 DOM"]
+Cva --> DOM
+Globals --> DOM
+```
+
+**图表来源**
+- [web/app/layout.tsx](file://web/app/layout.tsx)
+- [web/components/ui/button.tsx](file://web/components/ui/button.tsx)
+- [web/components/theme-provider.tsx](file://web/components/theme-provider.tsx)
+- [web/app/globals.css](file://web/app/globals.css#L40-L81)
+
+三层结构落地为四条硬约束：
+
+- 每个基础组件文件必须声明 `data-slot="xxx"`，便于上层 selector
+- 需要 `asChild` 场景一律用 `@radix-ui/react-slot` 的 `Slot`
+- 变体统一由 `cva` 声明，禁止在 JSX 里用 `if/else` 拼类名
+- 外部传入的 `className` 始终作为 `cn(...)` 参数中的最后一位，保证调用方覆盖生效
+
+**章节来源**
+- [web/components/ui/button.tsx](file://web/components/ui/button.tsx#L41-L62)
+- [web/components/ui/badge.tsx](file://web/components/ui/badge.tsx#L32-L48)
 
 ## 详细组件分析
 
-### Button（按钮）组件
-- 设计模式：基于 class-variance-authority 的变体与尺寸系统；Slot 容器模式支持 asChild。
-- 数据结构与复杂度：无复杂数据结构；样式计算为 O(n) 字符串拼接。
-- 依赖链：依赖 Radix Slot、class-variance-authority、cn 工具。
-- 错误处理：通过 aria-invalid 与 focus-visible ring 提示无效状态。
-- 性能影响：样式计算轻量；避免在渲染路径中频繁创建新对象。
+### 三层结构落地：button
 
-```mermaid
-classDiagram
-class Button {
-+props : "className, variant, size, asChild, 原生button属性"
-+render() : "返回Comp(原生button或Slot)"
+`button` 是三层结构最典型的示例：`cva` 声明 6 variant × 8 size 的类名表，函数体将 `Slot` 作为可切换宿主，`cn()` 合并 `buttonVariants({ variant, size })` 与外部 `className`。
+
+```tsx
+const buttonVariants = cva(
+  "inline-flex items-center justify-center gap-2 ... focus-visible:ring-[3px]",
+  {
+    variants: {
+      variant: {
+        default: "bg-primary text-primary-foreground hover:bg-primary/90",
+        destructive: "bg-destructive text-white ... dark:bg-destructive/60",
+        outline: "border bg-background shadow-xs ... dark:border-input",
+        secondary: "bg-secondary text-secondary-foreground ...",
+        ghost: "hover:bg-accent hover:text-accent-foreground ...",
+        link: "text-primary underline-offset-4 hover:underline",
+      },
+      size: {
+        default: "h-9 px-4 py-2 has-[>svg]:px-3",
+        xs: "h-6 gap-1 rounded-md px-2 text-xs ...",
+        sm: "h-8 rounded-md gap-1.5 px-3 has-[>svg]:px-2.5",
+        lg: "h-10 rounded-md px-6 has-[>svg]:px-4",
+        icon: "size-9",
+        "icon-xs": "size-6 rounded-md ...",
+        "icon-sm": "size-8",
+        "icon-lg": "size-10",
+      },
+    },
+    defaultVariants: { variant: "default", size: "default" },
+  }
+)
+
+function Button({ className, variant = "default", size = "default", asChild = false, ...props }) {
+  const Comp = asChild ? Slot : "button"
+  return (
+    <Comp
+      data-slot="button"
+      data-variant={variant}
+      data-size={size}
+      className={cn(buttonVariants({ variant, size, className }))}
+      {...props}
+    />
+  )
 }
-class Variants {
-+default
-+destructive
-+outline
-+secondary
-+ghost
-+link
+```
+
+要点：
+
+- 所有 `data-*` 属性透传到宿主节点，方便 CSS 用 `[data-slot=button][data-variant=outline]` 命中
+- `asChild` 分支保留语义：链接节点用 `<a>` 而非 `<button>`
+- 变体名与 `globals.css` 中的 token 名一一对应（`bg-primary` 对应 `--color-primary`）
+
+**章节来源**
+- [web/components/ui/button.tsx](file://web/components/ui/button.tsx#L1-L65)
+- [web/app/globals.css](file://web/app/globals.css#L40-L81)
+
+### 组合模式：dialog
+
+`dialog` 演示了「一个基础件对应多个 `data-slot`」的复合导出：Root/Trigger/Portal/Close/Overlay/Content/Header/Footer/Title/Description 共 10 个组件，全部直接转发 Radix Primitive。
+
+```tsx
+function DialogContent({ className, children, showCloseButton = true, ...props }) {
+  return (
+    <DialogPortal data-slot="dialog-portal">
+      <DialogOverlay />
+      <DialogPrimitive.Content
+        data-slot="dialog-content"
+        className={cn(
+          "bg-background ... fixed top-[50%] left-[50%] z-50 grid w-full max-w-[calc(100%-2rem)] translate-x-[-50%] translate-y-[-50%] ... sm:max-w-lg",
+          className
+        )}
+        {...props}
+      >
+        {children}
+        {showCloseButton && (
+          <DialogPrimitive.Close data-slot="dialog-close" className="...">
+            <XIcon />
+            <span className="sr-only">关闭</span>
+          </DialogPrimitive.Close>
+        )}
+      </DialogPrimitive.Content>
+    </DialogPortal>
+  )
 }
-class Sizes {
-+default
-+xs
-+sm
-+lg
-+icon
-+icon-xs
-+icon-sm
-+icon-lg
+```
+
+`alert-dialog`、`sheet`、`select`、`dropdown-menu`、`command`、`popover`、`tooltip` 沿用同一组合模式：一个 `Root` 加若干语义子件。`sheet.tsx` 的 side 变体采用内联 `cn()` 分支而不是 `cva`，因为方向影响的不只是类名，还牵扯到 CSS keyframe 选择器（`slide-in-from-left` 与 `slide-in-from-right`）。
+
+**章节来源**
+- [web/components/ui/dialog.tsx](file://web/components/ui/dialog.tsx#L50-L82)
+- [web/components/ui/sheet.tsx](file://web/components/ui/sheet.tsx#L45-L90)
+- [web/components/ui/alert-dialog.tsx](file://web/components/ui/alert-dialog.tsx)
+
+### 无 Radix 依赖：table
+
+`table` 是少见的「纯原生 HTML + `cn()`」组件：不使用 Radix，也不使用 cva。它通过 `data-slot` 与 CSS 兄弟选择器（`[&_tr]:border-b`）实现行分隔，并保留 `role=checkbox` 特殊对齐规则。
+
+```tsx
+function TableHead({ className, ...props }: React.ComponentProps<"th">) {
+  return (
+    <th
+      data-slot="table-head"
+      className={cn(
+        "text-foreground h-10 px-2 text-left align-middle font-medium whitespace-nowrap " +
+        "[&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]",
+        className
+      )}
+      scope="col"
+      {...props}
+    />
+  )
 }
-Button --> Variants : "使用"
-Button --> Sizes : "使用"
 ```
 
-**图表来源**
-- [button.tsx:7-39](file://web/components/ui/button.tsx#L7-L39)
+外层 `Table` 自动包裹 `overflow-x-auto` 容器，保证小屏横向滚动。
 
 **章节来源**
-- [button.tsx:1-65](file://web/components/ui/button.tsx#L1-L65)
+- [web/components/ui/table.tsx](file://web/components/ui/table.tsx#L1-L118)
 
-### Dialog（对话框）组件
-- 设计模式：组合多个 Radix UI 原子组件，提供语义化 data-slot 标记与默认样式。
-- 数据流：Root 管理全局状态；Portal 渲染至文档根节点；Overlay/Content 控制外观与动画。
-- 事件处理：onOpenChange 与原生事件协作；Footer 可组合 Button 实现确认/取消。
-- 状态管理：外部通过 open 控制；内部通过 Close 触发关闭。
+### 主题桥接：sonner
 
-```mermaid
-sequenceDiagram
-participant U as "用户"
-participant T as "DialogTrigger"
-participant R as "Dialog Root"
-participant P as "Portal"
-participant O as "Overlay"
-participant C as "Content"
-U->>T : "点击触发"
-T->>R : "打开"
-R->>P : "渲染到文档根节点"
-P->>O : "渲染遮罩"
-P->>C : "渲染内容区"
-U->>C : "点击关闭按钮"
-C->>R : "关闭"
+`sonner.tsx` 将 `next-themes` 的 `theme` 注入 sonner 的 `Toaster`，并把主题 CSS 变量映射到 sonner 的内部变量，实现 toast 与主题联动。
+
+```tsx
+const { theme = "system" } = useTheme()
+return (
+  <Sonner
+    theme={theme as ToasterProps["theme"]}
+    style={{
+      "--normal-bg": "var(--popover)",
+      "--normal-text": "var(--popover-foreground)",
+      "--normal-border": "var(--border)",
+      "--border-radius": "var(--radius)",
+    } as React.CSSProperties}
+    ...
+  />
+)
 ```
 
-**图表来源**
-- [dialog.tsx:10-82](file://web/components/ui/dialog.tsx#L10-L82)
-
 **章节来源**
-- [dialog.tsx:1-159](file://web/components/ui/dialog.tsx#L1-L159)
+- [web/components/ui/sonner.tsx](file://web/components/ui/sonner.tsx#L1-L42)
+- [web/components/theme-provider.tsx](file://web/components/theme-provider.tsx)
 
-### DropdownMenu（下拉菜单）组件
-- 设计模式：基于 Radix UI 的 Menu 原子组件，扩展 inset、variant、子菜单等能力。
-- 数据流：Root 管理状态；Portal 渲染 Content；Item/CheckboxItem/RadioItem 支持 Indicator。
-- 事件处理：通过原生事件与 Radix 状态联动；支持子菜单 SubTrigger/SubContent。
-- 状态管理：外部通过 open/close 控制；内部通过 ItemIndicator 显示选中态。
+### 业务组件层：auth 与 deploy
 
-```mermaid
-flowchart TD
-Start(["打开下拉菜单"]) --> Render["渲染 Portal 与 Content"]
-Render --> Items["渲染 Item/CheckboxItem/RadioItem"]
-Items --> Hover{"悬停/聚焦?"}
-Hover --> |是| Focus["更新焦点与选中态"]
-Hover --> |否| Idle["保持当前状态"]
-Focus --> Action{"执行动作?"}
-Action --> |是| Dispatch["派发事件并关闭"]
-Action --> |否| Hover
-Dispatch --> End(["结束"])
-Idle --> End
+`auth/` 承担登录/注册页的动画外壳，`deploy/DynamicForm` 承担服务商配置字段的动态渲染。两者都不重复实现基础控件，而是复用 `ui/`。
+
+| 业务组件 | 路径 | 行数 | 职责 |
+|---|---|---|---|
+| `AuthAnimatedLayout` | `auth/auth-animated-layout.tsx` | 136 | 认证页容器，路由切换动画壳 |
+| `AnimatedLoginCharacters` | `auth/animated-login-characters.tsx` | 568 | 登录页字符动画，配 `module.css` |
+| `AuthFormSkeleton` | `auth/auth-form-skeleton.tsx` | 52 | 表单加载骨架 |
+| `AuthFooterNav` | `auth/auth-footer-nav.tsx` | 59 | 认证页底部链接导航 |
+| `DynamicForm` | `deploy/DynamicForm.tsx` | 102 | 服务商配置字段动态表单 |
+| `Pagination` | `pagination.tsx` | 116 | 列表分页控件 |
+| `SortableHeader` | `sortable-header.tsx` | 45 | 表头排序按钮 |
+| `EmptyState` | `empty-state.tsx` | 56 | 空数据提示 |
+| `TableSkeleton` | `table-skeleton.tsx` | 38 | 表格加载骨架 |
+| `PageTabs` | `page-tabs.tsx` | 131 | 页面级 tab 栏 |
+| `ProviderIcon` | `provider-icon.tsx` | 324 | DNS 服务商品牌图标 |
+| `CaptchaDialog` | `captcha-dialog.tsx` | 233 | 通用验证码对话框 |
+| `GoCaptchaDialog` | `go-captcha-dialog.tsx` | 233 | go-captcha 对话框 |
+| `TurnstileWidget` | `turnstile-widget.tsx` | 92 | Cloudflare Turnstile 挂件 |
+| `ThemeToggle` | `theme-toggle.tsx` | 69 | 三态主题切换按钮 |
+| `AccountForm` | `account-form.tsx` | 538 | 账号编辑表单 |
+| `CertOrderSelect` | `cert-order-select.tsx` | 64 | 证书订单选择 |
+| `RouteProgress` | `route-progress.tsx` | 73 | 路由切换进度条 |
+| `GlobalErrorHandler` | `global-error-handler.tsx` | 58 | 全局错误边界 |
+
+`DynamicForm` 的字段类型判断使用条件分支渲染，字段可见性由 `evaluateDeployFieldShow` 驱动：
+
+```tsx
+const renderField = (field: ProviderConfigField) => {
+  if (!evaluateDeployFieldShow(field.show, localValues)) return null
+  const value = localValues[field.key] ?? field.value ?? ''
+  return (
+    <div key={field.key} className="space-y-1">
+      <label className="block text-sm font-medium">
+        {field.name}
+        {field.required && <span className="text-red-500 ml-1">*</span>}
+      </label>
+      {field.type === 'radio' && field.options ? (/* ... */) :
+       field.type === 'select' && field.options ? (/* ... */) :
+       field.type === 'textarea' ? (/* ... */) : (/* input */)}
+    </div>
+  )
+}
 ```
 
-**图表来源**
-- [dropdown-menu.tsx:34-83](file://web/components/ui/dropdown-menu.tsx#L34-L83)
-
 **章节来源**
-- [dropdown-menu.tsx:1-258](file://web/components/ui/dropdown-menu.tsx#L1-L258)
+- [web/components/deploy/DynamicForm.tsx](file://web/components/deploy/DynamicForm.tsx#L1-L103)
+- [web/components/auth/auth-animated-layout.tsx](file://web/components/auth/auth-animated-layout.tsx)
+- [web/components/pagination.tsx](file://web/components/pagination.tsx)
+- [web/components/sortable-header.tsx](file://web/components/sortable-header.tsx)
 
-### Input（输入框）组件
-- 设计模式：原生 input 包装，统一边框、阴影、聚焦 ring 与无效态样式。
-- 数据流：props 透传；样式通过 cn 合并；支持 aria-invalid 与 focus-visible ring。
-- 事件处理：透传原生 onChange/onBlur 等事件。
-- 状态管理：外部通过受控/非受控 value 管理；内部通过 invalid/focus-visible 状态提示。
+### 类名合并：cn
 
-**章节来源**
-- [input.tsx:1-22](file://web/components/ui/input.tsx#L1-L22)
+`cn()` 位于 `web/lib/utils.ts`，是 `clsx` 与 `tailwind-merge` 的组合：前者处理条件类名与数组扁平化，后者消解 Tailwind 冲突类（如同时传入 `p-2 p-4` 时保留 `p-4`）。
 
-### Table（表格）组件
-- 设计模式：容器层提供横向滚动；子元素统一类名与状态类（hover/selected）。
-- 数据流：外部传入数据；组件负责渲染结构与样式。
-- 事件处理：主要用于渲染；状态由上层控制（如选中）。
-- 状态管理：通过 data-state 与类名映射实现 hover/selected。
-
-**章节来源**
-- [table.tsx:1-117](file://web/components/ui/table.tsx#L1-L117)
-
-### AlertDialog（警示对话框）组件
-- 设计模式：基于 Dialog 的警示变体，支持媒体区域与尺寸变体。
-- 数据流：Root 管理状态；Content 根据 size 切换布局；Action/Cancel 组合 Button。
-- 事件处理：Action/Cancel 通过 asChild 组合 Button；Content 的 size 影响布局。
-- 状态管理：外部通过 open 控制；内部通过 Close 触发关闭。
-
-**章节来源**
-- [alert-dialog.tsx:1-197](file://web/components/ui/alert-dialog.tsx#L1-L197)
-
-### Card（卡片）组件
-- 设计模式：容器组件，支持 Header/Title/Description/Action/Content/Footer。
-- 数据流：外部传入内容；组件负责结构与样式。
-- 事件处理：主要用于渲染；状态由上层控制。
-- 状态管理：无内部状态；通过 data-slot 与类名映射实现布局。
-
-**章节来源**
-- [card.tsx:1-93](file://web/components/ui/card.tsx#L1-L93)
-
-### Checkbox（复选框）组件
-- 设计模式：原生 checkbox 包装，统一样式与指示器。
-- 数据流：props 透传；Indicator 显示勾选图标；支持 aria-invalid 与 focus-visible ring。
-- 事件处理：透传原生事件。
-- 状态管理：外部通过 checked/indeterminate 控制；内部通过 data-state 映射。
-
-**章节来源**
-- [checkbox.tsx:1-33](file://web/components/ui/checkbox.tsx#L1-L33)
-
-### Select（选择器）组件
-- 设计模式：基于 Radix UI 的 Select 原子组件，扩展 Trigger/Content/Item 等。
-- 数据流：Root 管理状态；Portal 渲染 Content；Viewport 自适应高度。
-- 事件处理：通过原生事件与 Radix 状态联动；支持 ScrollUpButton/ScrollDownButton。
-- 状态管理：外部通过 value 控制；内部通过 ItemIndicator 显示选中态。
-
-**章节来源**
-- [select.tsx:1-191](file://web/components/ui/select.tsx#L1-L191)
-
-### Textarea（多行文本）组件
-- 设计模式：原生 textarea 包装，统一边框、阴影、聚焦 ring 与无效态样式。
-- 数据流：props 透传；样式通过 cn 合并；支持 aria-invalid 与 focus-visible ring。
-- 事件处理：透传原生 onChange/onBlur 等事件。
-- 状态管理：外部通过受控/非受控 value 管理；内部通过 invalid/focus-visible 状态提示。
-
-**章节来源**
-- [textarea.tsx:1-19](file://web/components/ui/textarea.tsx#L1-L19)
-
-### 自定义组件
-
-#### ProviderIcon（服务商标识）
-- 职责：根据类型渲染带颜色与背景的服务商标识，支持 Badge 样式。
-- 接口：type（必填）、size（sm/md/lg）、showName（是否显示名称）、className。
-- 主题与样式：基于 providerConfig 的颜色与背景类；支持暗色模式类名。
-- 最佳实践：优先使用内置类型；未匹配时回退到通用配置。
-
-**章节来源**
-- [provider-icon.tsx:1-313](file://web/components/provider-icon.tsx#L1-L313)
-
-#### TurnstileWidget（Cloudflare Turnstile）
-- 职责：独立加载 Cloudflare Turnstile SDK 并渲染人机验证 Widget。
-- 接口：siteKey（必填）、onToken（回调）、refreshSignal（刷新信号）、disabled（禁用）、label（标签）。
-- 生命周期：首次挂载加载脚本；卸载时移除 Widget；支持禁用状态清空 token。
-- 错误处理：脚本加载失败或 SDK 不可用时回调空 token；禁用时清空 token。
-
-```mermaid
-sequenceDiagram
-participant C as "组件"
-participant S as "Script加载器"
-participant W as "Turnstile SDK"
-C->>S : "加载 v0/api.js"
-S-->>C : "加载成功/失败"
-alt 成功
-C->>W : "render(host, {sitekey, callback})"
-W-->>C : "回调 token/过期/错误"
-C->>C : "onToken(token)"
-else 失败
-C->>C : "onToken('')"
-end
+```ts
+export function cn(...inputs: ClassValue[]) {
+  return twMerge(clsx(inputs))
+}
 ```
 
-**图表来源**
-- [turnstile-widget.tsx:6-97](file://web/components/turnstile-widget.tsx#L6-L97)
+调用顺序约定：`cn(baseVariants, className)` —— `className` 放最后，让外部覆盖生效。
 
 **章节来源**
-- [turnstile-widget.tsx:1-114](file://web/components/turnstile-widget.tsx#L1-L114)
-
-#### BehavioralCaptchaDialog（行为验证码弹窗）
-- 职责：支持点选/滑动/旋转三种行为验证码，通过弹窗展示，验证通过后返回 verify_token。
-- 接口：open（受控开关）、onClose（关闭回调）、onSuccess（成功回调）。
-- 生命周期：open=true 时加载验证码；open=false 或卸载时清理状态；支持刷新与错误提示。
-- 数据流：authApi 获取验证码 -> 渲染对应组件 -> 提交验证 -> 成功回调。
-
-```mermaid
-sequenceDiagram
-participant U as "用户"
-participant D as "BehavioralCaptchaDialog"
-participant API as "authApi"
-participant CAP as "CaptchaEngine"
-U->>D : "open=true"
-D->>API : "getBehavioralCaptcha()"
-API-->>D : "返回 captcha_data"
-D->>CAP : "渲染对应验证码组件"
-U->>CAP : "完成验证"
-CAP-->>D : "confirm(answer)"
-D->>API : "verifyBehavioralCaptcha(captcha_id, type, answer)"
-API-->>D : "返回 verify_token"
-D-->>U : "onSuccess(verify_token)"
-```
-
-**图表来源**
-- [captcha-dialog.tsx:40-115](file://web/components/captcha-dialog.tsx#L40-L115)
-
-**章节来源**
-- [captcha-dialog.tsx:1-234](file://web/components/captcha-dialog.tsx#L1-L234)
-
-#### GoCaptchaDialog（GoCaptcha行为验证码弹窗）
-- 职责：与 BehavioralCaptchaDialog 类似，但使用 GoCaptcha SDK。
-- 接口：open、onClose、onSuccess。
-- 生命周期：open=true 时加载验证码；open=false 或卸载时清理状态；支持刷新与错误提示。
-- 数据流：authApi 获取验证码 -> 渲染对应组件 -> 提交验证 -> 成功回调。
-
-**章节来源**
-- [go-captcha-dialog.tsx:1-234](file://web/components/go-captcha-dialog.tsx#L1-L234)
+- [web/lib/utils.ts](file://web/lib/utils.ts#L1-L7)
 
 ## 依赖关系分析
-- 组件间耦合：所有 UI 组件均依赖 utils.ts 的 cn 工具；部分组合组件依赖 Button。
-- 外部依赖：Radix UI（dialog、dropdown-menu、select、checkbox 等）、Lucide Icons、class-variance-authority、Tailwind CSS。
-- 潜在循环依赖：未发现组件间循环导入；自定义组件通过 API 与外部 SDK 交互，不引入循环。
+
+`ui/` 层的依赖收敛在三类：Radix、样式工具（cva/clsx/tailwind-merge）、图标与 toast。
 
 ```mermaid
 graph LR
-Utils["utils.ts"] --> Btn["Button"]
-Utils --> Dlg["Dialog"]
-Utils --> Drop["DropdownMenu"]
-Utils --> Inp["Input"]
-Utils --> Tbl["Table"]
-Utils --> ADlg["AlertDialog"]
-Utils --> Card["Card"]
-Utils --> Chk["Checkbox"]
-Utils --> Sel["Select"]
-Utils --> Txt["Textarea"]
-Utils --> Prov["ProviderIcon"]
-Utils --> Turn["TurnstileWidget"]
-Utils --> Cap["BehavioralCaptchaDialog"]
-Utils --> GoCap["GoCaptchaDialog"]
+Button["ui/button.tsx"] --> Slot["@radix-ui/react-slot"]
+Button --> Cva["class-variance-authority"]
+Button --> Utils["lib/utils:cn"]
+Dialog["ui/dialog.tsx"] --> RDialog["@radix-ui/react-dialog"]
+Dialog --> Lucide["lucide-react"]
+Dialog --> Utils
+Sheet["ui/sheet.tsx"] --> RAgg["radix-ui 聚合包"]
+Sheet --> Utils
+Select["ui/select.tsx"] --> RSelect["@radix-ui/react-select"]
+Select --> Utils
+Command["ui/command.tsx"] --> Cmdk["cmdk"]
+Command --> Utils
+Sonner["ui/sonner.tsx"] --> Sonner2["sonner"]
+Sonner --> NT["next-themes"]
+Utils --> Clsx["clsx"]
+Utils --> TWM["tailwind-merge"]
 ```
 
 **图表来源**
-- [utils.ts:1-6](file://web/lib/utils.ts#L1-L6)
-- [button.tsx:1-6](file://web/components/ui/button.tsx#L1-L6)
-- [dialog.tsx:1-8](file://web/components/ui/dialog.tsx#L1-L8)
-- [dropdown-menu.tsx:1-7](file://web/components/ui/dropdown-menu.tsx#L1-L7)
-- [input.tsx:1-3](file://web/components/ui/input.tsx#L1-L3)
-- [table.tsx:1-5](file://web/components/ui/table.tsx#L1-L5)
-- [alert-dialog.tsx:1-7](file://web/components/ui/alert-dialog.tsx#L1-L7)
-- [card.tsx:1-3](file://web/components/ui/card.tsx#L1-L3)
-- [checkbox.tsx:1-7](file://web/components/ui/checkbox.tsx#L1-L7)
-- [select.tsx:1-7](file://web/components/ui/select.tsx#L1-L7)
-- [textarea.tsx:1-3](file://web/components/ui/textarea.tsx#L1-L3)
-- [provider-icon.tsx:1-3](file://web/components/provider-icon.tsx#L1-L3)
-- [turnstile-widget.tsx:1-4](file://web/components/turnstile-widget.tsx#L1-L4)
-- [captcha-dialog.tsx:1-9](file://web/components/captcha-dialog.tsx#L1-L9)
-- [go-captcha-dialog.tsx:1-9](file://web/components/go-captcha-dialog.tsx#L1-L9)
+- [web/components/ui/button.tsx](file://web/components/ui/button.tsx#L1-L6)
+- [web/components/ui/dialog.tsx](file://web/components/ui/dialog.tsx#L1-L8)
+- [web/components/ui/sonner.tsx](file://web/components/ui/sonner.tsx#L1-L11)
+- [web/package.json](file://web/package.json)
+
+| 依赖 | 版本 | 用途 | 影响范围 |
+|---|---|---|---|
+| `@radix-ui/react-slot` | ^1.2.4 | `asChild` 转发宿主 | button / badge / label |
+| `@radix-ui/react-dialog` | ^1.1.15 | Dialog 与 Sheet 底座 | dialog、sheet |
+| `@radix-ui/react-alert-dialog` | ^1.1.15 | 阻断式确认 | alert-dialog |
+| `@radix-ui/react-select` | ^2.2.6 | 下拉选择 | select |
+| `@radix-ui/react-dropdown-menu` | ^2.1.16 | 菜单 | dropdown-menu |
+| `@radix-ui/react-popover` | ^1.1.19 | 浮动面板 | popover |
+| `@radix-ui/react-tooltip` | ^1.2.8 | 提示气泡 | tooltip |
+| `@radix-ui/react-tabs` | ^1.1.13 | 标签页 | tabs |
+| `@radix-ui/react-checkbox` | ^1.3.3 | 复选框 | checkbox |
+| `@radix-ui/react-radio-group` | ^1.3.8 | 单选组 | radio-group |
+| `@radix-ui/react-switch` | ^1.2.6 | 开关 | switch |
+| `@radix-ui/react-progress` | ^1.1.8 | 进度条 | progress |
+| `@radix-ui/react-separator` | ^1.1.8 | 分隔线 | separator |
+| `@radix-ui/react-label` | ^2.1.8 | 表单标签 | label |
+| `@radix-ui/react-avatar` | ^1.1.11 | 头像 | avatar |
+| `radix-ui` | ^1.4.3 | 聚合入口（sheet 使用） | sheet |
+| `class-variance-authority` | ^0.7.1 | 变体表 | button / badge |
+| `clsx` | ^2.1.1 | 条件类名 | 全部 cn 调用 |
+| `tailwind-merge` | ^3.4.0 | 冲突类合并 | 全部 cn 调用 |
+| `lucide-react` | ^0.563.0 | 图标 | dialog / sheet / 业务层 |
+| `cmdk` | ^1.1.1 | 命令面板底座 | command |
+| `sonner` | ^2.0.7 | Toast | sonner |
+| `next-themes` | ^0.4.6 | 主题状态 | sonner / theme-provider |
 
 **章节来源**
-- [utils.ts:1-129](file://web/lib/utils.ts#L1-L129)
-- [button.tsx:1-65](file://web/components/ui/button.tsx#L1-L65)
-- [dialog.tsx:1-159](file://web/components/ui/dialog.tsx#L1-L159)
-- [dropdown-menu.tsx:1-258](file://web/components/ui/dropdown-menu.tsx#L1-L258)
-- [input.tsx:1-22](file://web/components/ui/input.tsx#L1-L22)
-- [table.tsx:1-117](file://web/components/ui/table.tsx#L1-L117)
-- [alert-dialog.tsx:1-197](file://web/components/ui/alert-dialog.tsx#L1-L197)
-- [card.tsx:1-93](file://web/components/ui/card.tsx#L1-L93)
-- [checkbox.tsx:1-33](file://web/components/ui/checkbox.tsx#L1-L33)
-- [select.tsx:1-191](file://web/components/ui/select.tsx#L1-L191)
-- [textarea.tsx:1-19](file://web/components/ui/textarea.tsx#L1-L19)
-- [provider-icon.tsx:1-313](file://web/components/provider-icon.tsx#L1-L313)
-- [turnstile-widget.tsx:1-114](file://web/components/turnstile-widget.tsx#L1-L114)
-- [captcha-dialog.tsx:1-234](file://web/components/captcha-dialog.tsx#L1-L234)
-- [go-captcha-dialog.tsx:1-234](file://web/components/go-captcha-dialog.tsx#L1-L234)
+- [web/package.json](file://web/package.json)
+- [web/components/ui/](file://web/components/ui/)
 
-## 性能考量
-- 样式合并：统一使用 cn 工具合并类名，避免重复与冲突；尽量减少运行时样式计算。
-- 动画与渲染：Dialog/DropdownMenu/AlertDialog 使用 Radix UI 的动画系统，确保流畅过渡；避免在动画期间进行昂贵计算。
-- 第三方 SDK：TurnstileWidget 仅在需要时加载脚本并缓存加载状态；卸载时移除 Widget，防止内存泄漏。
-- 表格与滚动：Table 容器提供横向滚动，避免布局抖动；Select/Menu Content 支持滚动按钮，优化长列表体验。
-- 受控组件：Input/Textarea/Select/Checkbox 等受控组件通过外部状态驱动，减少不必要的重渲染。
+## 性能考虑
+
+- `ui/` 层每个组件保持极小体积：最大的 `dropdown-menu` 257 行、`alert-dialog` 196 行，其余均在 200 行以内；`skeleton`、`textarea`、`input`、`label` 均不足 30 行。文件粒度过大通常是变体表膨胀的信号，应拆新的 `cva` 主题函数
+- 所有需要客户端交互的组件在首行加 `"use client"`；`button.tsx`、`badge.tsx`、`label.tsx` 无副作用，可留在 RSC 图中参与服务端渲染
+- Radix `Slot` 的 `asChild` 路径不引入额外包裹节点，避免 DOM 层数与样式冲突扩散
+- `cn()` 只在需要动态拼接类名处调用，静态类名字面量直接写 `className="..."` 即可
+- `next-themes` 只在 `ThemeProvider` 处挂一次，`Toaster` 复用 `useTheme()` 不重复注入
+- 业务图标层 `provider-icon.tsx` 单文件 324 行集中管理品牌 SVG，避免每个页面各自引入
+
+**章节来源**
+- [web/components/ui/](file://web/components/ui/)
+- [web/components/ui/button.tsx](file://web/components/ui/button.tsx)
+- [web/components/ui/sonner.tsx](file://web/components/ui/sonner.tsx)
 
 ## 故障排查指南
-- 对话框无法关闭或焦点异常
-  - 检查 onOpenChange 与外部 open 状态同步；确认 DialogTrigger/Close 的使用正确。
-  - 确认 Portal 是否正确渲染到文档根节点。
-- 下拉菜单显示错位或不可见
-  - 检查 Portal 与 Content 的渲染层级；确认 sideOffset 与 align 设置。
-  - 确认 viewport 高度与 transform-origin 计算。
-- 输入框无效态样式不生效
-  - 检查 aria-invalid 与 focus-visible ring 的类名拼接；确认主题变量是否正确。
-- 行为验证码加载失败
-  - 检查 authApi 返回的数据结构；确认 captcha_type 与组件渲染分支。
-  - 查看网络请求与控制台错误日志；确认刷新与重试逻辑。
-- Turnstile Widget 未渲染
-  - 检查 siteKey 是否为空；确认脚本加载成功且 SDK 存在。
-  - 查看回调函数是否被正确调用；确认禁用状态下的清理逻辑。
+
+| 现象 | 定位路径 | 常见原因 |
+|---|---|---|
+| 外部传入的 `className` 不生效 | 组件内 `cn()` 调用顺序 | 参数顺序颠倒，`className` 未放在最后 |
+| Dialog 遮罩层级不对 | `z-50` 与页面其他 overlay 冲突 | `globals.css` 未定义 `--z-*`，需要显式 `z-*` 类 |
+| Select 打开无内容 | `SelectContent` 缺 `position="popper"` | Radix Select 的 `item` 必须在 `Viewport` 内 |
+| Toast 主题不跟随切换 | `sonner.tsx` 中的 `useTheme()` | `ThemeProvider` 未在根布局挂载 |
+| `asChild` 未生效 | 忘记 `import { Slot } from "@radix-ui/react-slot"` | `Comp = asChild ? Slot : "button"` 分支缺失 |
+| Sheet 侧滑方向异常 | `side` prop 传入拼写错误 | 四值 `top/right/bottom/left` 之外会走默认分支 |
+| 图标尺寸不对 | 未在按钮上声明 `[&_svg]:size-*` | `button.tsx` 基础串已含，业务覆盖需保留 |
+| 表格横向溢出无滚动 | 未在容器加 `overflow-x-auto` | `Table` 内置一层 `data-slot=table-container` |
+
+排查时优先确认三件事：`data-slot` 是否透传、`cn()` 是否包含 `className`、Radix 版本是否与 `package.json` 一致。
 
 **章节来源**
-- [dialog.tsx:1-159](file://web/components/ui/dialog.tsx#L1-L159)
-- [dropdown-menu.tsx:1-258](file://web/components/ui/dropdown-menu.tsx#L1-L258)
-- [input.tsx:1-22](file://web/components/ui/input.tsx#L1-L22)
-- [captcha-dialog.tsx:1-234](file://web/components/captcha-dialog.tsx#L1-L234)
-- [turnstile-widget.tsx:1-114](file://web/components/turnstile-widget.tsx#L1-L114)
+- [web/components/ui/button.tsx](file://web/components/ui/button.tsx#L41-L62)
+- [web/components/ui/dialog.tsx](file://web/components/ui/dialog.tsx#L50-L82)
+- [web/components/ui/sonner.tsx](file://web/components/ui/sonner.tsx)
 
 ## 结论
-DNSPlane 的 UI 组件库以 Radix UI 为核心，结合 Tailwind CSS 实现高可定制、可组合、可访问的前端组件体系。通过统一的工具函数与变体/尺寸系统，组件在保证一致性的同时具备良好的扩展性。自定义组件进一步完善了业务场景下的用户体验，如行为验证码与人机验证。建议在实际使用中遵循可访问性与键盘导航规范，合理利用主题变量与响应式断点，持续优化性能与稳定性。
+
+DNSPlane 的 UI 组件库以「Radix Primitive + cva + cn」三层结构承载基础件，向上通过 `data-slot` 与语义化子件暴露稳定 API，向下将变体表集中到 `cva` 声明并允许调用方用 `className` 覆盖。业务层按 `auth/`、`deploy/` 等特性子目录拆分，其余横切关注点（分页、排序、空态、主题、验证码、账号）集中在 `web/components/` 根目录。此结构在文件级、目录级两个层次保持模块边界清晰，避免「一个文件什么都做」的巨石模式。
+
+- 优点：变体扩展、无障碍语义、样式覆盖三点均可在不改动既有代码的前提下完成
+- 代价：新增基础件需要同时维护 Radix 行为与 cva 变体两张表，学习曲线略高
+- 后续演进方向：`sheet.tsx` 目前用 `cn()` 内联四向分支，若再增加 `size` 变体建议改为 `cva`
 
 ## 附录
-- 组合模式与最佳实践
-  - 使用 Button 作为统一入口，通过 variant/size 组合满足不同场景。
-  - Dialog/AlertDialog 通过 Footer 组合 Button 实现确认/取消流程。
-  - DropdownMenu 通过 Group/Label/Item 组织选项，支持 inset 与 variant。
-  - Table 通过容器层提供滚动，子元素统一类名与状态类。
-  - 自定义组件通过 API 与第三方 SDK 协作，注意生命周期与错误处理。
-- 无障碍访问与键盘导航
-  - 为所有交互组件提供明确的标签与描述；使用 sr-only 文本增强可读性。
-  - 确保焦点可见性与键盘可达性；支持 Tab/Shift+Tab 导航。
-  - 为下拉菜单与选择器提供键盘操作支持（Arrow、Enter、Space）。
-- 主题定制与样式覆盖
-  - 通过 Tailwind 变量与暗色模式类名实现主题切换。
-  - 使用 data-slot 与 data-* 属性进行细粒度样式覆盖。
-  - 建议在项目层面统一定义品牌色与语义色，避免硬编码颜色值。
-- 响应式设计
-  - 使用 sm: 前缀实现断点适配；容器层提供滚动与缩放。
-  - 表单组件在移动端保持可触摸目标尺寸与间距。
-- 测试与文档生成
-  - 单元测试：针对组件的 props、状态与事件进行断言。
-  - 集成测试：模拟用户交互（点击、输入、键盘操作）验证行为。
-  - 文档生成：基于组件注释与 Storybook/Playwright 生成示例页面与交互演示。
+
+### 新增基础组件流程
+
+```mermaid
+flowchart TD
+Start["需求进入"] --> Check{"能否用<br/>现有 ui 组合?"}
+Check -- 能 --> Compose["业务组件层<br/>web/components/*.tsx"]
+Check -- 否 --> Naming["确定文件名<br/>kebab-case 单词"]
+Naming --> Primitive["选定<br/>@radix-ui/react-* 或原生 HTML"]
+Primitive --> Cva["如需变体，声明 cva"]
+Cva --> Slots["为每个导出子件<br/>添加 data-slot"]
+Slots --> Merge["className 走 cn()<br/>且放最后一位"]
+Merge --> UseClient["若含交互，首行<br/>加 \"use client\""]
+UseClient --> Export["用具名导出<br/>避免 default export"]
+Export --> Doc["追加本文件<br/>表格与示例"]
+Compose --> Done["完成"]
+Doc --> Done
+```
+
+**图表来源**
+- [web/components/ui/button.tsx](file://web/components/ui/button.tsx)
+- [web/components/ui/dialog.tsx](file://web/components/ui/dialog.tsx)
+
+### 命名与导出约定
+
+- 文件名：`kebab-case`，与业务概念一致（`alert-dialog.tsx`、`dropdown-menu.tsx`）
+- 导出：具名导出，`PascalCase` 组件 + `camelCase` 变体表（`Button` + `buttonVariants`）
+- 属性类型：`React.ComponentProps<typeof Primitive.X>` 或 `React.ComponentProps<"tag">`
+- 外部类名：`className` 必须来自解构且传入 `cn()` 最后一位
+- 复合组件：`Root`、`Trigger`、`Portal`、`Close`、`Overlay`、`Content`、`Header`、`Footer`、`Title`、`Description` 十个语义子件遵循 Dialog 顺序
+- 无障碍：图标按钮必须带 `<span className="sr-only">…</span>` 或 `aria-label`
+- 数据钩子：`data-slot` 必填，`data-variant`、`data-size`、`data-state` 按需
+
+### 与主题系统的衔接
+
+`ui/` 层的颜色类一律来自 `globals.css` 中的 `@theme inline` 变量映射（`bg-background`、`text-foreground`、`border-border`、`ring-ring` 等）。禁止在 `ui/` 组件里出现硬编码色值（如 `bg-blue-500`）。若需要新色板，先在 `globals.css` 增加 `--color-*` 定义，再让 `cva` 变体表引用。
+
+**章节来源**
+- [web/app/globals.css](file://web/app/globals.css#L40-L81)
+- [web/components/ui/button.tsx](file://web/components/ui/button.tsx#L7-L39)
+
+### 相关文件清单
+
+- `web/components/ui/`：24 个基础组件
+- `web/components/auth/`：4 个 tsx + 3 个 module.css
+- `web/components/deploy/`：`DynamicForm.tsx`
+- `web/components/`：22 个业务组件（分页、排序表头、空态、主题、验证码、账号表单等）
+- `web/lib/utils.ts`：`cn()` 与业务格式化函数
+- `web/app/globals.css`：`@theme inline` 变量与 `.dark` 变量块
+- `web/app/layout.tsx`：`ThemeProvider` 与 `Toaster` 挂载点

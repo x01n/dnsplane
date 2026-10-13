@@ -100,7 +100,6 @@ func doInit() error {
 	return nil
 }
 
-
 type CaptchaResult struct {
 	CaptchaID   string `json:"captcha_id"`
 	CaptchaType string `json:"captcha_type"` // click, slide, rotate
@@ -257,7 +256,6 @@ func generateRotate(id string) (*CaptchaResult, error) {
 	}, nil
 }
 
-
 /* ClickPoint 用户提交的点选坐标 */
 type ClickPoint struct {
 	X int `json:"x"`
@@ -366,7 +364,6 @@ func verifyRotate(raw string, answer json.RawMessage) bool {
 	}
 	return ok
 }
-
 
 func storeCache(id, captchaType string, data interface{}) {
 	cacheKey := cacheKeyPrefix + id

@@ -411,7 +411,6 @@ func TestTurnstileRejectsBeforeRateLimit(t *testing.T) {
 	}
 }
 
-
 /*
  * TestGetAuthConfigTurnstileStandaloneRequired turnstile_standalone_required 的下发契约
  *

@@ -56,7 +56,7 @@ func GetAllProviderConfigs() map[string]ProviderConfig {
 }
 
 var DefaultLineMapping = map[string]map[string]string{
-	"aliyun": {"DEF": "default", "CT": "telecom", "CU": "unicom", "CM": "mobile", "AB": "oversea"},
+	"aliyun":     {"DEF": "default", "CT": "telecom", "CU": "unicom", "CM": "mobile", "AB": "oversea"},
 	"dnspod":     {"DEF": "", "CT": "10=0", "CU": "10=1", "CM": "10=3", "AB": "3=0"},
 	"huawei":     {"DEF": "default_view", "CT": "Dianxin", "CU": "Liantong", "CM": "Yidong", "AB": "Abroad"},
 	"west":       {"DEF": "", "CT": "LTEL", "CU": "LCNC", "CM": "LMOB", "AB": "LFOR"},

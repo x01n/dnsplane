@@ -151,7 +151,6 @@ func GetEnabledProviders() []ProviderInfo {
 	return result
 }
 
-
 func httpPost(ctx context.Context, url string, data url.Values, acceptJSON bool) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, "POST", url, strings.NewReader(data.Encode()))
 	if err != nil {

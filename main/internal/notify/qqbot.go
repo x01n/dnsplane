@@ -17,6 +17,7 @@ import (
 
 	"main/internal/cache"
 )
+
 const (
 	qqBotTokenURL = "https://api.bot.qq.com/app/getAppAccessToken"
 	qqBotAPIBase  = "https://api.bot.qq.com"

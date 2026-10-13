@@ -92,7 +92,18 @@ func UpdateDomainCategory(c *gin.Context) {
 	if !requireUserModule(c, "domain") {
 		return
 	}
+	/*
+	 * 路径参数为空时必须早退，不能把空串交给 GORM
+	 *
+	 * First(&cat, "") 会退化成不带主键条件的查询，静默命中全表第一条——
+	 * 分类会被改名而不是报「不存在」。对外 API 的路由表没有路径参数，
+	 * c.Param 恒为空串，这条退化路径是可达的
+	 */
 	id := c.Param("id")
+	if id == "" {
+		middleware.ErrorResponse(c, "缺少分类ID")
+		return
+	}
 	var cat models.DomainCategory
 	if err := database.WithContext(c).First(&cat, id).Error; err != nil {
 		middleware.ErrorResponse(c, "分类不存在")
@@ -128,7 +139,12 @@ func DeleteDomainCategory(c *gin.Context) {
 	if !requireUserModule(c, "domain") {
 		return
 	}
+	// 同 UpdateDomainCategory：空 ID 会让 First 退化为全表第一条，删除落在错误的分类上
 	id := c.Param("id")
+	if id == "" {
+		middleware.ErrorResponse(c, "缺少分类ID")
+		return
+	}
 	var cat models.DomainCategory
 	if err := database.WithContext(c).First(&cat, id).Error; err != nil {
 		middleware.ErrorResponse(c, "分类不存在")

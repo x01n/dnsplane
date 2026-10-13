@@ -150,6 +150,17 @@ type CreateCertAccountRequest struct {
 }
 
 func CreateCertAccount(c *gin.Context) {
+	/*
+	 * 配额门此前完全没有
+	 *
+	 * 证书账户与部署账户同表（cert_accounts），v1 的部署账户路径挂了
+	 * CheckQuota("accounts")——而那个维度统计的是 DNS 账户（accounts 表），
+	 * 与 cert_accounts 无关。等于说：管理员设的「DNS 账户」上限
+	 * 拦不住这里，而这里本身又没有任何上限
+	 */
+	if !CheckQuota(c, "cert_accounts") {
+		return
+	}
 	var req CreateCertAccountRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"code": -1, "msg": "参数错误"})
@@ -352,6 +363,10 @@ func certCountChallengeRecords(dnsRecords map[string][]cert.DNSRecord) (dnsLike,
 }
 
 func CreateCertOrder(c *gin.Context) {
+	/* 配额校验：SSL 证书订单数 */
+	if !CheckQuota(c, "certs") {
+		return
+	}
 	var req CreateCertOrderRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"code": -1, "msg": "参数错误"})
@@ -1159,9 +1174,12 @@ func GetCertDeploys(c *gin.Context) {
 		AccountName string `json:"account_name"`
 	}
 	var dbDeploys []DeployResult
+	// 安全审计：此前是无 where 的全表查询，普通用户可列出全站部署任务，
+	// 进而拿到他人部署 id 去触发/改写（见 requireCertDeployOwner 的说明）
 	database.DB.Table("cert_deploys").
 		Select("cert_deploys.*, cert_accounts.name as account_name").
 		Joins("LEFT JOIN cert_accounts ON cert_deploys.aid = cert_accounts.id").
+		Scopes(func(q *gorm.DB) *gorm.DB { return scopeCertDeployQuery(c, q) }).
 		Find(&dbDeploys)
 
 	type DeployResponse struct {
@@ -1188,6 +1206,10 @@ func GetCertDeploys(c *gin.Context) {
 }
 
 func CreateCertDeploy(c *gin.Context) {
+	/* 配额校验：证书部署任务数 */
+	if !CheckQuota(c, "deploys") {
+		return
+	}
 	var req struct {
 		AccountID uint                   `json:"account_id" binding:"required"`
 		OrderID   uint                   `json:"order_id" binding:"required"`
@@ -1196,6 +1218,17 @@ func CreateCertDeploy(c *gin.Context) {
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"code": -1, "msg": "参数错误"})
+		return
+	}
+
+	// 安全审计：所有权校验必须早于 checkLocalDeployAllowed。
+	// 后者内部会按 accountID 查账户 type，若先跑它，攻击者可用他人 accountID
+	// 探测任意账户的类型（local 报错 / 其他放行 = 布尔预言机）
+	if _, ok := requireCertAccountOwner(c, req.AccountID); !ok {
+		return
+	}
+	// 订单维度同样要校验：否则可借他人已签发订单，把其私钥部署到自己控制的服务器
+	if _, ok := requireCertOrderOwner(c, req.OrderID); !ok {
 		return
 	}
 
@@ -1244,9 +1277,9 @@ func checkLocalDeployAllowed(c *gin.Context, accountID uint) bool {
 func UpdateCertDeploy(c *gin.Context) {
 	id, _ := strconv.ParseUint(c.Param("id"), 10, 32)
 
-	var deploy models.CertDeploy
-	if err := database.DB.First(&deploy, id).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"code": -1, "msg": "部署任务不存在"})
+	// 安全审计：部署 config 含外送目标，越权修改等于把他人私钥改送到自己机器
+	deploy, ok := requireCertDeployOwner(c, uint(id))
+	if !ok {
 		return
 	}
 
@@ -1278,16 +1311,25 @@ func UpdateCertDeploy(c *gin.Context) {
 
 func DeleteCertDeploy(c *gin.Context) {
 	id, _ := strconv.ParseUint(c.Param("id"), 10, 32)
-	database.DB.Delete(&models.CertDeploy{}, id)
+
+	// 安全审计：此前直接 Delete，既无存在性检查也无所有权校验，
+	// 任意登录用户可删除全站部署任务（id 枚举即可）
+	deploy, ok := requireCertDeployOwner(c, uint(id))
+	if !ok {
+		return
+	}
+
+	database.DB.Delete(&models.CertDeploy{}, deploy.ID)
 	c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "删除成功"})
 }
 
 func ProcessCertDeploy(c *gin.Context) {
 	id, _ := strconv.ParseUint(c.Param("id"), 10, 32)
 
-	var deployTask models.CertDeploy
-	if err := database.DB.First(&deployTask, id).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"code": -1, "msg": "部署任务不存在"})
+	// 安全审计：这是私钥外送的最后一环。放行越权调用会让 order.FullChain
+	// 与 order.PrivateKey 被送到 deploy.Config 里指定的地址（攻击者可控）
+	deployTask, ok := requireCertDeployOwner(c, uint(id))
+	if !ok {
 		return
 	}
 

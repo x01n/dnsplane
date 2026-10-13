@@ -1683,6 +1683,44 @@ export default function SettingsPage() {
                       <div className="text-sm text-muted-foreground">到期通知域名</div>
                       <div className="text-xl font-bold">{taskStatus.domain_notice}</div>
                     </div>
+                    {/*
+                      解析记录副本同步状态
+
+                      此前这一路只有后台一行日志：对账持续失败时副本会冻结在旧快照上，
+                      而面板上看不出任何异常——配额判定读的正是这份副本，
+                      冻结意味着判定持续偏松。这里把「上次同步时间 / 失败域名数 /
+                      下次同步时间」摆出来，让副本陈旧可见
+                    */}
+                    {taskStatus.record_sync && (
+                      <div className="space-y-1.5 p-3 rounded-lg border">
+                        <div className="text-sm text-muted-foreground">解析记录同步</div>
+                        <div className={`text-xl font-bold ${taskStatus.record_sync.fail > 0 ? 'text-destructive' : ''}`}>
+                          {taskStatus.record_sync.ok}
+                          {taskStatus.record_sync.fail > 0 && (
+                            <span className="text-sm font-normal"> / 失败 {taskStatus.record_sync.fail}</span>
+                          )}
+                          {taskStatus.record_sync.truncated > 0 && (
+                            <span className="text-sm font-normal"> / 截断 {taskStatus.record_sync.truncated}</span>
+                          )}
+                        </div>
+                        {taskStatus.record_sync.last_time && (
+                          <div className="text-xs text-muted-foreground">
+                            上次同步: {taskStatus.record_sync.last_time}
+                          </div>
+                        )}
+                        {taskStatus.record_sync.next_time && (
+                          <div className="text-xs text-muted-foreground">
+                            下次同步: {taskStatus.record_sync.next_time}
+                            （间隔 {taskStatus.record_sync.interval_minutes} 分钟）
+                          </div>
+                        )}
+                        {taskStatus.record_sync.last_error && (
+                          <div className="text-xs text-destructive break-all">
+                            {taskStatus.record_sync.last_error}
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 </CardContent>
               </Card>

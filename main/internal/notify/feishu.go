@@ -34,7 +34,7 @@ func (n *FeishuNotifier) Send(ctx context.Context, title, content string) error 
 	}
 	payload := map[string]interface{}{
 		"msg_type": "text",
-		"content": map[string]string{"text": title + "\n" + content},
+		"content":  map[string]string{"text": title + "\n" + content},
 	}
 	if n.config.Secret != "" {
 		ts := strconv.FormatInt(time.Now().Unix(), 10)

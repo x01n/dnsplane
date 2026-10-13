@@ -12,8 +12,8 @@ type wechat struct{ cfg ProviderConfig }
 func NewWeChat(cfg ProviderConfig) Provider { return &wechat{cfg} }
 
 func (w *wechat) Name() string        { return "wechat" }
-func (w *wechat) DisplayName() string  { return "微信" }
-func (w *wechat) Icon() string         { return "wechat" }
+func (w *wechat) DisplayName() string { return "微信" }
+func (w *wechat) Icon() string        { return "wechat" }
 
 func (w *wechat) appID() string {
 	if w.cfg.AppID != "" {

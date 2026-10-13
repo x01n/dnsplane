@@ -230,6 +230,11 @@ func CreateMonitorTask(c *gin.Context) {
 		return
 	}
 
+	/* 配额校验：容灾监控任务数 */
+	if !CheckQuota(c, "monitors") {
+		return
+	}
+
 	if req.Cycle == 0 {
 		req.Cycle = 3
 	}

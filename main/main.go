@@ -122,6 +122,8 @@ func main() {
 	defer database.StopMaintenance()
 	service.StartOptimizeRunner(taskCtx)
 	defer service.StopOptimizeRunner()
+	service.StartRecordSync(taskCtx)
+	defer service.StopRecordSync()
 
 	router := api.SetupRouter(staticFS)
 
@@ -131,7 +133,7 @@ func main() {
 	srv := &http.Server{
 		Addr:              addr,
 		Handler:           router,
-		ReadHeaderTimeout: 30 * time.Second, 
+		ReadHeaderTimeout: 30 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}
 

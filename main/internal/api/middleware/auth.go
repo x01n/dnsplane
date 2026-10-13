@@ -521,7 +521,14 @@ func CORS() gin.HandlerFunc {
 			c.Header("Access-Control-Allow-Credentials", "true")
 		}
 		c.Header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-		c.Header("Access-Control-Allow-Headers", "Origin, Content-Type, Authorization, X-Refresh-Token, X-Secret-Token, X-CSRF-Token")
+		/*
+		 * 三个 X-API-* 是 /api/v1 的签名头（见 apiv1.APIKeyAuth）
+		 *
+		 * 浏览器的跨域预检会按服务端声明白名单：不在名单里的自定义头会被拦在
+		 * 预检阶段，请求根本发不出去。v1 的目标调用方包含浏览器端脚本，
+		 * 而此处原先只列了控制台的三个令牌头
+		 */
+		c.Header("Access-Control-Allow-Headers", "Origin, Content-Type, Authorization, X-Refresh-Token, X-Secret-Token, X-CSRF-Token, X-API-UID, X-API-Timestamp, X-API-Sign")
 		c.Header("Access-Control-Expose-Headers", "X-Token-Expiring, X-Request-ID, X-Error-ID")
 
 		if c.Request.Method == "OPTIONS" {

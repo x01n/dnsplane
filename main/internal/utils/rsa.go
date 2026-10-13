@@ -302,6 +302,7 @@ type ResponsePayload struct {
 	IV   string `json:"iv"`
 	Data string `json:"data"`
 }
+
 func EncryptWithKey(data interface{}, aesKey []byte) (*ResponsePayload, error) {
 	jsonData, err := json.Marshal(data)
 	if err != nil {

@@ -138,3 +138,51 @@ func deleteUserRequest(t *testing.T, targetID uint, level int, uid uint) *httpte
 	DeleteUser(c)
 	return w
 }
+
+/*
+ * 删一个不存在的用户必须报「不存在」
+ *
+ * 此前没有存在性检查，而「不能删自己」与「不能删同级管理员」两个判定都
+ * 建立在查库结果上：查不到时前者仍生效（只比数字），后者被 `err == nil`
+ * 静默跳过，于是不存在的 uid 一路走到最后回「删除成功」。
+ *
+ * uid=0 时更实际：`Where("uid = ?", 0)` 会真的删掉 uid 为 0 的 oauth 绑定
+ * 与权限行——那些是数据异常残留，却被动过而调用方毫无察觉
+ */
+func TestDeleteNonexistentUserReportsNotFound(t *testing.T) {
+	setupHandlerTestDB(t)
+
+	w := deleteUserRequest(t, 999999, 2, 1)
+
+	code, msg := decodeHandlerResp(t, w)
+	if code == 0 {
+		t.Errorf("删除不存在的用户应被拒绝，实际报成功：%s", msg)
+	}
+	if msg != "用户不存在" {
+		t.Errorf("提示应为「用户不存在」，实际 %q", msg)
+	}
+}
+
+/* TestDeleteUserZeroIDTouchesNothing uid=0 不得删除残留的关联行 */
+func TestDeleteUserZeroIDTouchesNothing(t *testing.T) {
+	setupHandlerTestDB(t)
+
+	// 造一条 uid=0 的残留（模拟历史数据异常）
+	if err := database.DB.Create(&models.UserOAuth{
+		UserID: 0, Provider: "github", ProviderUserID: "orphan",
+	}).Error; err != nil {
+		t.Fatalf("创建残留绑定失败: %v", err)
+	}
+
+	w := deleteUserRequest(t, 0, 2, 1)
+
+	if code, msg := decodeHandlerResp(t, w); code == 0 {
+		t.Errorf("删除 uid=0 应被拒绝，实际报成功：%s", msg)
+	}
+
+	var left int64
+	database.DB.Model(&models.UserOAuth{}).Where("user_id = ?", 0).Count(&left)
+	if left != 1 {
+		t.Errorf("uid=0 的残留行被误删：剩余 %d 行，期望 1 行", left)
+	}
+}

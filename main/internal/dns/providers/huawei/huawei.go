@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"main/internal/dns"
 	"strings"
+	"time"
 
 	"github.com/huaweicloud/huaweicloud-sdk-go-v3/core/auth/basic"
+	hwconfig "github.com/huaweicloud/huaweicloud-sdk-go-v3/core/config"
 	dns_sdk "github.com/huaweicloud/huaweicloud-sdk-go-v3/services/dns/v2"
 	"github.com/huaweicloud/huaweicloud-sdk-go-v3/services/dns/v2/model"
 	"github.com/huaweicloud/huaweicloud-sdk-go-v3/services/dns/v2/region"
@@ -40,11 +42,29 @@ func NewProvider(config map[string]string, domain, domainID string) dns.Provider
 		WithSk(config["SecretAccessKey"]).
 		Build()
 
-	client := dns_sdk.NewDnsClient(
-		dns_sdk.DnsClientBuilder().
-			WithRegion(region.CN_NORTH_1).
-			WithCredential(auth).
-			Build())
+	/*
+	 * 显式设超时：SDK 默认 120s，而本项目的其它 20 个 provider 一律 30s。
+	 * 这个 SDK 不接收 context（ListRecordSetsByZone 等方法没有 ctx 变体），
+	 * 因此关停信号传不进来——把超时统一到 30s 至少让最坏耗时可控
+	 */
+	httpCfg := hwconfig.DefaultHttpConfig().WithTimeout(30 * time.Second)
+	/*
+	 * 用 SafeBuild 而非 Build
+	 *
+	 * Build 在内部 panic：构造时它会拿凭据去 IAM 换 project id
+	 * （ProcessAuthParams），凭据无效就直接 panic。而本函数是「建 provider」
+	 * ——一个配置类操作，配置填错应该返回 error 让上层提示用户改配置，
+	 * 不该让整个进程崩掉。本项目其它 provider 的构造都只返回 error
+	 */
+	hc, err := dns_sdk.DnsClientBuilder().
+		WithRegion(region.CN_NORTH_1).
+		WithCredential(auth).
+		WithHttpConfig(httpCfg).
+		SafeBuild()
+	if err != nil {
+		return &Provider{lastErr: err.Error()}
+	}
+	client := dns_sdk.NewDnsClient(hc)
 
 	return &Provider{
 		client:   client,

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"main/internal/dns"
 	"strings"
+	"time"
 
 	"github.com/aliyun/alibaba-cloud-sdk-go/sdk"
 	"github.com/aliyun/alibaba-cloud-sdk-go/sdk/auth/credentials"
@@ -39,7 +40,13 @@ func NewProvider(config map[string]string, domain, domainID string) dns.Provider
 	cred := credentials.NewAccessKeyCredential(config["AccessKeyId"], config["AccessKeySecret"])
 	// 必须显式指定 https：SDK 的 NewConfig 默认 Scheme 为 "HTTP"，
 	// 而本路径携带 AccessKey 签名凭据，明文传输会使其可被中间人重放
-	conf := sdk.NewConfig().WithScheme("https")
+	/*
+	 * 显式设超时：SDK 默认读超时 10s，而本项目的其它 20 个 provider 一律 30s。
+	 * 这个 SDK 不接收 context（DescribeDomainRecords 等方法没有 ctx 变体），
+	 * 因此关停信号传不进来——把超时统一到 30s 至少让最坏耗时可控，
+	 * 也让「同一批任务用不同服务商时超时行为不一致」这件事消失
+	 */
+	conf := sdk.NewConfig().WithScheme("https").WithTimeout(30 * time.Second)
 	client, err := alidns.NewClientWithOptions("cn-hangzhou", conf, cred)
 	if err != nil {
 		return &Provider{lastErr: err.Error()}

@@ -13,9 +13,12 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Switch } from '@/components/ui/switch'
 import { Checkbox } from '@/components/ui/checkbox'
 import { toast } from 'sonner'
-import { userApi, domainApi, User, UserPermission, Domain } from '@/lib/api'
-import { Users, Plus, Search, RefreshCw, Trash2, Edit, Shield, ShieldCheck, Key, Copy, CheckCircle, XCircle, MoreHorizontal, Lock, Unlock, RotateCcw, FolderKey, Globe, Mail, ShieldOff, Send, AlertCircle } from 'lucide-react'
-import { formatDate } from '@/lib/utils'
+import { userApi, domainApi, quotaApi, User, UserPermission, Domain, Plan, QuotaMap, QuotaOverlayForm, UserQuotaRow, QuotaSource } from '@/lib/api'
+import { Users, Plus, Search, RefreshCw, Trash2, Edit, Shield, ShieldCheck, Key, Copy, CheckCircle, XCircle, MoreHorizontal, Lock, Unlock, RotateCcw, FolderKey, Globe, Mail, ShieldOff, Send, AlertCircle, Gauge } from 'lucide-react'
+import { TableSkeleton } from '@/components/table-skeleton'
+import { EmptyState } from '@/components/empty-state'
+import Link from 'next/link'
+import { formatDate, cn } from '@/lib/utils'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -45,12 +48,55 @@ const PERMISSIONS = [
   { key: 'system', label: '系统设置' },
 ]
 
+/**
+ * 配额维度：key 与后端 applyQuotaJSON 读取的 JSON 键一一对应
+ * 顺序与 quotaDimensionKeys 保持一致，便于两处对照
+ */
+const QUOTA_DIMENSIONS = [
+  { key: 'max_domains', label: '域名' },
+  { key: 'max_records', label: '子域名' },
+  { key: 'max_accounts', label: 'DNS 账户' },
+  { key: 'max_cert_accounts', label: '证书账户' },
+  { key: 'max_monitors', label: '容灾监控' },
+  { key: 'max_certs', label: 'SSL 证书' },
+  { key: 'max_schedules', label: '定时切换' },
+  { key: 'max_deploys', label: '证书部署' },
+  { key: 'max_optimize_ip', label: '优选 IP' },
+] as const
+
+/** 配额来源徽章文案，与后端 planSourceForUser 的三个返回值对应 */
+const QUOTA_SOURCE_LABELS: Record<QuotaSource, string> = {
+  admin: '个体覆盖',
+  plan: '套餐',
+  system: '系统默认',
+}
+
+/** 上限展示：-1 显示「不限」而非负数，避免误读成「倒欠」 */
+function formatQuotaLimit(limit: number): string {
+  return limit < 0 ? '不限' : String(limit)
+}
+
 export default function UsersPage() {
   const [users, setUsers] = useState<User[]>([])
   const [loading, setLoading] = useState(true)
   const [keyword, setKeyword] = useState('')
   /** 加载失败提示；非空时列表区显示错误态而非空状态 */
   const [loadError, setLoadError] = useState('')
+
+  // 配额与套餐
+  const [quotaRows, setQuotaRows] = useState<UserQuotaRow[]>([])
+  const [quotaLoading, setQuotaLoading] = useState(true)
+  const [quotaError, setQuotaError] = useState('')
+  const [showQuotaDialog, setShowQuotaDialog] = useState(false)
+  const [quotaTarget, setQuotaTarget] = useState<UserQuotaRow | null>(null)
+  /** 弹窗内编辑中的配额；-1 不限、0 禁止、正数为上限 */
+  const [quotaForm, setQuotaForm] = useState<QuotaOverlayForm>({})
+  const [quotaRemark, setQuotaRemark] = useState('')
+  const [showDefaultQuotaDialog, setShowDefaultQuotaDialog] = useState(false)
+  const [defaultQuotaForm, setDefaultQuotaForm] = useState<QuotaMap>({})
+  const [plans, setPlans] = useState<Plan[]>([])
+  /** 弹窗内选中的套餐 id；空表示不授予 */
+  const [quotaPlanId, setQuotaPlanId] = useState('')
 
   const [showAddDialog, setShowAddDialog] = useState(false)
   const [showEditDialog, setShowEditDialog] = useState(false)
@@ -83,7 +129,181 @@ export default function UsersPage() {
 
   useEffect(() => {
     loadData()
+    loadQuotaData()
   }, [])
+
+  /** 加载配额列表；与用户列表分开加载，配额接口失败不影响用户管理主流程 */
+  const loadQuotaData = async () => {
+    setQuotaLoading(true)
+    try {
+      const [quotaRes, planRes] = await Promise.all([
+        quotaApi.listUserQuotas(),
+        quotaApi.listPlans(),
+      ])
+      if (quotaRes.code === 0 && quotaRes.data) {
+        setQuotaRows(quotaRes.data.list || [])
+        setQuotaError('')
+      } else {
+        setQuotaError(quotaRes.msg || '加载配额失败')
+      }
+      // 套餐列表只取启用中的：停用套餐后端会拒绝授予
+      if (planRes.code === 0 && planRes.data) {
+        setPlans((planRes.data.list || []).filter((p) => p.status === 1))
+      }
+    } catch {
+      setQuotaError('加载配额失败')
+    } finally {
+      setQuotaLoading(false)
+    }
+  }
+
+  /**
+   * 打开个体配额弹窗
+   *
+   * 表单只预填 overlays（真正属于个体覆盖的维度），未覆盖的维度留空
+   *
+   * 此前用 row.quotas 预填——那是三层合并后的生效值，其中包含套餐与系统默认
+   * 贡献的维度。管理员改一个维度再保存，会把预填的其余维度一并写成个体覆盖，
+   * 此后调整套餐时该用户永远停在旧值，而管理员并不知道自己覆盖过它们
+   */
+  const openQuotaDialog = (row: UserQuotaRow) => {
+    setQuotaTarget(row)
+    const form: QuotaOverlayForm = {}
+    QUOTA_DIMENSIONS.forEach((d) => {
+      const overlay = row.overlays?.[d.key]
+      if (overlay !== undefined) {
+        form[d.key] = overlay
+      }
+    })
+    setQuotaForm(form)
+    setQuotaRemark(row.remark || '')
+    setQuotaPlanId(row.plan_id || '')
+    setShowQuotaDialog(true)
+  }
+
+  /* 授予套餐：与保存个体配额分开，两者优先级不同，混在一次请求里会掩盖意图 */
+  const handleGrantPlan = async () => {
+    if (!quotaTarget || !quotaPlanId) {
+      toast.error('请先选择套餐')
+      return
+    }
+    setSubmitting(true)
+    try {
+      const res = await quotaApi.setUserSubscription(quotaTarget.user_id, { plan_id: quotaPlanId })
+      if (res.code === 0) {
+        toast.success(res.msg || '已授予套餐')
+        loadQuotaData()
+      } else {
+        toast.error(res.msg || '授予失败')
+      }
+    } catch {
+      toast.error('授予失败')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  const handleRevokePlan = async () => {
+    if (!quotaTarget) return
+    setSubmitting(true)
+    try {
+      const res = await quotaApi.revokeUserSubscription(quotaTarget.user_id)
+      if (res.code === 0) {
+        toast.success('已撤销套餐')
+        setQuotaPlanId('')
+        loadQuotaData()
+      } else {
+        toast.error(res.msg || '撤销失败')
+      }
+    } catch {
+      toast.error('撤销失败')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  const handleSaveQuota = async () => {
+    if (!quotaTarget) return
+    setSubmitting(true)
+    try {
+      /*
+       * 只提交被显式填写的维度
+       *
+       * 未填写的维度若也提交，后端会按原样落库，等于把该维度固化成个体覆盖——
+       * 与弹窗里「留空表示继承」的语义正好相反
+       */
+      const overlays: QuotaMap = {}
+      Object.entries(quotaForm).forEach(([k, v]) => {
+        if (v !== undefined && v !== null) overlays[k] = v
+      })
+      const res = await quotaApi.setUserQuota(quotaTarget.user_id, {
+        quotas: overlays,
+        remark: quotaRemark,
+      })
+      if (res.code === 0) {
+        toast.success('配额已保存')
+        setShowQuotaDialog(false)
+        loadQuotaData()
+      } else {
+        toast.error(res.msg || '保存失败')
+      }
+    } catch {
+      toast.error('保存失败')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  const handleResetQuota = async () => {
+    if (!quotaTarget) return
+    setSubmitting(true)
+    try {
+      const res = await quotaApi.resetUserQuota(quotaTarget.user_id)
+      if (res.code === 0) {
+        toast.success('已回落到套餐配额')
+        setShowQuotaDialog(false)
+        loadQuotaData()
+      } else {
+        toast.error(res.msg || '重置失败')
+      }
+    } catch {
+      toast.error('重置失败')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  const openDefaultQuotaDialog = async () => {
+    try {
+      const res = await quotaApi.getQuotaDefault()
+      const existing = res.code === 0 && res.data ? res.data.quotas : {}
+      const form: QuotaMap = {}
+      QUOTA_DIMENSIONS.forEach((d) => {
+        form[d.key] = existing[d.key] ?? -1
+      })
+      setDefaultQuotaForm(form)
+      setShowDefaultQuotaDialog(true)
+    } catch {
+      toast.error('读取系统默认配额失败')
+    }
+  }
+
+  const handleSaveDefaultQuota = async () => {
+    setSubmitting(true)
+    try {
+      const res = await quotaApi.updateQuotaDefault({ quotas: defaultQuotaForm })
+      if (res.code === 0) {
+        toast.success('系统默认配额已保存')
+        setShowDefaultQuotaDialog(false)
+      } else {
+        toast.error(res.msg || '保存失败')
+      }
+    } catch {
+      toast.error('保存失败')
+    } finally {
+      setSubmitting(false)
+    }
+  }
 
   const loadData = async () => {
     setLoading(true)
@@ -630,6 +850,116 @@ export default function UsersPage() {
         </CardContent>
       </Card>
 
+      {/* 配额与套餐 */}
+      <Card>
+        <CardHeader className="flex flex-row items-start justify-between space-y-0">
+          <div>
+            <CardTitle>配额与套餐</CardTitle>
+            <CardDescription>
+              三层优先级：个体覆盖 &gt; 套餐订阅 &gt; 系统默认。-1 不限、0 禁止、正数为上限
+            </CardDescription>
+          </div>
+          <Button variant="outline" size="sm" onClick={loadQuotaData} disabled={quotaLoading}>
+            <RefreshCw className={cn('h-4 w-4 mr-2', quotaLoading && 'animate-spin')} />
+            刷新
+          </Button>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {quotaError ? (
+            <EmptyState
+              icon={AlertCircle}
+              title="加载失败"
+              description={quotaError}
+              action="重试"
+              onAction={loadQuotaData}
+            />
+          ) : quotaLoading ? (
+            <TableSkeleton rows={4} columns={5} />
+          ) : (
+            <>
+              <div className="rounded-md border">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>用户</TableHead>
+                      <TableHead>配额来源</TableHead>
+                      <TableHead>套餐</TableHead>
+                      <TableHead>已用 / 上限</TableHead>
+                      <TableHead className="text-right">操作</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {quotaRows.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={5} className="text-center py-8 text-muted-foreground">
+                          暂无可管理的配额记录
+                        </TableCell>
+                      </TableRow>
+                    ) : (
+                      quotaRows.map((row) => (
+                        <TableRow key={row.user_id}>
+                          <TableCell className="font-medium">
+                            {row.username}
+                            {row.level >= 2 && (
+                              <Badge className="ml-2 bg-blue-500 text-white">管理员不受限</Badge>
+                            )}
+                          </TableCell>
+                          <TableCell>
+                            <Badge variant="outline">{QUOTA_SOURCE_LABELS[row.source] || row.source}</Badge>
+                            {row.remark && (
+                              <span className="ml-2 text-xs text-muted-foreground">{row.remark}</span>
+                            )}
+                          </TableCell>
+                          <TableCell className="text-muted-foreground">{row.plan_name || '-'}</TableCell>
+                          <TableCell className="text-xs">
+                            {QUOTA_DIMENSIONS.map((d) => {
+                              const used = row.used[d.key] ?? 0
+                              const limit = row.quotas[d.key]
+                              if (limit === undefined) return null
+                              const atLimit = limit >= 0 && used >= limit
+                              return (
+                                <span
+                                  key={d.key}
+                                  className={cn(
+                                    'inline-block mr-3 mb-1',
+                                    atLimit ? 'text-destructive font-medium' : 'text-muted-foreground'
+                                  )}
+                                >
+                                  {d.label} {used}/{formatQuotaLimit(limit)}
+                                </span>
+                              )
+                            })}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => openQuotaDialog(row)}
+                              disabled={row.level >= 2}
+                              aria-label={`设置 ${row.username} 的配额`}
+                            >
+                              {row.level >= 2 ? '不受限' : '设置配额'}
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      ))
+                    )}
+                  </TableBody>
+                </Table>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button variant="outline" size="sm" onClick={openDefaultQuotaDialog}>
+                  系统默认配额
+                </Button>
+                <Link href="/dashboard/plans" className="text-sm text-primary hover:underline">
+                  管理套餐 →
+                </Link>
+              </div>
+            </>
+          )}
+        </CardContent>
+      </Card>
+
       {/* Add Dialog */}
       <Dialog open={showAddDialog} onOpenChange={setShowAddDialog}>
         <DialogContent className="max-w-md">
@@ -917,6 +1247,184 @@ export default function UsersPage() {
           
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowPermDialog(false)}>关闭</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* 个体配额 Dialog */}
+      <Dialog open={showQuotaDialog} onOpenChange={setShowQuotaDialog}>
+        <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Gauge className="h-5 w-5" />
+              个体配额 - {quotaTarget?.username}
+            </DialogTitle>
+            <DialogDescription>
+              表单只显示该用户被单独覆盖的维度，其余留空表示继承套餐或系统默认。
+              留 -1 表示不限、0 表示禁止创建。
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            {QUOTA_DIMENSIONS.map((d) => {
+              /*
+               * 空值表示「未覆盖」：该维度回落到套餐或系统默认
+               *
+               * 与 -1（不限）是两回事。此前表单恒为有值，未覆盖的维度也被写满，
+               * 保存即把它们固化成个体覆盖
+               */
+              const overlay = quotaForm[d.key]
+              const inherited = overlay === undefined
+              return (
+                <div key={d.key} className="flex items-center gap-3">
+                  <Label className="w-24 shrink-0 text-sm">{d.label}</Label>
+                  <Input
+                    type="number"
+                    min={-1}
+                    value={inherited ? '' : overlay}
+                    placeholder="继承"
+                    onChange={(e) => {
+                      const raw = e.target.value
+                      const next = { ...quotaForm }
+                      if (raw === '') {
+                        delete next[d.key]
+                      } else {
+                        next[d.key] = Number(raw)
+                      }
+                      setQuotaForm(next)
+                    }}
+                    className="w-28"
+                  />
+                  {inherited ? (
+                    <span className="text-xs text-muted-foreground">
+                      继承（当前 {quotaTarget?.quotas[d.key] ?? -1}）
+                    </span>
+                  ) : overlay < 0 ? (
+                    <span className="text-xs text-muted-foreground">不限</span>
+                  ) : (
+                    <span className="text-xs text-muted-foreground">个体覆盖</span>
+                  )}
+                </div>
+              )
+            })}
+            <div className="space-y-2 pt-2">
+              <Label className="text-sm">备注</Label>
+              <Input
+                value={quotaRemark}
+                onChange={(e) => setQuotaRemark(e.target.value)}
+                placeholder="可选，例如「临时提额」"
+              />
+            </div>
+
+            <div className="space-y-2 pt-2 border-t">
+              <Label className="text-sm">套餐订阅</Label>
+              <p className="text-xs text-muted-foreground">
+                个体配额优先于套餐；撤销套餐后优先回落到个体配额，再回落系统默认
+              </p>
+              <div className="flex flex-wrap items-center gap-2">
+                <Select value={quotaPlanId} onValueChange={setQuotaPlanId}>
+                  <SelectTrigger className="w-full sm:w-56" aria-label="选择套餐">
+                    <SelectValue placeholder="未订阅套餐" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {plans.length === 0 ? (
+                      <SelectItem value="__none__" disabled>
+                        暂无启用中的套餐
+                      </SelectItem>
+                    ) : (
+                      plans.map((p) => (
+                        <SelectItem key={p.id} value={p.id}>
+                          {p.name}
+                        </SelectItem>
+                      ))
+                    )}
+                  </SelectContent>
+                </Select>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleGrantPlan}
+                  disabled={submitting || !quotaPlanId}
+                >
+                  授予 / 变更
+                </Button>
+                {/*
+                  撤销按钮的可用条件看 has_subscription 而非 plan_name
+
+                  plan_name 由 planSourceForUser 给出，它在订阅过期时返回空串——
+                  用展示字段决定能否操作，会让过期订阅恰好落进「显示未订阅、按钮禁用」
+                  的缝里，那条订阅就再也撤不掉了。有订阅记录就该允许撤销
+                */}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleRevokePlan}
+                  disabled={submitting || !quotaTarget?.has_subscription}
+                >
+                  撤销套餐
+                </Button>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                当前套餐：{quotaTarget?.plan_name || (quotaTarget?.has_subscription ? '已过期' : '未订阅')}
+              </p>
+            </div>
+          </div>
+          <DialogFooter className="flex justify-between sm:justify-between">
+            <Button variant="outline" onClick={handleResetQuota} disabled={submitting}>
+              清除个体配额
+            </Button>
+            <div className="flex gap-2">
+              <Button variant="outline" onClick={() => setShowQuotaDialog(false)} disabled={submitting}>
+                取消
+              </Button>
+              <Button onClick={handleSaveQuota} disabled={submitting}>
+                {submitting && <RefreshCw className="h-4 w-4 mr-2 animate-spin" />}
+                保存
+              </Button>
+            </div>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* 系统默认配额 Dialog */}
+      <Dialog open={showDefaultQuotaDialog} onOpenChange={setShowDefaultQuotaDialog}>
+        <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Gauge className="h-5 w-5" />
+              系统默认配额
+            </DialogTitle>
+            <DialogDescription>
+              用户既无个体配额也未订阅套餐时的兜底上限。留 -1 表示不限。
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            {QUOTA_DIMENSIONS.map((d) => (
+              <div key={d.key} className="flex items-center gap-3">
+                <Label className="w-24 shrink-0 text-sm">{d.label}</Label>
+                <Input
+                  type="number"
+                  min={-1}
+                  value={defaultQuotaForm[d.key] ?? -1}
+                  onChange={(e) => {
+                    const raw = e.target.value
+                    setDefaultQuotaForm({ ...defaultQuotaForm, [d.key]: raw === '' ? -1 : Number(raw) })
+                  }}
+                  className="w-28"
+                />
+                {(defaultQuotaForm[d.key] ?? -1) < 0 && (
+                  <span className="text-xs text-muted-foreground">不限</span>
+                )}
+              </div>
+            ))}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowDefaultQuotaDialog(false)} disabled={submitting}>
+              取消
+            </Button>
+            <Button onClick={handleSaveDefaultQuota} disabled={submitting}>
+              {submitting && <RefreshCw className="h-4 w-4 mr-2 animate-spin" />}
+              保存
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

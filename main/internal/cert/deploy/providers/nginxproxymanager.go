@@ -22,11 +22,11 @@ func init() {
 // NPMProvider Nginx Proxy Manager 证书部署
 type NPMProvider struct {
 	base.BaseProvider
-	client *http.Client
-	url    string
-	email  string
+	client   *http.Client
+	url      string
+	email    string
 	password string
-	token  string
+	token    string
 }
 
 // NewNPMProvider creates a new NPM provider

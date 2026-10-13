@@ -507,7 +507,7 @@ func TestNoticeSwitchAllOffReturnsNil(t *testing.T) {
 	seedSysConfig(t, map[string]string{
 		"mail_host": "smtp.example.com", "mail_from": "from@example.com",
 		"tgbot_token": "tk", "tgbot_chatid": "-100123",
-		"webhook_url": "https://example.com/hook",
+		"webhook_url":     "https://example.com/hook",
 		"wechat_apptoken": "AT", "wechat_appuid": "UID",
 		"qqbot_appid": "a", "qqbot_appsecret": "s", "qqbot_openid": "o",
 		"notice_mail": "0", "notice_tgbot": "0", "notice_webhook": "0",

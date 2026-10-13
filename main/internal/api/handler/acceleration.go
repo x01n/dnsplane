@@ -4,9 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"main/internal/api/middleware"
 	"main/internal/database"
 	maindns "main/internal/dns"
-	"main/internal/api/middleware"
 	"main/internal/models"
 	"main/internal/service"
 	"main/internal/sysconfig"
@@ -568,11 +568,11 @@ func configureDNSForAcceleration(ctx context.Context, cfg *service.AccelConfig, 
 				status = "exists"
 			}
 			dnsResults = append(dnsResults, gin.H{
-				"platform":      ar.Platform,
-				"line_name":     dl.lineName,
-				"cname":         ar.CNAME,
-				"status":        status,
-				"deleted_count": deleted,
+				"platform":        ar.Platform,
+				"line_name":       dl.lineName,
+				"cname":           ar.CNAME,
+				"status":          status,
+				"deleted_count":   deleted,
 				"cleanup_skipped": skippedCleanup,
 			})
 		}
@@ -730,13 +730,13 @@ func GetAccelStatus(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"code": 0,
 		"data": gin.H{
-			"strategy":        cfg.Strategy,
-			"cf_enabled":      cfg.CFEnabled,
+			"strategy":         cfg.Strategy,
+			"cf_enabled":       cfg.CFEnabled,
 			"cf_prefer_domain": cfg.CFPreferDomain,
-			"eo_enabled":      cfg.EOEnabled,
-			"eo_zone_id":      cfg.EOZoneID,
-			"esa_enabled":     cfg.ESAEnabled,
-			"esa_site_id":     cfg.ESASiteID,
+			"eo_enabled":       cfg.EOEnabled,
+			"eo_zone_id":       cfg.EOZoneID,
+			"esa_enabled":      cfg.ESAEnabled,
+			"esa_site_id":      cfg.ESASiteID,
 		},
 	})
 }

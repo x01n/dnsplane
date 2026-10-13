@@ -32,9 +32,9 @@ func init() {
 }
 
 const (
-	baseURL      = "https://dns.he.net/"
-	sessionTTL   = 12 * time.Hour
-	cachePrefix  = "henet_session:"
+	baseURL     = "https://dns.he.net/"
+	sessionTTL  = 12 * time.Hour
+	cachePrefix = "henet_session:"
 )
 
 /* Provider HE DNS服务商 */

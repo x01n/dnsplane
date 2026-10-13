@@ -256,7 +256,6 @@ func (s *LogStore) CleanRequestLogs(keepCount int) int64 {
 	return deleted
 }
 
-
 /* SaveSystemLog 保存系统日志 */
 func (s *LogStore) SaveSystemLog(log models.Log) {
 	data, err := json.Marshal(log)
@@ -326,7 +325,6 @@ func (s *LogStore) PurgeSystemLogs() int64 {
 	_ = s.c.LTrim(systemLogKey, 1, 0)
 	return total
 }
-
 
 func parseRequestLogs(items []string) []models.RequestLog {
 	logs := make([]models.RequestLog, 0, len(items))

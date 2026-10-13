@@ -93,9 +93,9 @@ type RecordGroup struct {
 
 /* DomainAlias 域名别名 */
 type DomainAlias struct {
-	ID    string `json:"id"`
-	Name  string `json:"name"`
-	Status int   `json:"status"`
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	Status int    `json:"status"`
 }
 
 /* RecordGrouper 支持解析记录分组的 provider 扩展接口 */

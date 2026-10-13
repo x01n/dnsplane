@@ -16,8 +16,8 @@ type dingTalk struct{ cfg ProviderConfig }
 func NewDingTalk(cfg ProviderConfig) Provider { return &dingTalk{cfg} }
 
 func (d *dingTalk) Name() string        { return "dingtalk" }
-func (d *dingTalk) DisplayName() string  { return "钉钉" }
-func (d *dingTalk) Icon() string         { return "dingtalk" }
+func (d *dingTalk) DisplayName() string { return "钉钉" }
+func (d *dingTalk) Icon() string        { return "dingtalk" }
 
 func (d *dingTalk) appKey() string {
 	if d.cfg.AppKey != "" {

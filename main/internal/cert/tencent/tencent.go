@@ -34,7 +34,7 @@ const (
 	defaultVersion = "2019-12-05"
 	/* 证书下载格式 */
 	downloadServiceType = "nginx"
-	requestTimeout = 30 * time.Second
+	requestTimeout      = 30 * time.Second
 )
 
 func init() {

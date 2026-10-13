@@ -353,7 +353,6 @@ func runningUnderGoTest() bool {
 	return false
 }
 
-
 func Info(format string, v ...interface{}) {
 	globalLogger.Info(format, v...)
 }
@@ -386,7 +385,6 @@ func FileWarn(format string, v ...interface{}) {
 func FileError(format string, v ...interface{}) {
 	globalLogger.writeFileOnly(LevelError, "ERROR", format, v...)
 }
-
 
 func Close() {
 	globalLogger.Close()

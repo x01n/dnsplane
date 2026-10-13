@@ -24,11 +24,11 @@ func init() {
 // S3Provider S3 存储证书部署
 type S3Provider struct {
 	base.BaseProvider
-	client        *http.Client
-	accessKeyID   string
-	secretKey     string
-	endpoint      string
-	region        string
+	client      *http.Client
+	accessKeyID string
+	secretKey   string
+	endpoint    string
+	region      string
 }
 
 // NewS3Provider creates a new S3 provider

@@ -144,7 +144,7 @@ func queryServer(ctx context.Context, server, domain string, typeNum int) ([]str
 	}
 
 	/*
-	 * 合法 JSON 但无 Answer 键时返回空结果且不重试 
+	 * 合法 JSON 但无 Answer 键时返回空结果且不重试
 	 * 注：doh.pub 对 CAA(257)/PTR(12) 返回 {"code":"UrlParameterError"}，属合法 JSON，
 	 * 故这些类型在该服务器上会得到空结果而不触发换服务器重试。
 	 */
